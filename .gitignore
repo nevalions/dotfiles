@@ -3,3 +3,13 @@ tmux/plugins/
 raycast
 fzf
 history.txt
+
+tt.*
+.tests
+doc/tags
+debug
+.repro
+foo.*
+*.log
+data
+
