@@ -25,6 +25,8 @@ alias tr3="tree -a -L 3 -I '.git'"
 alias tr2="tree -a -L 2 -I '.git'"
 alias tr1="tree -a -L 1 -I '.git'"
 
+alias lg="lazygit"
+
 HISTFILE=~/.history
 HISTSIZE=10000
 SAVEHIST=50000
@@ -40,6 +42,11 @@ cx() { cd "$@" && l; }
 fcd() { cd "$(find . -type d -not -path '*/.*' | fzf)" && l; }
 f() { echo "$(find . -type f -not -path '*/.*' | fzf)" | pbcopy }
 fv() { nvim "$(find . -type f -not -path '*/.*' | fzf)" }
+
+# Eza
+alias l="eza -l --icons --git -a"
+alias lt="eza --tree --level=2 --long --icons --git"
+alias ltree="eza --tree --level=2  --icons --git"
 
 ZSH_THEME="powerlevel10k/powerlevel10k"
 
