@@ -1,5 +1,8 @@
 # ~/.config/tmux/tmux.conf
 
+# source new config
+tmux source-file ~/.config/tmux/tmux.conf
+
 ## Install
 Once everything has been installed it's time to run TPM, install first:
 ```bash
