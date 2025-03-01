@@ -7,7 +7,7 @@ import = [
 TERM = "xterm-256color"
 
 [terminal.shell]
-program = "/bin/zsh"
+program = "/usr/bin/zsh"
 
 [window]
 padding.x = 20
@@ -24,5 +24,7 @@ size = 14.0
 [keyboard]
 bindings = [
   { key = "Home", chars = "\u001bOH" },
-  { key = "End", chars = "\u001bOF" }
+  { key = "End", chars = "\u001bOF" },
+  { key = "C", mods = "Control|Shift", action = "Copy" },
+  { key = "V", mods = "Control|Shift", action = "Paste" },
 ]
