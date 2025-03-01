@@ -23,6 +23,6 @@ size = 14.0
 
 [keyboard]
 bindings = [
-    { key = "Home", chars = "\u001b[1~" },
-    { key = "End", chars = "\u001b[4~" }
+  { key = "Home", chars = "\u001bOH" },
+  { key = "End", chars = "\u001bOF" }
 ]
