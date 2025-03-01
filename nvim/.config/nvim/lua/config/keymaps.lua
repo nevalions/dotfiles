@@ -2,6 +2,7 @@
 -- Default keymaps that are always set: https://github.com/LazyVim/LazyVim/blob/main/lua/lazyvim/config/keymaps.lua
 -- Add any additional keymaps here
 --
+-- vim.keymap.del("n", "<leader>", "g-c")
 
 vim.api.nvim_set_keymap("n", "<C-z>", "u", { noremap = true, silent = true })
 
