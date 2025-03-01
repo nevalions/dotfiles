@@ -58,3 +58,7 @@ source $ZSH/oh-my-zsh.sh
 eval "$(zoxide init --cmd cd zsh)"
 
 
+
+. "$HOME/.atuin/bin/env"
+eval "$(atuin init zsh --disable-up-arrow)"
+# eval "$(atuin init zsh)"
