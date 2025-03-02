@@ -14,3 +14,4 @@ foo.*
 data
 
 **/lazy-lock.json
+nvim/.config/nvim/lua/plugins/logfile
