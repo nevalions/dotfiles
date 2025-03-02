@@ -59,5 +59,5 @@ eval "$(zoxide init --cmd cd zsh)"
 
 
 
-. "$HOME/.atuin/bin/env"
+# . "$HOME/.atuin/bin/env"
 eval "$(atuin init zsh --disable-up-arrow)"
