@@ -62,3 +62,5 @@ eval "$(zoxide init --cmd cd zsh)"
 # . "$HOME/.atuin/bin/env"
 eval "$(atuin init zsh --disable-up-arrow)"
 export LC_ALL=en_US.UTF-8
+export LANG=en_US.UTF-8
+
