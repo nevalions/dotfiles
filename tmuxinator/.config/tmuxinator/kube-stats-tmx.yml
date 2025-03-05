@@ -1,0 +1,22 @@
+name: kube-stats-tmx
+root: ~/
+
+enable_pane_titles: true
+
+windows:
+  - editor:
+      layout:  6b33,132x65,0,0[132x32,0,0{66x32,0,0,1,65x32,67,0,2} 
+      #layout: main-horizontal
+      # layout: main-vertical
+      # main-pane-height: 60
+      panes:
+        - kuberspb:
+          - ssh kuberspb
+          - cd kuber
+          - clear
+        - local:
+          - cd kube
+          - clear
+        - k9s:
+          - ssh kuberspb
+          - k9s
