@@ -5,8 +5,11 @@ export ZSH="$HOME/.oh-my-zsh"
 
 export EDITOR=nvim
 
-alias cl='clear'
+alias cl="clear"
 alias mux="tmuxinator"
+alias b="bat"
+alias bl="bat --language=log"
+alias bn="bat --style=numbers,grid"
 
 alias k="kubectl"
 alias ka="kubectl apply -f"
