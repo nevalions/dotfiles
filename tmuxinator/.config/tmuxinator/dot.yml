@@ -1,0 +1,13 @@
+name: dot 
+root: ~/
+
+enable_pane_titles: true
+
+windows:
+  - dotfiles:
+      panes:
+        - dot_folder:
+          - cd dotfiles
+          - clear
+        - local:
+          - clear

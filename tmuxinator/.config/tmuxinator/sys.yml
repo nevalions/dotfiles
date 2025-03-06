@@ -1,0 +1,12 @@
+name: sys 
+root: ~/
+
+enable_pane_titles: true
+
+windows:
+  - sys:
+      panes:
+        - local:
+          - clear
+        - local:
+          - clear
