@@ -1,0 +1,13 @@
+name: 2v
+root: ~/
+
+enable_pane_titles: true
+
+windows:
+  - 2v:
+      layout: even-horizontal
+      panes:
+        - local:
+          - clear
+        - local:
+          - clear 

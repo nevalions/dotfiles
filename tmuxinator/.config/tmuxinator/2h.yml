@@ -1,0 +1,13 @@
+name: 2h
+root: ~/
+
+enable_pane_titles: true
+
+windows:
+  - 2h:
+      layout: even-vertical
+      panes:
+        - local:
+          - clear
+        - local:
+          - clear 
