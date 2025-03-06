@@ -1,0 +1,16 @@
+name: 4p 
+root: ~/
+
+enable_pane_titles: true
+
+windows:
+  - sys:
+      panes:
+        - local:
+          - clear
+        - local:
+          - clear
+        - local:
+          - clear
+        - local:
+          - clear
