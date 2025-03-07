@@ -12,7 +12,6 @@ return { -- Highlight, edit, and navigate code
       'vimdoc',
       'vim',
       'regex',
-      'terraform',
       'sql',
       'dockerfile',
       'toml',
