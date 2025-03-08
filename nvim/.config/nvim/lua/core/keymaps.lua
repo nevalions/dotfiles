@@ -47,10 +47,10 @@ map('n', '<leader>x', ':bdelete!<CR>', opts) -- close buffer
 map('n', '<leader>b', '<cmd> enew <CR>', opts) -- new buffer
 
 -- Window management
-map('n', '<leader>v', '<C-w>v', opts) -- split window vertically
-map('n', '<leader>h', '<C-w>s', opts) -- split window horizontally
+map('n', '<leader>|', '<C-w>v', opts) -- split window vertically
+map('n', '<leader>-', '<C-w>s', opts) -- split window horizontally
 map('n', '<leader>se', '<C-w>=', opts) -- make split windows equal width & height
-map('n', '<leader>xs', ':close<CR>', opts) -- close current split window
+map('n', '<leader>q', ':close<CR>', opts) -- close current split window
 
 -- Navigate between splits
 map('n', '<C-k>', ':wincmd k<CR>', opts)
@@ -72,8 +72,8 @@ map('v', '<', '<gv', opts)
 map('v', '>', '>gv', opts)
 
 -- Tab line or selection
-map('n', '<Tab>', '>>', { desc = 'Indent line' })
-map('n', '<S-Tab>', '<<', { desc = 'Unindent line' })
+map('v', '<Tab>', '>>', { desc = 'Indent line' })
+map('v', '<S-Tab>', '<<', { desc = 'Unindent line' })
 
 -- Move lines
 map('n', '<A-Up>', ':m .-2<CR>==', { desc = 'Move line up', silent = true })
@@ -88,4 +88,12 @@ map('v', 'p', '"_dP', opts)
 map('n', '[d', vim.diagnostic.goto_prev, { desc = 'Go to previous diagnostic message' })
 map('n', ']d', vim.diagnostic.goto_next, { desc = 'Go to next diagnostic message' })
 map('n', '<leader>d', vim.diagnostic.open_float, { desc = 'Open floating diagnostic message' })
-map('n', '<leader>q', vim.diagnostic.setloclist, { desc = 'Open diagnostics list' })
+map('n', '<leader>w', vim.diagnostic.setloclist, { desc = 'Open diagnostics list' })
+
+-- Map Ctrl+A and Ctrl+E to Home and End functionality
+map('n', '<C-a>', '^', { noremap = true })
+map('n', '<C-e>', '$', { noremap = true })
+map('i', '<C-a>', '<Home>', { noremap = true })
+map('i', '<C-e>', '<End>', { noremap = true })
+map('v', '<C-a>', '^', { noremap = true })
+map('v', '<C-e>', '$', { noremap = true })

@@ -23,8 +23,12 @@ size = 14.0
 
 [keyboard]
 bindings = [
-  { key = "Home", chars = "\u001bOH" },
-  { key = "End", chars = "\u001bOF" },
+  { key = "Home",     chars = "\u001bOH",   mode = "AppCursor" },
+  { key = "Home",     chars = "\u001b[H",   mode = "~AppCursor" },
+  { key = "End",      chars = "\u001bOF",   mode = "AppCursor" },
+  { key = "End",      chars = "\u001b[F",   mode = "~AppCursor" },
+  # { key = "Home", chars = "\u001bOH" },
+  # { key = "End", chars = "\u001bOF" },
   { key = "C", mods = "Control|Shift", action = "Copy" },
   { key = "V", mods = "Control|Shift", action = "Paste" },
 ]
