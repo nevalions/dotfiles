@@ -22,6 +22,8 @@ map('n', '<C-q>', '<cmd> q <CR>', opts)
 map('v', '<C-c>', '"+y', { desc = 'Copy' })
 map('i', '<C-v>', '<C-r><C-o>+', { desc = 'Paste from clipboard' })
 map('n', 'Y', 'y$', { desc = 'Yank to end of line' })
+map('n', '<C-p>', 'o<Esc>P', opts) -- paste on line down
+map('n', '<A-p>', 'O<Esc>p', opts) -- paste on line up
 
 -- delete single character without copying into register
 map('n', 'x', '"_x', opts)
@@ -49,7 +51,7 @@ map('n', '<leader>b', '<cmd> enew <CR>', opts) -- new buffer
 -- Window management
 map('n', '<leader>|', '<C-w>v', opts) -- split window vertically
 map('n', '<leader>-', '<C-w>s', opts) -- split window horizontally
-map('n', '<leader>se', '<C-w>=', opts) -- make split windows equal width & height
+map('n', '<leader>=', '<C-w>=', opts) -- make split windows equal width & height
 map('n', '<leader>q', ':close<CR>', opts) -- close current split window
 
 -- Navigate between splits
