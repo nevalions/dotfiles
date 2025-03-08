@@ -5,6 +5,9 @@ export ZSH="$HOME/.oh-my-zsh"
 
 export EDITOR=nvim
 
+alias v="nvim"
+alias vs="sudo -E nvim"
+
 alias cl="clear"
 alias mux="tmuxinator"
 alias b="bat"
