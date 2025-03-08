@@ -56,7 +56,7 @@ alias ltree="eza --tree --level=2  --icons --git"
 
 ZSH_THEME="powerlevel10k/powerlevel10k"
 
-plugins=(git zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlighting)
+plugins=(git zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlighting tmuxinator)
 
 source $ZSH/oh-my-zsh.sh
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
@@ -70,3 +70,6 @@ eval "$(atuin init zsh --disable-up-arrow)"
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
 
+export PATH="$HOME/.local/share/gem/ruby/3.3.0/bin:$PATH"
+# fpath+=(~/.config/tmuxinator/completions)
+# autoload -Uz compinit && compinit
