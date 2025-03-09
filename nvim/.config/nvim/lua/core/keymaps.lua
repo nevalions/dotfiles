@@ -17,6 +17,8 @@ map('n', '<leader>sn', '<cmd>noautocmd w <CR>', opts)
 
 -- quit file
 map('n', '<C-q>', '<cmd> q <CR>', opts)
+-- save all and quit
+map('n', '<leader>Q', '<cmd> wqa <CR>', opts)
 
 -- copy paste
 map('v', '<C-c>', '"+y', { desc = 'Copy' })
