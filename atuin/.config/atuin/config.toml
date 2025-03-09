@@ -106,13 +106,22 @@
 history_filter = [
   "lg",
   "ls",
-  "^l$",
   "tree",
   "cd",
-  "^cl",
-  "^cx",
-  "^cd",
+  "cl",
+  "cx",
+  "cd",
   "exit",
+  "tr1",
+  "tr2",
+  "tr3",
+  "v",
+  "nvim",
+  "lt",
+  "lsa",
+  "git",
+  "git pull",
+  "git push",
 ]
 
 ## prevent commands run with cwd matching any of these regexes from being written
