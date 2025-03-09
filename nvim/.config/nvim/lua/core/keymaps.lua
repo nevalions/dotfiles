@@ -45,7 +45,7 @@ map('n', '<Right>', ':vertical resize +2<CR>', opts)
 -- Buffers
 map('n', '<Tab>', ':bnext<CR>', opts)
 map('n', '<S-Tab>', ':bprevious<CR>', opts)
-map('n', '<leader>x', ':bdelete!<CR>', opts) -- close buffer
+map('n', '<leader>x', ':Bdelete<CR>', opts) -- close buffer
 map('n', '<leader>b', '<cmd> enew <CR>', opts) -- new buffer
 
 -- Window management
@@ -99,3 +99,6 @@ map('i', '<C-a>', '<Home>', { noremap = true })
 map('i', '<C-e>', '<End>', { noremap = true })
 map('v', '<C-a>', '^', { noremap = true })
 map('v', '<C-e>', '$', { noremap = true })
+
+-- No Neck Pain
+map('n', '<leader>nn', ':NoNeckPain<CR>', { desc = 'NoNeckPain' })

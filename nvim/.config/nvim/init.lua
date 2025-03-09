@@ -28,7 +28,10 @@ require('lazy').setup {
   require 'plugins.alpha',
   require 'plugins.indent-blankline',
   require 'plugins.misc',
-  require 'plugins.comment'
+  require 'plugins.comment',
+  require 'plugins.noice',
+  require 'plugins.no-neck-pain',
+  require 'plugins.neoscroll',
 }
 
 -- The line beneath this is called `modeline`. See `:help modeline`
