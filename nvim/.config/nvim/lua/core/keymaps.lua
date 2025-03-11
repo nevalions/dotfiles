@@ -24,8 +24,9 @@ map('n', '<leader>Q', '<cmd> wqa <CR>', opts)
 map('v', '<C-c>', '"+y', { desc = 'Copy' })
 map('i', '<C-v>', '<C-r><C-o>+', { desc = 'Paste from clipboard' })
 map('n', 'Y', 'y$', { desc = 'Yank to end of line' })
-map('n', '<C-p>', 'o<Esc>P', opts) -- paste on line down
-map('n', '<A-p>', 'O<Esc>p', opts) -- paste on line up
+
+-- select
+map('n', '<leader>a', 'ggVG', { desc = 'Select All' })
 
 -- delete single character without copying into register
 map('n', 'x', '"_x', opts)
@@ -94,7 +95,7 @@ map('n', ']d', vim.diagnostic.goto_next, { desc = 'Go to next diagnostic message
 map('n', '<leader>d', vim.diagnostic.open_float, { desc = 'Open floating diagnostic message' })
 map('n', '<leader>w', vim.diagnostic.setloclist, { desc = 'Open diagnostics list' })
 
--- Map Ctrl+A and Ctrl+E to Home and End functionality
+-- Map to Home and End functionality
 map('n', '<C-a>', '^', { noremap = true })
 map('n', '<C-e>', '$', { noremap = true })
 map('i', '<C-a>', '<Home>', { noremap = true })
