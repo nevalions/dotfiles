@@ -13,6 +13,7 @@ alias mux="tmuxinator"
 alias b="bat"
 alias bl="bat --language=log"
 alias bn="bat --style=numbers,grid"
+alias bs="sudo bat"
 
 alias k="kubectl"
 alias ka="kubectl apply -f"
@@ -42,20 +43,64 @@ SAVEHIST=50000
 
 # VI Mode!!!
 # bindkey jj vi-cmd-mode
-
-### FZF ###
-export FZF_DEFAULT_COMMAND='fd --type f --hidden --follow'
-[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
-# navigation
-cx() { cd "$@" && ls -l; }
-fcd() { cd "$(find . -type d -not -path '*/.*' | fzf)" && l; }
-f() { echo "$(find . -type f -not -path '*/.*' | fzf)" | pbcopy }
-fv() { nvim "$(find . -type f -not -path '*/.*' | fzf)" }
-
 # Eza
 alias l="eza -l --icons --git -a"
-alias lt="eza --tree --level=2 --long --icons --git"
-alias ltree="eza --tree --level=2  --icons --git"
+alias lt="eza --tree --level=1 --long --icons --git -a"
+alias lt2="eza --tree --level=2 --long --icons --git -a"
+alias lt3="eza --tree --level=3 --long --icons --git -a"
+alias ltree="eza --tree --level=2  --icons --git -a"
+
+
+### FZF ###
+export FZF_DEFAULT_COMMAND="fd --type f --exclude .git --exclude $HOME/share --follow"
+[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
+
+find_with_exclusions() {
+    find "$1" -type "$2" \
+        -not -path '*/.git/*' \
+        -not -path './share/*' \
+        -not -path './.local/*' \
+        -not -path '*/yay/*' \
+        -not -path '*/.cache/*' \
+        -not -path '*/venv/*' \
+        -not -path '*/.mozilla/*' \
+        -not -path '*/.var/*' \
+        -not -path '*/.oh-my-zsh/*' \
+        -not -path '*__pycache__*' \
+        -not -path '*/.npm/*' \
+        -not -path "$HOME/share/*" \
+        -not -path "$HOME/.local/*"
+}
+
+if_dir_lt() {
+  local dir="$1"
+  if [ -n "$dir" ]; then
+    cd "$dir" && lt
+  fi
+}
+
+# navigation
+cx() { cd "$@" && ls -l; }
+fhd() { 
+  local dir=$(find_with_exclusions "$HOME" "d" | fzf)
+  if_dir_lt "$dir"
+}
+fcd() {
+  local dir=$(find_with_exclusions "." "d" | fzf)
+  if_dir_lt "$dir"
+}
+f() { 
+  local selected_file=$(find_with_exclusions "$(pwd)" "f" | fzf) 
+  if [ -n "$selected_file" ]; then 
+    echo "$selected_file" | wl-copy
+  fi
+}
+fv() { 
+  local selected_file=$(find_with_exclusions "." "f" | fzf) 
+  if [ -n "$selected_file" ]; then
+    nvim "$selected_file"
+  fi
+}
 
 ZSH_THEME="powerlevel10k/powerlevel10k"
 
@@ -66,13 +111,9 @@ source $ZSH/oh-my-zsh.sh
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 eval "$(zoxide init --cmd cd zsh)"
 
-
-
 # . "$HOME/.atuin/bin/env"
 eval "$(atuin init zsh --disable-up-arrow)"
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
 
 export PATH="$HOME/.local/share/gem/ruby/3.3.0/bin:$PATH"
-# fpath+=(~/.config/tmuxinator/completions)
-# autoload -Uz compinit && compinit
