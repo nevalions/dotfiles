@@ -91,7 +91,7 @@ return {
         map('<leader>ca', vim.lsp.buf.code_action, '[C]ode [A]ction', { 'n', 'x' })
 
         -- This is not Goto Definition, this is Goto Declaration.
-        --  For example, in C this would take you to the header.
+        -- For example, in C this would take you to the header.
         map('gD', vim.lsp.buf.declaration, '[G]oto [D]eclaration')
 
         -- The following two autocommands are used to highlight references of the
@@ -141,29 +141,20 @@ return {
     --  So, we create new capabilities with nvim cmp, and then broadcast that to the servers.
     local capabilities = vim.lsp.protocol.make_client_capabilities()
     capabilities = vim.tbl_deep_extend('force', capabilities, require('cmp_nvim_lsp').default_capabilities())
-
-    -- Enable the following language servers
-    --  Feel free to add/remove any LSPs that you want here. They will automatically be installed.
-    --
-    --  Add any additional override configuration in the following tables. Available keys are:
-    --  - cmd (table): Override the default command used to start the server
-    --  - filetypes (table): Override the default list of associated filetypes for the server
-    --  - capabilities (table): Override fields in capabilities. Can be used to disable certain LSP features.
-    --  - settings (table): Override the default settings passed when initializing the server.
-    --        For example, to see the options for `lua_ls`, you could go to: https://luals.github.io/wiki/settings/
     local servers = {
-      -- clangd = {},
-      -- gopls = {},
-      -- pyright = {},
-      -- rust_analyzer = {},
-      -- ... etc. See `:help lspconfig-all` for a list of all the pre-configured LSPs
-      --
-      -- Some languages (like typescript) have entire language plugins that can be useful:
-      --    https://github.com/pmizio/typescript-tools.nvim
-      --
-      -- But for many setups, the LSP (`tsserver`) will work just fine
       ts_ls = {}, -- tsserver is deprecated
-      ruff = {},
+      ruff = {
+        settings = {
+          organizeImports = false,
+          fixAll = true,
+          codeAction = {
+            disableRules = {
+              enablement = true,
+              imports = false,
+            },
+          },
+        },
+      },
       pylsp = {
         settings = {
           pylsp = {
@@ -180,13 +171,27 @@ return {
           },
         },
       },
+      pyright = {
+        settings = {
+          python = {
+            analysis = {
+              autoImportCompletions = true, -- Enable auto-import completions
+              autoSearchPaths = true, -- Add this line
+              useLibraryCodeForTypes = true, -- Add this line
+              diagnosticMode = 'workspace', -- Change diagnostic mode if needed
+              typeCheckingMode = 'basic', -- Set type checking mode (basic, strict, off)
+              importFormat = 'absolute', -- Try this setting
+              completeFunctionParens = true, -- Optional
+            },
+          },
+        },
+      },
       html = { filetypes = { 'html', 'twig', 'hbs' } },
       cssls = {},
       tailwindcss = {},
       dockerls = {},
       sqlls = {},
       jsonls = {},
-      -- yamlls = {},
 
       yamlls = {
         settings = {
@@ -205,13 +210,6 @@ return {
               ['https://raw.githubusercontent.com/OAI/OpenAPI-Specification/main/schemas/v3.1/schema.json'] = '*api*.{yml,yaml}',
               ['https://raw.githubusercontent.com/compose-spec/compose-spec/master/schema/compose-spec.json'] = '*docker-compose*.{yml,yaml}',
               ['https://raw.githubusercontent.com/argoproj/argo-workflows/master/api/jsonschema/schema.json'] = '*flow*.{yml,yaml}',
-              -- ['http://json.schemastore.org/github-workflow'] = '.github/workflows/*',
-              -- ['http://json.schemastore.org/github-action'] = '.github/action.{yml,yaml}',
-              -- ['http://json.schemastore.org/ansible-stable-2.9'] = 'roles/tasks/**/*.{yml,yaml}',
-              -- ['http://json.schemastore.org/prettierrc'] = '.prettierrc.{yml,yaml}',
-              -- ['http://json.schemastore.org/kustomization'] = 'kustomization.{yml,yaml}',
-              -- ['http://json.schemastore.org/chart'] = 'Chart.{yml,yaml}',
-              -- ['http://json.schemastore.org/circleciconfig'] = '.circleci/**/*.{yml,yaml}',
             },
           },
         },
