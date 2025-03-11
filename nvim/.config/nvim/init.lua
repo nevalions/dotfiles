@@ -32,6 +32,7 @@ require('lazy').setup {
   require 'plugins.noice',
   require 'plugins.no-neck-pain',
   require 'plugins.neoscroll',
+  require 'plugins.yanky',
 }
 
 -- The line beneath this is called `modeline`. See `:help modeline`
