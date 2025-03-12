@@ -29,7 +29,7 @@ require('lazy').setup {
   require 'plugins.indent-blankline',
   require 'plugins.misc',
   require 'plugins.comment',
-  require 'plugins.noice',
+  -- require 'plugins.noice',
   require 'plugins.no-neck-pain',
   require 'plugins.neoscroll',
   require 'plugins.yanky',
