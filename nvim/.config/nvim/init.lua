@@ -34,4 +34,5 @@ require('lazy').setup {
   require 'plugins.no-neck-pain',
   require 'plugins.neoscroll',
   require 'plugins.yanky',
+  require 'plugins.trouble',
 }
