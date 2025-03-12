@@ -1,6 +1,7 @@
 require 'core.options' -- Load general options
 require 'core.keymaps' -- Load general keymaps
 require 'core.snippets' -- Custom code snippets
+require 'core.autocmds' -- Custom autocommands
 
 -- Set up the Lazy plugin manager
 local lazypath = vim.fn.stdpath 'data' .. '/lazy/lazy.nvim'
@@ -34,6 +35,3 @@ require('lazy').setup {
   require 'plugins.neoscroll',
   require 'plugins.yanky',
 }
-
--- The line beneath this is called `modeline`. See `:help modeline`
--- vim: ts=2 sts=2 sw=2 et
