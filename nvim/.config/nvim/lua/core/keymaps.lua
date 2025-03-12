@@ -40,10 +40,10 @@ map('n', 'n', 'nzzzv', opts)
 map('n', 'N', 'Nzzzv', opts)
 
 -- Resize with arrows
-map('n', '<Up>', ':resize -2<CR>', opts)
-map('n', '<Down>', ':resize +2<CR>', opts)
-map('n', '<Left>', ':vertical resize -2<CR>', opts)
-map('n', '<Right>', ':vertical resize +2<CR>', opts)
+map('n', '<C-Up>', ':resize -2<CR>', opts)
+map('n', '<C-Down>', ':resize +2<CR>', opts)
+map('n', '<C-Left>', ':vertical resize -2<CR>', opts)
+map('n', '<C-Right>', ':vertical resize +2<CR>', opts)
 
 -- Buffers management
 map('n', '<Tab>', ':bnext<CR>', opts)
