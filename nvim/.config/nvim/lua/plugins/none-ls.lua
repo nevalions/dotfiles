@@ -12,6 +12,7 @@ return {
     -- Formatters & linters for mason to install
     require('mason-null-ls').setup {
       ensure_installed = {
+        'angularls',
         'prettier', -- ts/js formatter
         'stylua', -- lua formatter
         'eslint_d', -- ts/js linter
@@ -25,7 +26,7 @@ return {
 
     local sources = {
       diagnostics.checkmake,
-      formatting.prettier.with { filetypes = { 'html', 'json', 'yaml', 'markdown' } },
+      formatting.prettier.with { filetypes = { 'json', 'yaml', 'markdown', 'ts' } },
       formatting.stylua,
       formatting.shfmt.with { args = { '-i', '4' } },
       formatting.terraform_fmt,
