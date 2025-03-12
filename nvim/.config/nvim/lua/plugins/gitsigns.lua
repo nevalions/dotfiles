@@ -58,5 +58,6 @@ return {
     { '<leader>gS', ':Gitsigns stage_buffer<CR>', desc = 'Stage Buffer' },
     { '<leader>gd', ':Gitsigns diffthis<CR>', desc = 'Diffthis' },
     { '<leader>gD', ':Gitsigns diffthis ~<CR>', desc = 'Diffthis all' },
+    { '<leader>gb', ':Gitsigns blame_line ~<CR>', desc = 'Blame line' },
   },
 }
