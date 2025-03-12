@@ -62,6 +62,17 @@ return {
         --  To jump back, press <C-t>.
         map('gd', require('telescope.builtin').lsp_definitions, '[G]oto [D]efinition')
 
+        -- Go to definition in split.
+        vim.keymap.set('n', 'g|', function()
+          vim.cmd 'vsplit'
+          vim.lsp.buf.definition()
+        end, { desc = 'LSP: [G]oto [D]efinition in vertical split' })
+
+        vim.keymap.set('n', 'g-', function()
+          vim.cmd 'split'
+          vim.lsp.buf.definition()
+        end, { desc = 'LSP: [G]oto [D]efinition in horizontal split' })
+
         -- Find references for the word under your cursor.
         map('gr', require('telescope.builtin').lsp_references, '[G]oto [R]eferences')
 
@@ -145,12 +156,30 @@ return {
       ts_ls = {}, -- tsserver is deprecated
       ruff = {
         settings = {
-          organizeImports = false,
           fixAll = true,
           codeAction = {
             disableRules = {
               enablement = true,
-              imports = false,
+            },
+          },
+        },
+      },
+      pyright = {
+        handlers = {
+          ['textDocument/publishDiagnostics'] = function() end,
+        },
+        on_attach = function(client, _)
+          client.server_capabilities.codeActionProvider = false
+        end,
+        settings = {
+          pyright = {
+            disableOrganizeImports = true,
+          },
+          python = {
+            analysis = {
+              autoSearchPaths = true,
+              typeCheckingMode = 'basic',
+              useLibraryCodeForTypes = true,
             },
           },
         },
@@ -167,21 +196,6 @@ return {
               pylsp_mypy = { enabled = false },
               pylsp_black = { enabled = false },
               pylsp_isort = { enabled = false },
-            },
-          },
-        },
-      },
-      pyright = {
-        settings = {
-          python = {
-            analysis = {
-              autoImportCompletions = true, -- Enable auto-import completions
-              autoSearchPaths = true, -- Add this line
-              useLibraryCodeForTypes = true, -- Add this line
-              diagnosticMode = 'workspace', -- Change diagnostic mode if needed
-              typeCheckingMode = 'basic', -- Set type checking mode (basic, strict, off)
-              importFormat = 'absolute', -- Try this setting
-              completeFunctionParens = true, -- Optional
             },
           },
         },
