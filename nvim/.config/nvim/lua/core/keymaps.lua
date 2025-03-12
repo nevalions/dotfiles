@@ -45,7 +45,7 @@ map('n', '<Down>', ':resize +2<CR>', opts)
 map('n', '<Left>', ':vertical resize -2<CR>', opts)
 map('n', '<Right>', ':vertical resize +2<CR>', opts)
 
--- Buffers
+-- Buffers management
 map('n', '<Tab>', ':bnext<CR>', opts)
 map('n', '<S-Tab>', ':bprevious<CR>', opts)
 map('n', '<leader>x', ':Bdelete<CR>', opts) -- close buffer
