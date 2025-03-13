@@ -8,3 +8,10 @@ vim.api.nvim_create_autocmd('BufReadPost', {
     end
   end,
 })
+
+vim.api.nvim_create_autocmd('BufWritePre', {
+  pattern = { '*.ts', '*.tsx', '*.js', '*.jsx', '*.json', '*.yaml', '*.htmlangular', '.html' },
+  callback = function()
+    vim.lsp.buf.format { async = false }
+  end,
+})

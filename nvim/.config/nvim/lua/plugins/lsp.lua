@@ -206,6 +206,7 @@ return {
           '--angularCoreVersion',
           default_angular_core_version,
         },
+        -- 'htmlanfular works only on nvim 11'
         filetypes = { 'typescript', 'html', 'typescriptreact', 'typescript.tsx', 'htmlangular' },
       },
       ruff = {

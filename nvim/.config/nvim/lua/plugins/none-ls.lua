@@ -12,11 +12,12 @@ return {
     -- Formatters & linters for mason to install
     require('mason-null-ls').setup {
       ensure_installed = {
+        'ts_ls',
         'bashls',
         'angularls',
         'prettier', -- ts/js formatter
         'stylua', -- lua formatter
-        'eslint_d', -- ts/js linter
+        -- 'eslint_d', -- ts/js linter
         'shfmt', -- Shell formatter
         'checkmake', -- linter for Makefiles
         'pyright',
@@ -27,7 +28,7 @@ return {
 
     local sources = {
       diagnostics.checkmake,
-      formatting.prettier.with { filetypes = { 'json', 'yaml', 'markdown', 'ts' } },
+      formatting.prettier.with { filetypes = { 'json', 'yaml', 'markdown', 'ts', 'html', 'htmlangular' } },
       formatting.stylua,
       formatting.shfmt.with { args = { '-i', '4' } },
       formatting.terraform_fmt,
@@ -47,7 +48,8 @@ return {
             group = augroup,
             buffer = bufnr,
             callback = function()
-              vim.lsp.buf.format { async = false }
+              vim.lsp.buf.format { bufnr = bufnr, async = false }
+              -- vim.lsp.buf.format { async = false }
             end,
           })
         end
