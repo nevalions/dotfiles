@@ -151,6 +151,8 @@ return {
     --  When you add nvim-cmp, luasnip, etc. Neovim now has *more* capabilities.
     --  So, we create new capabilities with nvim cmp, and then broadcast that to the servers.
 
+    -- Adding LSP server for angular
+    -- installed whith sudo npm install -g antlers-language-server
     local function get_probe_dir(root_dir)
       local project_root = vim.fs.dirname(vim.fs.find('node_modules', { path = root_dir, upward = true })[1])
 
@@ -185,9 +187,13 @@ return {
     local default_probe_dir = get_probe_dir(vim.fn.getcwd())
     local default_angular_core_version = get_angular_core_version(vim.fn.getcwd())
 
+    -- Proceed with nvim-lspconfig
     local capabilities = vim.lsp.protocol.make_client_capabilities()
     capabilities = vim.tbl_deep_extend('force', capabilities, require('cmp_nvim_lsp').default_capabilities())
     local servers = {
+      bashls = {
+        fyletypes = { 'sh', 'zsh', 'zshrc' },
+      },
       ts_ls = {}, -- tsserver is deprecated
       angularls = {
         cmd = {
@@ -294,6 +300,7 @@ return {
                 unpack(vim.api.nvim_get_runtime_file('', true)),
               },
             },
+            telemetry = { enable = false },
             diagnostics = { disable = { 'missing-fields' } },
             format = {
               enable = false,
