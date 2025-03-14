@@ -302,7 +302,10 @@ return {
               },
             },
             telemetry = { enable = false },
-            diagnostics = { disable = { 'missing-fields' } },
+            diagnostics = {
+              globals = { 'vim', 'client' },
+              disable = { 'missing-fields' },
+            },
             format = {
               enable = false,
             },
