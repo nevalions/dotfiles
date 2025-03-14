@@ -2,6 +2,7 @@ require 'core.options' -- Load general options
 require 'core.keymaps' -- Load general keymaps
 require 'core.snippets' -- Custom code snippets
 require 'core.autocmds' -- Custom autocommands
+require 'core.floaterminal' -- Custom floaterminal
 
 -- Set up the Lazy plugin manager
 local lazypath = vim.fn.stdpath 'data' .. '/lazy/lazy.nvim'

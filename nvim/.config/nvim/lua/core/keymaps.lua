@@ -90,10 +90,14 @@ map('v', '<A-Down>', ":m '>+1<CR>gv=gv", { desc = 'Move selection down', silent 
 map('v', 'p', '"_dP', opts)
 
 -- Diagnostic keymaps
-map('n', '[d', vim.diagnostic.goto_prev, { desc = 'Go to previous diagnostic message' })
-map('n', ']d', vim.diagnostic.goto_next, { desc = 'Go to next diagnostic message' })
+map('n', '[d', function()
+  vim.diagnostic.jump { count = -1 }
+end, { desc = 'Go to previous diagnostic message' })
+map('n', ']d', function()
+  vim.diagnostic.jump { count = 1 }
+end, { desc = 'Go to next diagnostic message' })
 map('n', '<leader>d', vim.diagnostic.open_float, { desc = 'Open floating diagnostic message' })
-map('n', '<leader>w', vim.diagnostic.setloclist, { desc = 'Open diagnostics list' })
+-- map('n', '<leader>w', vim.diagnostic.setloclist, { desc = 'Open diagnostics list' })
 
 -- Map to Home and End functionality
 map('n', '<C-a>', '^', { noremap = true })
@@ -126,3 +130,6 @@ vim.keymap.set('n', '<P', '<Plug>(YankyPutIndentBeforeShiftLeft)')
 
 vim.keymap.set('n', '=p', '<Plug>(YankyPutAfterFilter)')
 vim.keymap.set('n', '=P', '<Plug>(YankyPutBeforeFilter)')
+
+-- Floating terminal
+map('n', '<leader>tt', ':Floaterminal<CR>')
