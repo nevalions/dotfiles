@@ -120,7 +120,9 @@ export PATH="$HOME/.local/share/gem/ruby/3.3.0/bin:$PATH"
 
 
 # Load Angular CLI autocompletion.
+if command -v ng &> /dev/null; then
 source <(ng completion script)
+fi
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
