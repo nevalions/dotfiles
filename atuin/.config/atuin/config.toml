@@ -122,6 +122,10 @@ history_filter = [
   "git",
   "git pull",
   "git push",
+  "l",
+  "f",
+  "ng s",
+  "reboot",
 ]
 
 ## prevent commands run with cwd matching any of these regexes from being written
