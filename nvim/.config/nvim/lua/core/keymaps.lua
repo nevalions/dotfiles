@@ -132,4 +132,4 @@ vim.keymap.set('n', '=p', '<Plug>(YankyPutAfterFilter)')
 vim.keymap.set('n', '=P', '<Plug>(YankyPutBeforeFilter)')
 
 -- Floating terminal
-map('n', '<leader>tt', ':Floaterminal<CR>')
+map('n', '<leader>tt', ':Floaterminal<CR>i')
