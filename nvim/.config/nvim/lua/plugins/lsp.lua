@@ -152,6 +152,7 @@ return {
     --  So, we create new capabilities with nvim cmp, and then broadcast that to the servers.
 
     -- Adding LSP server for angular
+    -- global sudo ng install npm install -g @angular/cli
     -- installed whith sudo npm install -g antlers-language-server
     local function get_probe_dir(root_dir)
       local project_root = vim.fs.dirname(vim.fs.find('node_modules', { path = root_dir, upward = true })[1])
