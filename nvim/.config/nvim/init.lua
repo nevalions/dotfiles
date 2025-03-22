@@ -40,4 +40,7 @@ require('lazy').setup {
   require 'plugins.copilot',
   require 'plugins.mini',
   require 'plugins.mini-ai',
+  -- require 'plugins.mini-comp',
+  -- require 'plugins.mini-snip',
+  -- require 'plugins.mini-icons',
 }
