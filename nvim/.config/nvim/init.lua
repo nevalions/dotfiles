@@ -42,6 +42,6 @@ require('lazy').setup {
   require 'plugins.mini-ai',
   require 'plugins.mini-surround',
   require 'plugins.mini-comment',
-  -- require 'plugins.mini-snip',
+  require 'plugins.mini-operators',
   -- require 'plugins.mini-icons',
 }
