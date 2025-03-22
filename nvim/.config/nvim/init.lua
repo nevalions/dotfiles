@@ -38,4 +38,6 @@ require('lazy').setup {
   require 'plugins.yanky',
   require 'plugins.trouble',
   require 'plugins.copilot',
+  require 'plugins.mini',
+  require 'plugins.mini-ai',
 }
