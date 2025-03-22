@@ -15,6 +15,23 @@ alias bl="bat --language=log"
 alias bn="bat --style=numbers,grid"
 alias bs="sudo bat"
 
+# Git
+alias gc="git commit -m"
+alias gca="git commit -a -m"
+alias gP="git push origin HEAD"
+alias gp="git pull origin"
+alias gst="git status"
+alias glog="git log --graph --topo-order --pretty='%w(100,0,6)%C(yellow)%h%C(bold)%C(black)%d %C(cyan)%ar %C(green)%an%n%C(bold)%C(white)%s %N' --abbrev-commit"
+alias gdiff="git diff"
+alias gco="git checkout"
+alias gb='git branch'
+alias gba='git branch -a'
+alias gadd='git add'
+alias ga='git add -p'
+alias gcoall='git checkout -- .'
+alias gr='git remote'
+alias gres='git reset'
+
 alias k="kubectl"
 alias ka="kubectl apply -f"
 alias kg="kubectl get"
@@ -111,8 +128,11 @@ source $ZSH/oh-my-zsh.sh
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 eval "$(zoxide init --cmd cd zsh)"
 
-# . "$HOME/.atuin/bin/env"
-eval "$(atuin init zsh --disable-up-arrow)"
+if command -v atuin &> /dev/null; then
+  # . "$HOME/.atuin/bin/env"
+  eval "$(atuin init zsh --disable-up-arrow)"
+fi
+
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
 
