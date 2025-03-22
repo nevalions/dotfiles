@@ -43,5 +43,6 @@ require('lazy').setup {
   require 'plugins.mini-surround',
   require 'plugins.mini-comment',
   require 'plugins.mini-operators',
+  require 'plugins.mini-bracketed',
   -- require 'plugins.mini-icons',
 }
