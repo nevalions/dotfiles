@@ -97,7 +97,6 @@ map('n', ']d', function()
   vim.diagnostic.jump { count = 1 }
 end, { desc = 'Go to next diagnostic message' })
 map('n', '<leader>d', vim.diagnostic.open_float, { desc = 'Open floating diagnostic message' })
--- map('n', '<leader>w', vim.diagnostic.setloclist, { desc = 'Open diagnostics list' })
 
 -- Map to Home and End functionality
 map('n', '<C-a>', '^', { noremap = true })
