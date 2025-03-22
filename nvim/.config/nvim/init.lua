@@ -31,7 +31,7 @@ require('lazy').setup {
   require 'plugins.alpha',
   require 'plugins.indent-blankline',
   require 'plugins.misc',
-  require 'plugins.comment',
+  -- require 'plugins.comment',
   require 'plugins.noice',
   require 'plugins.no-neck-pain',
   require 'plugins.neoscroll',
@@ -41,7 +41,7 @@ require('lazy').setup {
   require 'plugins.mini',
   require 'plugins.mini-ai',
   require 'plugins.mini-surround',
-  -- require 'plugins.mini-comp',
+  require 'plugins.mini-comment',
   -- require 'plugins.mini-snip',
   -- require 'plugins.mini-icons',
 }
