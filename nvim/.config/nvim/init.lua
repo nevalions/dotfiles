@@ -37,4 +37,5 @@ require('lazy').setup {
   require 'plugins.neoscroll',
   require 'plugins.yanky',
   require 'plugins.trouble',
+  require 'plugins.copilot',
 }
