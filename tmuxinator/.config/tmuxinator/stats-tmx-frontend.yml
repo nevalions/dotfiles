@@ -7,9 +7,9 @@ windows:
   - editor:
       layout: 7084,132x61,0,0[132x51,0,0,5,132x9,0,52,6]
       panes:
-        - stats-backend:
+        - stats-frontend:
             - cd ~/code/statsboard/statsboards-frontend/
             - v
-        - stats-backend-terminal:
+        - stats-frontend-terminal:
             - cd ~/code/statsboard/statsboards-frontend/
             - ng s
