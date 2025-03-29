@@ -1,0 +1,16 @@
+name: stats-run-dev
+root: ~/
+
+enable_pane_titles: true
+
+windows:
+  - editor:
+      layout: even-vertical
+      panes:
+        - stats-frontend-terminal:
+            - cd ~/code/statsboard/statsboards-frontend/
+            - ng s
+        - stats-backend-terminal:
+            - cd ~/code/statsboard/statsboards-backend/
+            - . ./venv/bin/activate
+            - python src/runserver.py
