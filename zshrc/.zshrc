@@ -52,6 +52,8 @@ alias tr3="tree -a -L 3 -I '.git'"
 alias tr2="tree -a -L 2 -I '.git'"
 alias tr1="tree -a -L 1 -I '.git'"
 
+alias obo='cd ~/vault && FILE=$(find . -type f -name "*.md" | fzf --preview "bat --color=always {}" | tr -d "\n"); [ -n "$FILE" ] && nvim "$FILE"'
+
 alias lg="lazygit"
 
 HISTFILE=~/.history
