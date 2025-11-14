@@ -17,3 +17,5 @@ data
 nvim/.config/nvim/lua/plugins/logfile
 
 .nvimlog
+
+CLAUDE.md
