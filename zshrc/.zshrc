@@ -152,3 +152,10 @@ export NVM_DIR="$HOME/.nvm"
 
 export PATH=$PATH:$HOME/go/bin
 export PATH="$HOME/.local/bin:$PATH"
+
+# opencode
+export PATH=/home/linroot/.opencode/bin:$PATH
+
+# ESP-IDF
+export IDF_PATH=/home/linroot/esp-idf
+export PATH="$IDF_PATH/tools:$PATH"
