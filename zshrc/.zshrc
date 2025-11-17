@@ -159,3 +159,8 @@ export PATH=/home/linroot/.opencode/bin:$PATH
 # ESP-IDF
 export IDF_PATH=/home/linroot/esp-idf
 export PATH="$IDF_PATH/tools:$PATH"
+
+# ESP-IDF environment activation
+idf() {
+  source "$IDF_PATH/export.sh"
+}
