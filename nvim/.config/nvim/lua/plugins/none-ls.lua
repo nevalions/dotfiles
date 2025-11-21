@@ -22,6 +22,8 @@ return {
         'checkmake', -- linter for Makefiles
         'pyright',
         'ruff', -- Python linter and formatter
+        'clang-format', -- C/C++ formatter
+        'cppcheck', -- C/C++ linter
       },
       automatic_installation = true,
     }
@@ -30,6 +32,7 @@ return {
       diagnostics.checkmake,
       formatting.prettier.with { filetypes = { 'json', 'yaml', 'markdown', 'ts', 'html', 'htmlangular' } },
       formatting.stylua,
+      formatting.clang_format.with { filetypes = { 'c', 'cpp', 'h', 'hpp' } },
       formatting.shfmt.with { args = { '-i', '4' } },
       require('none-ls.formatting.ruff').with { extra_args = { '--extend-select', 'I' } },
       require 'none-ls.formatting.ruff_format',

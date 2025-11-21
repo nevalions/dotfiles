@@ -10,11 +10,40 @@ return {
     -- Useful status updates for LSP.
     -- NOTE: `opts = {}` is the same as calling `require('fidget').setup({})`
     { 'j-hui/fidget.nvim', opts = {} },
+ 
+    -- 🔥 Add esp32.nvim here
+    { 'Aietes/esp32.nvim' },
 
     -- Allows extra capabilities provided by nvim-cmp
     'hrsh7th/cmp-nvim-lsp',
   },
+
   config = function()
+    --------------------------------------------------------------------
+    -- 1. esp32.nvim MUST load before LSP setup
+    --------------------------------------------------------------------
+    require('esp32').setup {
+      -- Optional:
+      target = 'esp32',
+      -- idf_path = "/home/linroot/esp-idf",
+      -- toolchain_path = "/home/linroot/.espressif/tools/xtensa-esp-elf",
+
+      idf_path = os.getenv("HOME") .. "/esp-idf",
+      toolchain_path = os.getenv("HOME") .. "/.espressif/tools/xtensa-esp-elf",
+
+      suppress_clangd_warnings = true,
+      clangd_args = {
+        -- MOST IMPORTANT LINE:
+       "--query-driver=/home/linroot/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/bin/xtensa-esp-elf-gcc",
+
+        "--extra-arg=-Wno-unused-command-line-argument",
+        "--extra-arg=-Wno-unknown-warning-option",
+        "--extra-arg=-Wno-error=unknown-warning-option",
+        "--extra-arg=-Wno-error=unused-command-line-argument",
+      },
+      build_dir = 'build',
+    }
+
     -- Brief aside: **What is LSP?**
     --
     -- LSP is an initialism you've probably heard, but might not understand what it is.
@@ -263,6 +292,33 @@ return {
       sqlls = {},
       jsonls = {},
 
+      -- clangd = {
+      --   cmd = {
+      --     'clangd',
+      --     '--compile-commands-dir=build',
+      --     '--header-insertion=never', -- IMPORTANT: this fixes ESP-IDF compatibility
+      --     '--query-driver=/home/linroot/.espressif/tools/xtensa-esp32-elf/**/xtensa-esp32-elf-*',
+      --   },
+      --   root_dir = require('lspconfig.util').root_pattern('CMakeLists.txt', '.git'),
+      --   settings = {
+      --     clangd = {
+      --       compileCommands = { 'build/compile_commands.json' },
+      --       fallbackFlags = {
+      --         '-I',
+      --         os.getenv 'HOME' .. '/esp-idf/components',
+      --         '-I',
+      --         os.getenv 'HOME' .. '/esp-idf/components/esp_wifi/include',
+      --         '-I',
+      --         os.getenv 'HOME' .. '/esp-idf/components/esp_common/include',
+      --         '-target',
+      --         'xtensa-esp32-elf',
+      --         '-std=gnu99',
+      --         '-DESP32',
+      --       },
+      --     },
+      --   },
+      -- },
+      --
       yamlls = {
         settings = {
           yaml = {
@@ -328,6 +384,7 @@ return {
     local ensure_installed = vim.tbl_keys(servers or {})
     vim.list_extend(ensure_installed, {
       'stylua', -- Used to format Lua code
+      'clangd', -- C/C++ language server for ESP-IDF
     })
     require('mason-tool-installer').setup { ensure_installed = ensure_installed }
 
