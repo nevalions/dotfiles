@@ -164,3 +164,4 @@ export PATH="$IDF_PATH/tools:$PATH"
 idf() {
   source "$IDF_PATH/export.sh"
 }
+# export ESPPORT=/dev/ttyUSB0
