@@ -10,7 +10,7 @@ return {
     -- Useful status updates for LSP.
     -- NOTE: `opts = {}` is the same as calling `require('fidget').setup({})`
     { 'j-hui/fidget.nvim', opts = {} },
- 
+
     -- 🔥 Add esp32.nvim here
     { 'Aietes/esp32.nvim' },
 
@@ -28,18 +28,18 @@ return {
       -- idf_path = "/home/linroot/esp-idf",
       -- toolchain_path = "/home/linroot/.espressif/tools/xtensa-esp-elf",
 
-      idf_path = os.getenv("HOME") .. "/esp-idf",
-      toolchain_path = os.getenv("HOME") .. "/.espressif/tools/xtensa-esp-elf",
+      idf_path = os.getenv 'HOME' .. '/esp-idf',
+      toolchain_path = os.getenv 'HOME' .. '/.espressif/tools/xtensa-esp-elf',
 
       suppress_clangd_warnings = true,
       clangd_args = {
         -- MOST IMPORTANT LINE:
-       "--query-driver=/home/linroot/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/bin/xtensa-esp-elf-gcc",
+        '--query-driver=/home/linroot/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/bin/xtensa-esp-elf-gcc',
 
-        "--extra-arg=-Wno-unused-command-line-argument",
-        "--extra-arg=-Wno-unknown-warning-option",
-        "--extra-arg=-Wno-error=unknown-warning-option",
-        "--extra-arg=-Wno-error=unused-command-line-argument",
+        '--extra-arg=-Wno-unused-command-line-argument',
+        '--extra-arg=-Wno-unknown-warning-option',
+        '--extra-arg=-Wno-error=unknown-warning-option',
+        '--extra-arg=-Wno-error=unused-command-line-argument',
       },
       build_dir = 'build',
     }
@@ -311,12 +311,12 @@ return {
       --         '-I',
       --         os.getenv 'HOME' .. '/esp-idf/components/esp_common/include',
       --         '-target',
+      --   },
       --         'xtensa-esp32-elf',
       --         '-std=gnu99',
       --         '-DESP32',
       --       },
       --     },
-      --   },
       -- },
       --
       yamlls = {
