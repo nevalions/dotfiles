@@ -95,6 +95,7 @@ return {
         'html-lsp',
         'css-lsp',
         'lua-language-server',
+        'pyright', -- ✅ add python LSP
       },
     }
 
@@ -117,6 +118,14 @@ return {
     lspconfig.ts_ls.setup {
       capabilities = capabilities,
       root_dir = util.root_pattern('package.json', 'tsconfig.json', '.git'),
+    }
+
+    ---------------------------------------------------------------------------
+    -- Python (Pyright) ✅
+    ---------------------------------------------------------------------------
+    lspconfig.pyright.setup {
+      capabilities = capabilities,
+      root_dir = util.root_pattern('pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile', '.git'),
     }
 
     ---------------------------------------------------------------------------
