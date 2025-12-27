@@ -182,11 +182,37 @@ return {
 
     require('mason').setup()
 
+    local lsp_to_mason = {
+      lua_ls = 'lua-language-server',
+      bashls = 'bash-language-server',
+      ts_ls = 'typescript-language-server',
+      angularls = 'angular-language-server',
+      ruff = 'ruff',
+      pyright = 'pyright',
+      pylsp = 'python-lsp-server',
+      clangd = 'clangd',
+      html = 'html-lsp',
+      cssls = 'css-lsp',
+      tailwindcss = 'tailwindcss-language-server',
+      jsonls = 'json-lsp',
+      yamlls = 'yaml-language-server',
+      dockerls = 'dockerfile-language-server',
+      sqlls = 'sqls',
+    }
+
     local ensure_installed = vim.list_extend({}, profile.ensure_installed or {})
+    for server_name, _ in pairs(servers) do
+      local mason_name = lsp_to_mason[server_name]
+      if mason_name and not vim.tbl_contains(ensure_installed, mason_name) then
+        table.insert(ensure_installed, mason_name)
+      end
+    end
+
     if local_config and type(local_config) == 'table' and local_config.custom_servers then
       for server_name, _ in pairs(local_config.custom_servers) do
-        if not vim.tbl_contains(ensure_installed, server_name) then
-          table.insert(ensure_installed, server_name)
+        local mason_name = lsp_to_mason[server_name]
+        if mason_name and not vim.tbl_contains(ensure_installed, mason_name) then
+          table.insert(ensure_installed, mason_name)
         end
       end
     end
