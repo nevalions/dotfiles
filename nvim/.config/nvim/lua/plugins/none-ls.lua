@@ -116,7 +116,7 @@ return {
 
     require('mason-null-ls').setup {
       ensure_installed = profile.ensure_installed,
-      automatic_installation = true,
+      automatic_installation = false,
     }
 
     local sources = profile.sources
