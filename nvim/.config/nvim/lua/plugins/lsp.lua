@@ -4,219 +4,157 @@ return {
     { 'williamboman/mason.nvim', config = true },
     'williamboman/mason-lspconfig.nvim',
     'WhoIsSethDaniel/mason-tool-installer.nvim',
-    { 'j-hui/fidget.nvim', opts = {} },
     'hrsh7th/cmp-nvim-lsp',
+    { 'j-hui/fidget.nvim', opts = {} },
   },
 
   config = function()
-    local profiles = require 'plugins.lsp-profiles'
+    local lspconfig = require 'lspconfig'
+    local util = require 'lspconfig.util'
 
-    local function get_probe_dir(root_dir)
-      local project_root = vim.fs.dirname(vim.fs.find('node_modules', { path = root_dir, upward = true })[1])
-      return project_root and (project_root .. '/node_modules') or ''
+    ---------------------------------------------------------------------------
+    -- Capabilities (cmp)
+    ---------------------------------------------------------------------------
+    local capabilities = vim.lsp.protocol.make_client_capabilities()
+    capabilities = require('cmp_nvim_lsp').default_capabilities(capabilities)
+
+    ---------------------------------------------------------------------------
+    -- on_attach
+    ---------------------------------------------------------------------------
+    local on_attach = function(_, bufnr)
+      local map = function(lhs, rhs, desc)
+        vim.keymap.set('n', lhs, rhs, { buffer = bufnr, desc = desc })
+      end
+
+      map('gd', vim.lsp.buf.definition, 'Go to definition')
+      map('gr', vim.lsp.buf.references, 'References')
+      map('K', vim.lsp.buf.hover, 'Hover')
+      map('<leader>rn', vim.lsp.buf.rename, 'Rename')
+      map('<leader>ca', vim.lsp.buf.code_action, 'Code action')
     end
 
-    local function get_angular_core_version(root_dir)
-      local project_root = vim.fs.dirname(vim.fs.find('node_modules', { path = root_dir, upward = true })[1])
+    ---------------------------------------------------------------------------
+    -- Mason
+    ---------------------------------------------------------------------------
+    require('mason').setup()
 
-      if not project_root then
-        return ''
-      end
+    require('mason-tool-installer').setup {
+      ensure_installed = {
+        'angular-language-server',
+        'typescript-language-server',
+        'tailwindcss-language-server',
+        'html-lsp',
+        'css-lsp',
+        'lua-language-server',
+      },
+    }
 
-      local package_json = project_root .. '/package.json'
-      if not vim.loop.fs_stat(package_json) then
-        return ''
-      end
-
-      local contents = io.open(package_json):read '*a'
-      local json = vim.json.decode(contents)
-      if not json.dependencies then
-        return ''
-      end
-
-      local angular_core_version = json.dependencies['@angular/core']
-      angular_core_version = angular_core_version and angular_core_version:match '%d+%.%d+%.%d+'
-
-      return angular_core_version
+    ---------------------------------------------------------------------------
+    -- Angular Language Server (IMPORTANT PART)
+    ---------------------------------------------------------------------------
+    local function angular_cmd(root_dir)
+      local node_modules = root_dir .. '/node_modules'
+      return {
+        vim.fn.stdpath 'data' .. '/mason/bin/ngserver',
+        '--stdio',
+        '--tsProbeLocations',
+        node_modules,
+        '--ngProbeLocations',
+        node_modules,
+      }
     end
 
-    local function load_local_config()
-      local local_config_path = vim.fn.stdpath 'config' .. '/lsp-local.lua'
-      if vim.fn.filereadable(local_config_path) == 1 then
-        local ok, config = pcall(dofile, local_config_path)
-        if ok then
-          return config
+    lspconfig.angularls.setup {
+      capabilities = capabilities,
+      on_attach = on_attach,
+      filetypes = { 'typescript', 'typescriptreact', 'html', 'htmlangular' },
+      root_dir = util.root_pattern('angular.json', 'nx.json', 'project.json', 'package.json', '.git'),
+      cmd = angular_cmd(vim.loop.cwd()),
+      on_new_config = function(new_config, new_root_dir)
+        new_config.cmd = angular_cmd(new_root_dir)
+      end,
+    }
+
+    ---------------------------------------------------------------------------
+    -- TypeScript
+    ---------------------------------------------------------------------------
+    lspconfig.ts_ls.setup {
+      capabilities = capabilities,
+      on_attach = on_attach,
+      root_dir = util.root_pattern('package.json', 'tsconfig.json', '.git'),
+    }
+
+    ---------------------------------------------------------------------------
+    -- HTML (disabled inside Angular projects)
+    ---------------------------------------------------------------------------
+    lspconfig.html.setup {
+      capabilities = capabilities,
+      on_attach = on_attach,
+      root_dir = function(fname)
+        local root = util.root_pattern('package.json', '.git')(fname)
+        if root and vim.fn.filereadable(root .. '/angular.json') == 1 then
+          return nil
         end
-      end
-      return nil
-    end
+        return root
+      end,
+    }
 
-    local local_config = load_local_config()
-    local profile_name = 'minimal'
+    ---------------------------------------------------------------------------
+    -- Tailwind
+    ---------------------------------------------------------------------------
+    lspconfig.tailwindcss.setup {
+      capabilities = capabilities,
+      on_attach = on_attach,
+      filetypes = {
+        'html',
+        'htmlangular',
+        'typescript',
+        'typescriptreact',
+        'css',
+        'scss',
+      },
+    }
 
-    if local_config then
-      if type(local_config) == 'string' then
-        profile_name = local_config
-      elseif type(local_config) == 'table' then
-        profile_name = local_config.profile or 'minimal'
-      end
-    end
+    ---------------------------------------------------------------------------
+    -- CSS
+    ---------------------------------------------------------------------------
+    lspconfig.cssls.setup {
+      capabilities = capabilities,
+      on_attach = on_attach,
+    }
 
-    local profile = profiles[profile_name] or profiles.minimal
-    local servers = vim.deepcopy(profile.servers)
+    ---------------------------------------------------------------------------
+    -- Lua
+    ---------------------------------------------------------------------------
+    lspconfig.lua_ls.setup {
+      capabilities = capabilities,
+      on_attach = on_attach,
+      settings = {
+        Lua = {
+          diagnostics = { globals = { 'vim' } },
+          workspace = { checkThirdParty = false },
+        },
+      },
+    }
 
-    if local_config and type(local_config) == 'table' and local_config.custom_servers then
-      for server_name, server_config in pairs(local_config.custom_servers) do
-        servers[server_name] = server_config
-      end
-    end
-
-    vim.api.nvim_create_autocmd('LspAttach', {
-      group = vim.api.nvim_create_augroup('kickstart-lsp-attach', { clear = true }),
-      callback = function(event)
-        local map = function(keys, func, desc, mode)
-          mode = mode or 'n'
-          vim.keymap.set(mode, keys, func, { buffer = event.buf, desc = 'LSP: ' .. desc })
+    ---------------------------------------------------------------------------
+    -- Force AngularLS attach for HTML templates
+    -- (THIS fixes your exact issue)
+    ---------------------------------------------------------------------------
+    vim.api.nvim_create_autocmd('FileType', {
+      pattern = { 'html', 'htmlangular' },
+      callback = function(args)
+        local fname = vim.api.nvim_buf_get_name(args.buf)
+        if fname == '' then
+          return
         end
 
-        map('gd', require('telescope.builtin').lsp_definitions, '[G]oto [D]efinition')
+        local root = util.root_pattern('angular.json', 'nx.json', 'project.json')(fname)
 
-        vim.keymap.set('n', 'g|', function()
-          vim.cmd 'vsplit'
-          vim.lsp.buf.definition()
-        end, { desc = 'LSP: [G]oto [D]efinition in vertical split' })
-
-        vim.keymap.set('n', 'g-', function()
-          vim.cmd 'split'
-          vim.lsp.buf.definition()
-        end, { desc = 'LSP: [G]oto [D]efinition in horizontal split' })
-
-        map('gr', require('telescope.builtin').lsp_references, '[G]oto [R]eferences')
-        map('gI', require('telescope.builtin').lsp_implementations, '[G]oto [I]mplementation')
-        map('<leader>D', require('telescope.builtin').lsp_type_definitions, 'Type [D]efinition')
-        map('<leader>ds', require('telescope.builtin').lsp_document_symbols, '[D]ocument [S]ymbols')
-        map('<leader>ws', require('telescope.builtin').lsp_dynamic_workspace_symbols, '[W]orkspace [S]ymbols')
-        map('<leader>rn', vim.lsp.buf.rename, '[R]e[n]ame')
-        map('<leader>ca', vim.lsp.buf.code_action, '[C]ode [A]ction', { 'n', 'x' })
-        map('gD', vim.lsp.buf.declaration, '[G]oto [D]eclaration')
-
-        local client = vim.lsp.get_client_by_id(event.data.client_id)
-        if client and client.supports_method(vim.lsp.protocol.Methods.textDocument_inlayHint) then
-          map('<leader>th', function()
-            vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled { bufnr = event.buf })
-          end, '[T]oggle Inlay [H]ints')
+        if root then
+          vim.cmd 'LspStart angularls'
         end
       end,
     })
-
-    local capabilities = vim.lsp.protocol.make_client_capabilities()
-    capabilities = vim.tbl_deep_extend('force', capabilities, require('cmp_nvim_lsp').default_capabilities())
-
-    if profile_name == 'angular' or profile_name == 'full' then
-      local default_probe_dir = get_probe_dir(vim.fn.getcwd())
-      local default_angular_core_version = get_angular_core_version(vim.fn.getcwd())
-
-      if servers.angularls then
-        servers.angularls.cmd = {
-          'ngserver',
-          '--stdio',
-          '--tsProbeLocations',
-          default_probe_dir,
-          '--ngProbeLocations',
-          default_probe_dir,
-          '--angularCoreVersion',
-          default_angular_core_version,
-        }
-      end
-    end
-
-    for server_name, server_config in pairs(servers) do
-      local lazy_config = server_config.lazy or {}
-      server_config.lazy = nil
-
-      local config = {
-        capabilities = vim.tbl_deep_extend('force', {}, capabilities, server_config.capabilities or {}),
-      }
-
-      if server_config.settings then
-        config.settings = server_config.settings
-        server_config.settings = nil
-      end
-
-      if server_config.handlers then
-        config.handlers = server_config.handlers
-        server_config.handlers = nil
-      end
-
-      if server_config.on_attach then
-        config.on_attach = server_config.on_attach
-        server_config.on_attach = nil
-      end
-
-      if server_config.cmd then
-        config.cmd = server_config.cmd
-        server_config.cmd = nil
-      end
-
-      if server_config.root_dir then
-        config.root_dir = server_config.root_dir
-        server_config.root_dir = nil
-      end
-
-      if server_config.filetypes then
-        config.filetypes = server_config.filetypes
-        server_config.filetypes = nil
-      end
-
-      for key, value in pairs(server_config) do
-        config[key] = value
-      end
-
-      if next(lazy_config) ~= nil then
-        config.lazy = lazy_config
-      end
-
-      vim.lsp.config(server_name, config)
-      vim.lsp.enable(server_name)
-    end
-
-    require('mason').setup()
-
-    local lsp_to_mason = {
-      lua_ls = 'lua-language-server',
-      bashls = 'bash-language-server',
-      ts_ls = 'typescript-language-server',
-      angularls = 'angular-language-server',
-      ruff = 'ruff',
-      pyright = 'pyright',
-      pylsp = 'python-lsp-server',
-      clangd = 'clangd',
-      html = 'html-lsp',
-      cssls = 'css-lsp',
-      tailwindcss = 'tailwindcss-language-server',
-      jsonls = 'json-lsp',
-      yamlls = 'yaml-language-server',
-      dockerls = 'dockerfile-language-server',
-      sqlls = 'sqls',
-    }
-
-    local ensure_installed = vim.list_extend({}, profile.ensure_installed or {})
-    for server_name, _ in pairs(servers) do
-      local mason_name = lsp_to_mason[server_name]
-      if mason_name and not vim.tbl_contains(ensure_installed, mason_name) then
-        table.insert(ensure_installed, mason_name)
-      end
-    end
-
-    if local_config and type(local_config) == 'table' and local_config.custom_servers then
-      for server_name, _ in pairs(local_config.custom_servers) do
-        local mason_name = lsp_to_mason[server_name]
-        if mason_name and not vim.tbl_contains(ensure_installed, mason_name) then
-          table.insert(ensure_installed, mason_name)
-        end
-      end
-    end
-
-    require('mason-tool-installer').setup { ensure_installed = ensure_installed }
   end,
 }

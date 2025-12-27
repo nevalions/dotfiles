@@ -116,17 +116,6 @@ return {
         lazy = { filetype = { 'typescript', 'typescriptreact', 'typescript.tsx' } },
       },
       angularls = {
-        lazy = { filetype = { 'typescript', 'html', 'typescriptreact', 'typescript.tsx', 'htmlangular' } },
-        cmd = {
-          'ngserver',
-          '--stdio',
-          '--tsProbeLocations',
-          '',
-          '--ngProbeLocations',
-          '',
-          '--angularCoreVersion',
-          '',
-        },
         filetypes = { 'typescript', 'html', 'typescriptreact', 'typescript.tsx', 'htmlangular' },
       },
       html = {
@@ -187,17 +176,6 @@ return {
         lazy = { filetype = { 'typescript', 'typescriptreact', 'typescript.tsx' } },
       },
       angularls = {
-        lazy = { filetype = { 'typescript', 'html', 'typescriptreact', 'typescript.tsx', 'htmlangular' } },
-        cmd = {
-          'ngserver',
-          '--stdio',
-          '--tsProbeLocations',
-          '',
-          '--ngProbeLocations',
-          '',
-          '--angularCoreVersion',
-          '',
-        },
         filetypes = { 'typescript', 'html', 'typescriptreact', 'typescript.tsx', 'htmlangular' },
       },
       ruff = {
@@ -248,9 +226,6 @@ return {
             },
           },
         },
-      },
-      html = {
-        lazy = { filetype = { 'html', 'twig', 'hbs' } },
       },
       cssls = {
         lazy = { filetype = 'css' },

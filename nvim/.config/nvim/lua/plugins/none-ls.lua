@@ -4,11 +4,13 @@ return {
     'nvimtools/none-ls-extras.nvim',
     'jayp0521/mason-null-ls.nvim',
   },
+
   config = function()
     local null_ls = require 'null-ls'
     local formatting = null_ls.builtins.formatting
     local diagnostics = null_ls.builtins.diagnostics
 
+    -- Load optional local profile override
     local function load_local_config()
       local local_config_path = vim.fn.stdpath 'config' .. '/lsp-local.lua'
       if vim.fn.filereadable(local_config_path) == 1 then
@@ -31,6 +33,7 @@ return {
       end
     end
 
+    -- none-ls profiles
     local profiles = {
       minimal = {
         ensure_installed = {
@@ -42,6 +45,7 @@ return {
           formatting.shfmt.with { args = { '-i', '4' } },
         },
       },
+
       web = {
         ensure_installed = {
           'stylua',
@@ -51,22 +55,12 @@ return {
         sources = {
           formatting.stylua,
           formatting.shfmt.with { args = { '-i', '4' } },
-          formatting.prettier.with { filetypes = { 'json', 'yaml', 'markdown', 'ts', 'html', 'htmlangular' } },
+          formatting.prettier.with {
+            filetypes = { 'json', 'yaml', 'markdown', 'ts', 'html', 'htmlangular' },
+          },
         },
       },
-      python = {
-        ensure_installed = {
-          'stylua',
-          'shfmt',
-          'ruff',
-        },
-        sources = {
-          formatting.stylua,
-          formatting.shfmt.with { args = { '-i', '4' } },
-          require('none-ls.formatting.ruff').with { extra_args = { '--extend-select', 'I' } },
-          require 'none-ls.formatting.ruff_format',
-        },
-      },
+
       angular = {
         ensure_installed = {
           'stylua',
@@ -76,9 +70,28 @@ return {
         sources = {
           formatting.stylua,
           formatting.shfmt.with { args = { '-i', '4' } },
-          formatting.prettier.with { filetypes = { 'json', 'yaml', 'markdown', 'ts', 'html', 'htmlangular' } },
+          formatting.prettier.with {
+            filetypes = { 'json', 'yaml', 'markdown', 'ts', 'html', 'htmlangular' },
+          },
         },
       },
+
+      python = {
+        ensure_installed = {
+          'stylua',
+          'shfmt',
+          'ruff',
+        },
+        sources = {
+          formatting.stylua,
+          formatting.shfmt.with { args = { '-i', '4' } },
+          require('none-ls.formatting.ruff').with {
+            extra_args = { '--extend-select', 'I' },
+          },
+          require 'none-ls.formatting.ruff_format',
+        },
+      },
+
       esp32 = {
         ensure_installed = {
           'stylua',
@@ -88,9 +101,12 @@ return {
         sources = {
           formatting.stylua,
           formatting.shfmt.with { args = { '-i', '4' } },
-          formatting.clang_format.with { filetypes = { 'c', 'cpp', 'h', 'hpp' } },
+          formatting.clang_format.with {
+            filetypes = { 'c', 'cpp', 'h', 'hpp' },
+          },
         },
       },
+
       full = {
         ensure_installed = {
           'stylua',
@@ -103,10 +119,16 @@ return {
         sources = {
           formatting.stylua,
           formatting.shfmt.with { args = { '-i', '4' } },
-          formatting.prettier.with { filetypes = { 'json', 'yaml', 'markdown', 'ts', 'html', 'htmlangular' } },
-          formatting.clang_format.with { filetypes = { 'c', 'cpp', 'h', 'hpp' } },
+          formatting.prettier.with {
+            filetypes = { 'json', 'yaml', 'markdown', 'ts', 'html', 'htmlangular' },
+          },
+          formatting.clang_format.with {
+            filetypes = { 'c', 'cpp', 'h', 'hpp' },
+          },
           diagnostics.checkmake,
-          require('none-ls.formatting.ruff').with { extra_args = { '--extend-select', 'I' } },
+          require('none-ls.formatting.ruff').with {
+            extra_args = { '--extend-select', 'I' },
+          },
           require 'none-ls.formatting.ruff_format',
         },
       },
@@ -114,27 +136,37 @@ return {
 
     local profile = profiles[profile_name] or profiles.minimal
 
+    -- Install external tools via Mason
     require('mason-null-ls').setup {
       ensure_installed = profile.ensure_installed,
       automatic_installation = false,
     }
 
-    local sources = profile.sources
+    local augroup = vim.api.nvim_create_augroup('LspFormatting', { clear = true })
 
-    local augroup = vim.api.nvim_create_augroup('LspFormatting', {})
     null_ls.setup {
-      -- debug = true, -- Enable debug mode. Inspect logs with :NullLsLog.
-      sources = sources,
-      -- you can reuse a shared lspconfig on_attach callback here
+      sources = profile.sources,
+
+      -- IMPORTANT: lock formatting to none-ls only
       on_attach = function(client, bufnr)
+        if client.name ~= 'null-ls' then
+          return
+        end
+
         if client.supports_method 'textDocument/formatting' then
           vim.api.nvim_clear_autocmds { group = augroup, buffer = bufnr }
+
           vim.api.nvim_create_autocmd('BufWritePre', {
             group = augroup,
             buffer = bufnr,
             callback = function()
-              vim.lsp.buf.format { bufnr = bufnr, async = false }
-              -- vim.lsp.buf.format { async = false }
+              vim.lsp.buf.format {
+                bufnr = bufnr,
+                async = false,
+                filter = function(c)
+                  return c.name == 'null-ls'
+                end,
+              }
             end,
           })
         end
