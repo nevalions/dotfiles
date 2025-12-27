@@ -10,17 +10,17 @@ return {
 
   config = function()
     ---------------------------------------------------------------------------
-    -- 🔇 Hide ONLY the lspconfig deprecation warning + its traceback
+    -- 🔇 Hide ONLY the lspconfig deprecation warning + traceback
     ---------------------------------------------------------------------------
     local orig_notify = vim.notify
     vim.notify = function(msg, level, opts)
       if type(msg) == 'string' then
-        if msg:find "The `require%('lspconfig'%)`" or msg:find 'lspconfig%-nvim%-0%.11' or msg:find 'nvim%-lspconfig v3%.0%.0' then
-          return
-        end
-
-        -- traceback lines include this location (from your pasted stack)
-        if msg:find 'lspconfig.lua:81' then
+        if
+          msg:find "The `require%('lspconfig'%)`"
+          or msg:find 'lspconfig%-nvim%-0%.11'
+          or msg:find 'nvim%-lspconfig v3%.0%.0'
+          or msg:find 'lspconfig.lua:81'
+        then
           return
         end
       end
@@ -95,7 +95,7 @@ return {
         'html-lsp',
         'css-lsp',
         'lua-language-server',
-        'pyright', -- ✅ add python LSP
+        'pyright',
       },
     }
 
@@ -107,8 +107,8 @@ return {
       filetypes = { 'typescript', 'typescriptreact', 'html', 'htmlangular' },
       root_dir = util.root_pattern('angular.json', 'nx.json', 'project.json', 'package.json', '.git'),
       cmd = angular_cmd(vim.loop.cwd()),
-      on_new_config = function(new_config, new_root_dir)
-        new_config.cmd = angular_cmd(new_root_dir)
+      on_new_config = function(cfg, root)
+        cfg.cmd = angular_cmd(root)
       end,
     }
 
@@ -126,6 +126,16 @@ return {
     lspconfig.pyright.setup {
       capabilities = capabilities,
       root_dir = util.root_pattern('pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile', '.git'),
+      settings = {
+        python = {
+          venvPath = '.',
+          venv = '.venv',
+          analysis = {
+            diagnosticMode = 'openFilesOnly',
+            typeCheckingMode = 'basic',
+          },
+        },
+      },
     }
 
     ---------------------------------------------------------------------------
@@ -133,7 +143,15 @@ return {
     ---------------------------------------------------------------------------
     lspconfig.tailwindcss.setup {
       capabilities = capabilities,
-      filetypes = { 'html', 'htmlangular', 'typescript', 'typescriptreact', 'css', 'scss', 'less' },
+      filetypes = {
+        'html',
+        'htmlangular',
+        'typescript',
+        'typescriptreact',
+        'css',
+        'scss',
+        'less',
+      },
     }
 
     ---------------------------------------------------------------------------
@@ -153,7 +171,9 @@ return {
     ---------------------------------------------------------------------------
     -- CSS
     ---------------------------------------------------------------------------
-    lspconfig.cssls.setup { capabilities = capabilities }
+    lspconfig.cssls.setup {
+      capabilities = capabilities,
+    }
 
     ---------------------------------------------------------------------------
     -- Lua
@@ -181,6 +201,7 @@ return {
         end
 
         local root = util.root_pattern('angular.json', 'nx.json', 'project.json')(fname)
+
         if root and vim.fn.exists ':LspStart' == 2 then
           pcall(vim.cmd, 'LspStart angularls')
         end
