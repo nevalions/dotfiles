@@ -4,34 +4,83 @@ return {
     { 'williamboman/mason.nvim', config = true },
     'williamboman/mason-lspconfig.nvim',
     'WhoIsSethDaniel/mason-tool-installer.nvim',
-    'hrsh7th/cmp-nvim-lsp',
     { 'j-hui/fidget.nvim', opts = {} },
+    'hrsh7th/cmp-nvim-lsp',
   },
 
   config = function()
+    ---------------------------------------------------------------------------
+    -- 🔇 Hide ONLY the lspconfig deprecation warning + its traceback
+    ---------------------------------------------------------------------------
+    local orig_notify = vim.notify
+    vim.notify = function(msg, level, opts)
+      if type(msg) == 'string' then
+        if msg:find "The `require%('lspconfig'%)`" or msg:find 'lspconfig%-nvim%-0%.11' or msg:find 'nvim%-lspconfig v3%.0%.0' then
+          return
+        end
+
+        -- traceback lines include this location (from your pasted stack)
+        if msg:find 'lspconfig.lua:81' then
+          return
+        end
+      end
+      orig_notify(msg, level, opts)
+    end
+
+    ---------------------------------------------------------------------------
+    -- Setup
+    ---------------------------------------------------------------------------
     local lspconfig = require 'lspconfig'
     local util = require 'lspconfig.util'
 
+    local function mason_bin(exe)
+      local p = vim.fn.stdpath 'data' .. '/mason/bin/' .. exe
+      if vim.loop.fs_stat(p) then
+        return p
+      end
+      return exe
+    end
+
+    local function find_node_modules(root_dir)
+      local found = vim.fs.find('node_modules', { path = root_dir, upward = true })
+      return found and found[1] or (root_dir .. '/node_modules')
+    end
+
+    local function angular_cmd(root_dir)
+      local nm = find_node_modules(root_dir)
+      return {
+        mason_bin 'ngserver',
+        '--stdio',
+        '--tsProbeLocations',
+        nm,
+        '--ngProbeLocations',
+        nm,
+      }
+    end
+
     ---------------------------------------------------------------------------
-    -- Capabilities (cmp)
+    -- Capabilities (nvim-cmp)
     ---------------------------------------------------------------------------
     local capabilities = vim.lsp.protocol.make_client_capabilities()
     capabilities = require('cmp_nvim_lsp').default_capabilities(capabilities)
 
     ---------------------------------------------------------------------------
-    -- on_attach
+    -- LSP keymaps
     ---------------------------------------------------------------------------
-    local on_attach = function(_, bufnr)
-      local map = function(lhs, rhs, desc)
-        vim.keymap.set('n', lhs, rhs, { buffer = bufnr, desc = desc })
-      end
+    vim.api.nvim_create_autocmd('LspAttach', {
+      group = vim.api.nvim_create_augroup('user-lsp-attach', { clear = true }),
+      callback = function(event)
+        local map = function(lhs, rhs, desc)
+          vim.keymap.set('n', lhs, rhs, { buffer = event.buf, desc = desc })
+        end
 
-      map('gd', vim.lsp.buf.definition, 'Go to definition')
-      map('gr', vim.lsp.buf.references, 'References')
-      map('K', vim.lsp.buf.hover, 'Hover')
-      map('<leader>rn', vim.lsp.buf.rename, 'Rename')
-      map('<leader>ca', vim.lsp.buf.code_action, 'Code action')
-    end
+        map('gd', vim.lsp.buf.definition, 'Go to definition')
+        map('gr', vim.lsp.buf.references, 'References')
+        map('K', vim.lsp.buf.hover, 'Hover')
+        map('<leader>rn', vim.lsp.buf.rename, 'Rename')
+        map('<leader>ca', vim.lsp.buf.code_action, 'Code action')
+      end,
+    })
 
     ---------------------------------------------------------------------------
     -- Mason
@@ -50,23 +99,10 @@ return {
     }
 
     ---------------------------------------------------------------------------
-    -- Angular Language Server (IMPORTANT PART)
+    -- Angular Language Server
     ---------------------------------------------------------------------------
-    local function angular_cmd(root_dir)
-      local node_modules = root_dir .. '/node_modules'
-      return {
-        vim.fn.stdpath 'data' .. '/mason/bin/ngserver',
-        '--stdio',
-        '--tsProbeLocations',
-        node_modules,
-        '--ngProbeLocations',
-        node_modules,
-      }
-    end
-
     lspconfig.angularls.setup {
       capabilities = capabilities,
-      on_attach = on_attach,
       filetypes = { 'typescript', 'typescriptreact', 'html', 'htmlangular' },
       root_dir = util.root_pattern('angular.json', 'nx.json', 'project.json', 'package.json', '.git'),
       cmd = angular_cmd(vim.loop.cwd()),
@@ -80,16 +116,22 @@ return {
     ---------------------------------------------------------------------------
     lspconfig.ts_ls.setup {
       capabilities = capabilities,
-      on_attach = on_attach,
       root_dir = util.root_pattern('package.json', 'tsconfig.json', '.git'),
     }
 
     ---------------------------------------------------------------------------
-    -- HTML (disabled inside Angular projects)
+    -- Tailwind
+    ---------------------------------------------------------------------------
+    lspconfig.tailwindcss.setup {
+      capabilities = capabilities,
+      filetypes = { 'html', 'htmlangular', 'typescript', 'typescriptreact', 'css', 'scss', 'less' },
+    }
+
+    ---------------------------------------------------------------------------
+    -- HTML LSP (disabled inside Angular projects)
     ---------------------------------------------------------------------------
     lspconfig.html.setup {
       capabilities = capabilities,
-      on_attach = on_attach,
       root_dir = function(fname)
         local root = util.root_pattern('package.json', '.git')(fname)
         if root and vim.fn.filereadable(root .. '/angular.json') == 1 then
@@ -100,46 +142,26 @@ return {
     }
 
     ---------------------------------------------------------------------------
-    -- Tailwind
-    ---------------------------------------------------------------------------
-    lspconfig.tailwindcss.setup {
-      capabilities = capabilities,
-      on_attach = on_attach,
-      filetypes = {
-        'html',
-        'htmlangular',
-        'typescript',
-        'typescriptreact',
-        'css',
-        'scss',
-      },
-    }
-
-    ---------------------------------------------------------------------------
     -- CSS
     ---------------------------------------------------------------------------
-    lspconfig.cssls.setup {
-      capabilities = capabilities,
-      on_attach = on_attach,
-    }
+    lspconfig.cssls.setup { capabilities = capabilities }
 
     ---------------------------------------------------------------------------
     -- Lua
     ---------------------------------------------------------------------------
     lspconfig.lua_ls.setup {
       capabilities = capabilities,
-      on_attach = on_attach,
       settings = {
         Lua = {
           diagnostics = { globals = { 'vim' } },
           workspace = { checkThirdParty = false },
+          telemetry = { enable = false },
         },
       },
     }
 
     ---------------------------------------------------------------------------
-    -- Force AngularLS attach for HTML templates
-    -- (THIS fixes your exact issue)
+    -- Ensure AngularLS starts for HTML templates
     ---------------------------------------------------------------------------
     vim.api.nvim_create_autocmd('FileType', {
       pattern = { 'html', 'htmlangular' },
@@ -150,9 +172,8 @@ return {
         end
 
         local root = util.root_pattern('angular.json', 'nx.json', 'project.json')(fname)
-
-        if root then
-          vim.cmd 'LspStart angularls'
+        if root and vim.fn.exists ':LspStart' == 2 then
+          pcall(vim.cmd, 'LspStart angularls')
         end
       end,
     })
