@@ -15,15 +15,13 @@ return {
         'ts_ls',
         'bashls',
         'angularls',
-        'prettier', -- ts/js formatter
-        'stylua', -- lua formatter
-        -- 'eslint_d', -- ts/js linter
-        'shfmt', -- Shell formatter
-        'checkmake', -- linter for Makefiles
+        'prettier',
+        'stylua',
+        'shfmt',
+        'checkmake',
         'pyright',
-        'ruff', -- Python linter and formatter
-        'clang-format', -- C/C++ formatter
-        'cppcheck', -- C/C++ linter
+        'ruff',
+        'clang-format',
       },
       automatic_installation = true,
     }
