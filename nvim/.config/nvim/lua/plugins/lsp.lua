@@ -5,7 +5,12 @@ return {
     'williamboman/mason-lspconfig.nvim',
     'WhoIsSethDaniel/mason-tool-installer.nvim',
     { 'j-hui/fidget.nvim', opts = {} },
-    { 'Aietes/esp32.nvim' },
+    {
+      'Aietes/esp32.nvim',
+      lazy = true,
+      keys = '<leader>e',
+      ft = { 'c', 'cpp' },
+    },
     'hrsh7th/cmp-nvim-lsp',
   },
 
@@ -72,20 +77,32 @@ return {
       end
     end
 
-    require('esp32').setup {
-      target = 'esp32',
-      idf_path = os.getenv 'HOME' .. '/esp-idf',
-      toolchain_path = os.getenv 'HOME' .. '/.espressif/tools/xtensa-esp-elf',
-      suppress_clangd_warnings = true,
-      clangd_args = {
-        '--query-driver=/home/linroot/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/bin/xtensa-esp-elf-gcc',
-        '--extra-arg=-Wno-unused-command-line-argument',
-        '--extra-arg=-Wno-unknown-warning-option',
-        '--extra-arg=-Wno-error=unknown-warning-option',
-        '--extra-arg=-Wno-error=unused-command-line-argument',
-      },
-      build_dir = 'build',
-    }
+    local has_esp32 = profile_name == 'esp32' or profile_name == 'full'
+    if not has_esp32 and local_config and type(local_config) == 'table' and local_config.custom_servers then
+      for server_name, _ in pairs(local_config.custom_servers) do
+        if server_name == 'clangd' then
+          has_esp32 = true
+          break
+        end
+      end
+    end
+
+    if has_esp32 then
+      require('esp32').setup {
+        target = 'esp32',
+        idf_path = os.getenv 'HOME' .. '/esp-idf',
+        toolchain_path = os.getenv 'HOME' .. '/.espressif/tools/xtensa-esp-elf',
+        suppress_clangd_warnings = true,
+        clangd_args = {
+          '--query-driver=/home/linroot/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/bin/xtensa-esp-elf-gcc',
+          '--extra-arg=-Wno-unused-command-line-argument',
+          '--extra-arg=-Wno-unknown-warning-option',
+          '--extra-arg=-Wno-error=unknown-warning-option',
+          '--extra-arg=-Wno-error=unused-command-line-argument',
+        },
+        build_dir = 'build',
+      }
+    end
 
     vim.api.nvim_create_autocmd('LspAttach', {
       group = vim.api.nvim_create_augroup('kickstart-lsp-attach', { clear = true }),
