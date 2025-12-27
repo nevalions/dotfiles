@@ -1,0 +1,64 @@
+return {
+  profile = 'minimal',
+
+  custom_servers = {},
+}
+
+--[[
+Available profiles:
+  - minimal     : lua_ls, bashls (default)
+  - web         : ts_ls, html, cssls, tailwindcss, jsonls
+  - python      : ruff, pyright, pylsp
+  - angular     : ts_ls, angularls, html, cssls, tailwindcss, jsonls
+  - esp32       : clangd
+  - full        : All servers
+
+Usage Examples:
+
+1. Simple profile:
+   return 'web'
+
+2. Profile with custom servers:
+   return {
+     profile = 'minimal',
+     custom_servers = {
+       pyright = {
+         lazy = { filetype = 'python' },
+         settings = {
+           python = {
+             analysis = {
+               typeCheckingMode = 'strict',
+             },
+           },
+         },
+       },
+     },
+   }
+
+3. Custom servers only (no profile):
+   return {
+     custom_servers = {
+       lua_ls = { /* config */ },
+       pyright = { /* config */ },
+     },
+   }
+
+4. Add clangd to minimal profile for ESP32 development:
+   return {
+     profile = 'minimal',
+     custom_servers = {
+       clangd = {
+         lazy = { filetype = { 'c', 'cpp' } },
+         cmd = {
+           'clangd',
+           '--compile-commands-dir=build',
+           '--header-insertion=never',
+         },
+         root_dir = require('lspconfig.util').root_pattern('CMakeLists.txt', '.git'),
+       },
+     },
+   }
+
+Note: Copy this file to ~/.config/nvim/lsp-local.lua and modify as needed.
+The lsp-local.lua file is git-ignored, so each machine can have different config.
+]]
