@@ -43,7 +43,7 @@ return {
         },
       },
       close_if_last_window = false, -- Close Neo-tree if it is the last window left in the tab
-      popup_border_style = 'rounded',
+      -- popup_border_style = 'none',
       enable_git_status = true,
       enable_diagnostics = true,
       -- enable_normal_mode_for_inputs = false,                             -- Enable normal mode for input dialogs.
