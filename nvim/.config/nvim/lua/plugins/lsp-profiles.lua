@@ -31,7 +31,7 @@ return {
         lazy = { filetype = { 'sh', 'zsh', 'zshrc' } },
       },
     },
-    ensure_installed = { 'stylua' },
+    ensure_installed = { 'stylua', 'lua-language-server', 'bash-language-server' },
   },
 
   web = {
