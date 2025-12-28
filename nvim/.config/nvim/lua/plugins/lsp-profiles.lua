@@ -27,11 +27,8 @@ return {
           },
         },
       },
-      bashls = {
-        lazy = { filetype = { 'sh', 'zsh', 'zshrc' } },
-      },
     },
-    ensure_installed = { 'stylua', 'lua-language-server', 'bash-language-server' },
+    ensure_installed = { 'stylua', 'lua-language-server' },
   },
 
   web = {
