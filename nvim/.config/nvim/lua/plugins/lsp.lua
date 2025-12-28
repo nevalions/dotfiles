@@ -42,6 +42,9 @@ return {
     local lsp_profiles = require 'plugins.lsp-profiles'
     local profile_config = lsp_profiles[profile] or lsp_profiles.minimal
 
+    local lspconfig = require 'lspconfig'
+    local util = require 'lspconfig.util'
+
     local function mason_bin(exe)
       local p = vim.fn.stdpath 'data' .. '/mason/bin/' .. exe
       if vim.loop.fs_stat(p) then
