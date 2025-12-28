@@ -28,10 +28,19 @@ return {
     end
 
     ---------------------------------------------------------------------------
-    -- Setup
+    -- Load profile configuration
     ---------------------------------------------------------------------------
-    local lspconfig = require 'lspconfig'
-    local util = require 'lspconfig.util'
+    local profile = 'minimal'
+    local profile_path = vim.fn.stdpath 'config' .. '/lsp-local.lua'
+    if vim.fn.filereadable(profile_path) == 1 then
+      local ok, loaded_profile = pcall(dofile, profile_path)
+      if ok and loaded_profile then
+        profile = loaded_profile
+      end
+    end
+
+    local lsp_profiles = require 'plugins.lsp-profiles'
+    local profile_config = lsp_profiles[profile] or lsp_profiles.minimal
 
     local function mason_bin(exe)
       local p = vim.fn.stdpath 'data' .. '/mason/bin/' .. exe
@@ -88,124 +97,206 @@ return {
     require('mason').setup()
 
     require('mason-tool-installer').setup {
-      ensure_installed = {
-        'angular-language-server',
-        'typescript-language-server',
-        'tailwindcss-language-server',
-        'html-lsp',
-        'css-lsp',
-        'lua-language-server',
-        'pyright',
-      },
+      ensure_installed = profile_config.ensure_installed or {},
     }
 
     ---------------------------------------------------------------------------
     -- Angular Language Server
     ---------------------------------------------------------------------------
-    lspconfig.angularls.setup {
-      capabilities = capabilities,
-      filetypes = { 'typescript', 'typescriptreact', 'html', 'htmlangular' },
-      root_dir = util.root_pattern('angular.json', 'nx.json', 'project.json', 'package.json', '.git'),
-      cmd = angular_cmd(vim.loop.cwd()),
-      on_new_config = function(cfg, root)
-        cfg.cmd = angular_cmd(root)
-      end,
-    }
+    if profile_config.servers.angularls then
+      local config = profile_config.servers.angularls
+      lspconfig.angularls.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+        cmd = angular_cmd(vim.loop.cwd()),
+        on_new_config = function(cfg, root)
+          cfg.cmd = angular_cmd(root)
+        end,
+      }, config))
+    end
 
     ---------------------------------------------------------------------------
     -- TypeScript
     ---------------------------------------------------------------------------
-    lspconfig.ts_ls.setup {
-      capabilities = capabilities,
-      root_dir = util.root_pattern('package.json', 'tsconfig.json', '.git'),
-    }
+    if profile_config.servers.ts_ls then
+      local config = profile_config.servers.ts_ls
+      lspconfig.ts_ls.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+      }, config))
+    end
 
     ---------------------------------------------------------------------------
     -- Python (Pyright) ✅
     ---------------------------------------------------------------------------
-    lspconfig.pyright.setup {
-      capabilities = capabilities,
-      root_dir = util.root_pattern('pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile', '.git'),
-      settings = {
-        python = {
-          venvPath = '.',
-          venv = '.venv',
-          analysis = {
-            diagnosticMode = 'openFilesOnly',
-            typeCheckingMode = 'basic',
+    if profile_config.servers.pyright then
+      local config = profile_config.servers.pyright
+      lspconfig.pyright.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+        root_dir = util.root_pattern('pyproject.toml', 'setup.py', 'setup.cfg', 'requirements.txt', 'Pipfile', '.git'),
+        settings = {
+          python = {
+            venvPath = '.',
+            venv = '.venv',
+            analysis = {
+              diagnosticMode = 'openFilesOnly',
+              typeCheckingMode = 'basic',
+            },
           },
         },
-      },
-    }
+      }, config or {}))
+    end
 
     ---------------------------------------------------------------------------
     -- Tailwind
     ---------------------------------------------------------------------------
-    lspconfig.tailwindcss.setup {
-      capabilities = capabilities,
-      filetypes = {
-        'html',
-        'htmlangular',
-        'typescript',
-        'typescriptreact',
-        'css',
-        'scss',
-        'less',
-      },
-    }
+    if profile_config.servers.tailwindcss then
+      local config = profile_config.servers.tailwindcss
+      lspconfig.tailwindcss.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+        filetypes = {
+          'html',
+          'htmlangular',
+          'typescript',
+          'typescriptreact',
+          'css',
+          'scss',
+          'less',
+        },
+      }, config))
+    end
 
     ---------------------------------------------------------------------------
     -- HTML LSP (disabled inside Angular projects)
     ---------------------------------------------------------------------------
-    lspconfig.html.setup {
-      capabilities = capabilities,
-      root_dir = function(fname)
-        local root = util.root_pattern('package.json', '.git')(fname)
-        if root and vim.fn.filereadable(root .. '/angular.json') == 1 then
-          return nil
-        end
-        return root
-      end,
-    }
+    if profile_config.servers.html then
+      local config = profile_config.servers.html
+      lspconfig.html.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+        root_dir = function(fname)
+          local root = util.root_pattern('package.json', '.git')(fname)
+          if root and vim.fn.filereadable(root .. '/angular.json') == 1 then
+            return nil
+          end
+          return root
+        end,
+      }, config))
+    end
 
     ---------------------------------------------------------------------------
     -- CSS
     ---------------------------------------------------------------------------
-    lspconfig.cssls.setup {
-      capabilities = capabilities,
-    }
+    if profile_config.servers.cssls then
+      local config = profile_config.servers.cssls
+      lspconfig.cssls.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+      }, config))
+    end
 
     ---------------------------------------------------------------------------
     -- Lua
     ---------------------------------------------------------------------------
-    lspconfig.lua_ls.setup {
-      capabilities = capabilities,
-      settings = {
-        Lua = {
-          diagnostics = { globals = { 'vim' } },
-          workspace = { checkThirdParty = false },
-          telemetry = { enable = false },
-        },
-      },
-    }
+    if profile_config.servers.lua_ls then
+      local config = profile_config.servers.lua_ls
+      lspconfig.lua_ls.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+      }, config or {}))
+    end
 
     ---------------------------------------------------------------------------
-    -- Ensure AngularLS starts for HTML templates
+    -- Bash
     ---------------------------------------------------------------------------
-    vim.api.nvim_create_autocmd('FileType', {
-      pattern = { 'html', 'htmlangular' },
-      callback = function(args)
-        local fname = vim.api.nvim_buf_get_name(args.buf)
-        if fname == '' then
-          return
-        end
+    if profile_config.servers.bashls then
+      local config = profile_config.servers.bashls
+      lspconfig.bashls.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+      }, config or {}))
+    end
 
-        local root = util.root_pattern('angular.json', 'nx.json', 'project.json')(fname)
+    ---------------------------------------------------------------------------
+    -- Python LSP
+    ---------------------------------------------------------------------------
+    if profile_config.servers.ruff then
+      local config = profile_config.servers.ruff
+      lspconfig.ruff.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+      }, config or {}))
+    end
 
-        if root and vim.fn.exists ':LspStart' == 2 then
-          pcall(vim.cmd, 'LspStart angularls')
-        end
-      end,
-    })
+    if profile_config.servers.pylsp then
+      local config = profile_config.servers.pylsp
+      lspconfig.pylsp.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+      }, config or {}))
+    end
+
+    ---------------------------------------------------------------------------
+    -- JSON
+    ---------------------------------------------------------------------------
+    if profile_config.servers.jsonls then
+      local config = profile_config.servers.jsonls
+      lspconfig.jsonls.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+      }, config or {}))
+    end
+
+    ---------------------------------------------------------------------------
+    -- YAML
+    ---------------------------------------------------------------------------
+    if profile_config.servers.yamlls then
+      local config = profile_config.servers.yamlls
+      lspconfig.yamlls.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+      }, config or {}))
+    end
+
+    ---------------------------------------------------------------------------
+    -- Docker
+    ---------------------------------------------------------------------------
+    if profile_config.servers.dockerls then
+      local config = profile_config.servers.dockerls
+      lspconfig.dockerls.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+      }, config or {}))
+    end
+
+    ---------------------------------------------------------------------------
+    -- SQL
+    ---------------------------------------------------------------------------
+    if profile_config.servers.sqlls then
+      local config = profile_config.servers.sqlls
+      lspconfig.sqlls.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+      }, config or {}))
+    end
+
+    ---------------------------------------------------------------------------
+    -- C/C++
+    ---------------------------------------------------------------------------
+    if profile_config.servers.clangd then
+      local config = profile_config.servers.clangd
+      lspconfig.clangd.setup(vim.tbl_deep_extend('force', {
+        capabilities = capabilities,
+      }, config or {}))
+    end
+
+    ---------------------------------------------------------------------------
+    -- Ensure AngularLS starts for HTML templates (only in angular profile)
+    ---------------------------------------------------------------------------
+    if profile_config.servers.angularls then
+      vim.api.nvim_create_autocmd('FileType', {
+        pattern = { 'html', 'htmlangular' },
+        callback = function(args)
+          local fname = vim.api.nvim_buf_get_name(args.buf)
+          if fname == '' then
+            return
+          end
+
+          local root = util.root_pattern('angular.json', 'nx.json', 'project.json')(fname)
+
+          if root and vim.fn.exists ':LspStart' == 2 then
+            pcall(vim.cmd, 'LspStart angularls')
+          end
+        end,
+      })
+    end
   end,
 }
