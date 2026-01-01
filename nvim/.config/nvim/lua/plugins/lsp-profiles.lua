@@ -315,6 +315,6 @@ return {
         },
       },
     },
-    ensure_installed = { 'stylua', 'clangd' },
+    ensure_installed = { 'stylua', 'clangd', 'json-language-server' },
   },
 }
