@@ -24,29 +24,22 @@
         "PERPLEXITY_LOG_LEVEL": "DEBUG"
       }
     },
+    "github": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-github@latest"],
+      "environment": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "your-token-here"
+      },
+      "enabled": true
+    },
     "semgrep": {
-      "type": "remote",
-      "url": "https://mcp.semgrep.ai/mcp",
+      "type": "local",
+      "command": ["semgrep", "mcp"],
       "enabled": true
     },
-    "angular-cli": {
+    "vibe-check-mcp": {
       "type": "local",
-      "command": ["npx", "-y", "@angular/cli", "mcp"],
-      "enabled": true
-    },
-    "taiga-ui": {
-      "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "@taiga-ui/mcp@latest",
-        "--source-url=https://taiga-ui.dev/llms-full.txt"
-      ],
-      "enabled": true
-    },
-    "eslint": {
-      "type": "local",
-      "command": ["npx", "-y", "@eslint/mcp@latest"],
+      "command": ["npx", "-y", "@pv-bhat/vibe-check-mcp", "start", "--stdio"],
       "enabled": true
     }
   },
@@ -55,6 +48,19 @@
       "description": "Verify whether global or project agents.md instructions are applied",
       "template": "Are there any canary instructions active?\n\nIf yes:\n- List all detected canary markers\n- Summarize which agent instruction files are currently applied (global vs project)\n\nIf no:\n- State explicitly that no canary instructions were detected.",
       "agent": "plan"
+    },
+    "pr": {
+      "description": "Create or update a PR for a Linear issue (solo-owner workflow)",
+      "template": "For Linear issue $ARGUMENTS:\n\n- Propose a branch name (or use the current branch if appropriate)\n- Summarize the changes made or planned\n- Generate a clean PR title and description\n- Link the Linear issue\n- Open or update the pull request in GitHub\n\nUse a draft PR if the work is not complete."
+    },
+    "triage": {
+      "description": "Triage GitHub PRs and issues for this repository",
+      "agent": "plan",
+      "template": "Triage the current GitHub repository.\n\nTasks:\n- List open pull requests with:\n  - PR number and title\n  - Linked Linear issue (if any)\n  - CI status (pass/fail/pending)\n  - Review status\n- List open issues that appear actionable or blocked.\n- Identify blockers (failing CI, missing reviews, unclear scope).\n- Highlight anything security-related or time-sensitive.\n\nOutput a concise summary with recommended next actions.\nDo NOT modify GitHub state."
+    },
+    "merge": {
+      "description": "Merge the current PR if checks are green",
+      "template": "If the current pull request has all required checks passing:\n- Merge it using the default strategy\n- Close the linked Linear issue\n\nIf checks are failing, explain why and do not merge."
     },
     "research-plan": {
       "description": "Research a topic with Perplexity, then extract rules and propose a safe plan",

@@ -5,11 +5,30 @@ by a project-specific agents.md.
 
 ---
 
+## Mandatory
+
+As an autonomous agent you will:
+
+1. Call vibe_check agter planning and before major actionns.
+2. Provide the full user request and your current plan.
+3. Optionally, record resolved issues with vibe_learn.
+
+---
+
 ## Canary
 
 AGENTS_MD_GLOBAL_LOADED
 
 ---
+
+## GitHub MCP (solo owner)
+
+- Assume the user is the repository owner.
+- GitHub write actions are allowed when explicitly requested.
+- Do not modify repository settings or secrets unless explicitly stated.
+- Prefer planning before execution for PRs and merges.
+- Always link related Linear issues when applicable.
+- Never auto-merge unless CI is green.
 
 ---
 
