@@ -44,5 +44,26 @@
       "command": ["npx", "-y", "@eslint/mcp@latest"],
       "enabled": true
     }
+  },
+  "command": {
+    "research-plan": {
+      "description": "Research a topic with Perplexity, then extract rules and propose a safe plan",
+      "agent": "plan",
+      "template": "First, use Perplexity MCP to research the following topic.\n\nThen:\n- Extract concrete rules or constraints\n- Propose a safe implementation plan\n- Identify what should NOT be automated\n- List verification steps\n\nTopic:\n$ARGUMENTS"
+    },
+    "research-ecosystem": {
+      "description": "Research the current ecosystem state for a tool or framework",
+      "agent": "plan",
+      "template": "Using Perplexity MCP, research the current state of the ecosystem.\n\nRequirements:\n- Check release notes and recent announcements\n- Identify breaking changes\n- Identify recommended defaults\n- Note migration considerations\n\nOutput:\n- TL;DR\n- What to adopt now\n- What to avoid\n- Migration notes\n\nTopic:\n$ARGUMENTS"
+    },
+    "research-security": {
+      "description": "Research latest security guidance and standards",
+      "agent": "plan",
+      "template": "Research the latest security guidance using Perplexity MCP.\n\nFocus on:\n- Official standards (RFCs, W3C, OWASP, browser vendors)\n- Recent changes or deprecations\n- Real-world pitfalls\n\nOutput:\n- Short summary\n- Do / Don’t list\n- What has changed recently\n- Actionable recommendations for a production system\n\nTopic:\n$ARGUMENTS"
+    },
+    "research": {
+      "description": "General web-backed research using Perplexity",
+      "template": "Use Perplexity MCP to research the following.\n\nRequirements:\n- Use up-to-date web sources\n- Prefer official docs, specs, or authoritative blogs\n- Summarize findings clearly\n- Include practical recommendations\n- Note any disagreements or trade-offs\n- Avoid implementation guesses\n\nQuestion:\n$ARGUMENTS"
+    }
   }
 }
