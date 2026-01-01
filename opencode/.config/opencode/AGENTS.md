@@ -24,8 +24,9 @@ AGENTS_MD_GLOBAL_LOADED
 - Create Linear issues for medium/high severity findings.
 
 **Arch Linux installation:**
+
 ```bash
-paru -S semgrep
+pipx install semgrep
 ```
 
 ---
