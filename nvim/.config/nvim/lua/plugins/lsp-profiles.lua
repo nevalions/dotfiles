@@ -161,7 +161,7 @@ return {
         },
       },
     },
-    ensure_installed = { 'clangd' },
+    ensure_installed = { 'clangd', 'json-lsp' },
   },
 
   full = {
@@ -315,6 +315,6 @@ return {
         },
       },
     },
-    ensure_installed = { 'stylua', 'clangd', 'json-language-server' },
+    ensure_installed = { 'stylua', 'clangd', 'json-lsp' },
   },
 }
