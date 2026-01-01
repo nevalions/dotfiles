@@ -1,0 +1,27 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "theme": "catppuccin",
+  "mcp": {
+    "angular-cli": {
+      "type": "local",
+      "command": ["npx", "-y", "@angular/cli", "mcp"],
+      "enabled": true
+    },
+    "taiga-ui": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "@taiga-ui/mcp@latest",
+      "--source-url=https://taiga-ui.dev/llms-full.txt"
+      ],
+      "enabled": true
+    },
+    "eslint": {
+      "type": "local",
+      "command": ["npx", "-y", "@eslint/mcp@latest"],
+      "enabled": true
+    },
+  }
+}
+
