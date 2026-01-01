@@ -11,6 +11,25 @@ AGENTS_MD_GLOBAL_LOADED
 
 ---
 
+---
+
+## Semgrep usage
+
+- Use Semgrep MCP for:
+  - Security scanning
+  - Code pattern detection
+  - OWASP and framework-specific issues
+- Prefer Semgrep before manual security review.
+- Do not auto-fix findings unless explicitly instructed.
+- Create Linear issues for medium/high severity findings.
+
+**Arch Linux installation:**
+```bash
+paru -S semgrep
+```
+
+---
+
 ## Context7 usage (official documentation)
 
 Use **Context7 MCP** as the **primary source** for:
