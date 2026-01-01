@@ -7,8 +7,22 @@
       "url": "https://mcp.context7.com/mcp",
       "headers": {
         "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
+      },
+      "enabled": true
     },
-    "enabled": true
+    "linear": {
+      "type": "remote",
+      "url": "https://mcp.linear.app/mcp",
+      "enabled": true
+    },
+    "perplexity": {
+      "type": "local",
+      "command": ["npx", "-y", "@perplexity-ai/mcp-server"],
+      "enabled": true,
+      "environment": {
+        "PERPLEXITY_API_KEY": "PERPLEXITY_API_KEY",
+        "PERPLEXITY_LOG_LEVEL": "DEBUG"
+      }
     },
     "angular-cli": {
       "type": "local",
@@ -21,7 +35,7 @@
         "npx",
         "-y",
         "@taiga-ui/mcp@latest",
-      "--source-url=https://taiga-ui.dev/llms-full.txt"
+        "--source-url=https://taiga-ui.dev/llms-full.txt"
       ],
       "enabled": true
     },
@@ -29,7 +43,6 @@
       "type": "local",
       "command": ["npx", "-y", "@eslint/mcp@latest"],
       "enabled": true
-    },
+    }
   }
 }
-
