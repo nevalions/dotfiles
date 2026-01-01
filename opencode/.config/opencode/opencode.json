@@ -46,6 +46,11 @@
     }
   },
   "command": {
+    "check-agents": {
+      "description": "Verify whether global or project agents.md instructions are applied",
+      "template": "Are there any canary instructions active?\n\nIf yes:\n- List all detected canary markers\n- Summarize which agent instruction files are currently applied (global vs project)\n\nIf no:\n- State explicitly that no canary instructions were detected.",
+      "agent": "plan"
+    },
     "research-plan": {
       "description": "Research a topic with Perplexity, then extract rules and propose a safe plan",
       "agent": "plan",
@@ -63,7 +68,8 @@
     },
     "research": {
       "description": "General web-backed research using Perplexity",
-      "template": "Use Perplexity MCP to research the following.\n\nRequirements:\n- Use up-to-date web sources\n- Prefer official docs, specs, or authoritative blogs\n- Summarize findings clearly\n- Include practical recommendations\n- Note any disagreements or trade-offs\n- Avoid implementation guesses\n\nQuestion:\n$ARGUMENTS"
+      "template": "Use Perplexity MCP to research the following.\n\nRequirements:\n- Use up-to-date web sources\n- Prefer official docs, specs, or authoritative blogs\n- Summarize findings clearly\n- Include practical recommendations\n- Note any disagreements or trade-offs\n- Avoid implementation guesses\n\nQuestion:\n$ARGUMENTS",
+      "agent": "plan"
     }
   }
 }
