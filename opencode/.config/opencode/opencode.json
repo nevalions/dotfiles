@@ -23,9 +23,6 @@
     "github": {
       "type": "local",
       "command": ["npx", "-y", "@modelcontextprotocol/server-github@latest"],
-      "environment": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GITHUB_PERSONAL_ACCESS_TOKEN}"
-      },
       "enabled": true
     },
     "semgrep": {
