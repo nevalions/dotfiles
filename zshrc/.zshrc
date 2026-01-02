@@ -156,6 +156,10 @@ export PATH="$HOME/.local/bin:$PATH"
 # opencode
 export PATH="$HOME/.opencode/bin:$PATH"
 
+if command -v direnv >/dev/null 2>&1; then
+  eval "$(direnv hook zsh)"
+fi
+
 # ESP-IDF
 export IDF_PATH=/home/linroot/esp-idf
 export PATH="$IDF_PATH/tools:$PATH"

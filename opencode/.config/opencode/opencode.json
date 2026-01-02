@@ -5,9 +5,6 @@
     "context7": {
       "type": "remote",
       "url": "https://mcp.context7.com/mcp",
-      "headers": {
-        "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"
-      },
       "enabled": true
     },
     "linear": {
@@ -20,15 +17,14 @@
       "command": ["npx", "-y", "@perplexity-ai/mcp-server"],
       "enabled": true,
       "environment": {
-        "PERPLEXITY_API_KEY": "PERPLEXITY_API_KEY",
-        "PERPLEXITY_LOG_LEVEL": "DEBUG"
+        "PERPLEXITY_API_KEY": "{env:PERPLEXITY_API_KEY}"
       }
     },
     "github": {
       "type": "local",
       "command": ["npx", "-y", "@modelcontextprotocol/server-github@latest"],
       "environment": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "your-token-here"
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GITHUB_PERSONAL_ACCESS_TOKEN}"
       },
       "enabled": true
     },
