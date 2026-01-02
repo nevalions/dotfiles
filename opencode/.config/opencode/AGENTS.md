@@ -21,7 +21,7 @@ AGENTS_MD_GLOBAL_LOADED
 
 ---
 
-## GitHub MCP (solo owner)
+## GitHub (solo owner)
 
 - Assume the user is the repository owner.
 - GitHub write actions are allowed when explicitly requested.

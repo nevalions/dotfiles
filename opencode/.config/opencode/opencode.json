@@ -20,11 +20,6 @@
         "PERPLEXITY_API_KEY": "{env:PERPLEXITY_API_KEY}"
       }
     },
-    "github": {
-      "type": "local",
-      "command": ["npx", "-y", "@modelcontextprotocol/server-github@latest"],
-      "enabled": true
-    },
     "semgrep": {
       "type": "local",
       "command": ["semgrep", "mcp"],
