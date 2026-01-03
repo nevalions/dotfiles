@@ -33,6 +33,32 @@ AGENTS_MD_GLOBAL_LOADED
 
 ## Git workflow (solo owner)
 
+Use prefixes consistently:
+
+feature/ — new functionality
+
+bugfix/ — non-urgent bug fixes
+
+hotfix/ — urgent production fixes
+
+refactor/ — code cleanup
+
+docs/ — documentation updates
+
+Commit frequently and atomically while on your feature branch:
+
+```
+git add -p
+git commit -m "feat(auth): add login form component"
+
+git add -p
+git commit -m "feat(auth): add backend login endpoint"
+
+git add -p
+git commit -m "feat(auth): implement JWT token generation"
+
+```
+
 Use feature branches with squash merge to master:
 
 ```bash
@@ -57,11 +83,21 @@ git commit -m "feat: description"
 git push origin master
 
 # Clean up
-git branch -d feature/name && git push origin -d feature/name
+# git branch -d feature/name
+# error: The branch 'feature/name' is not fully merged.
+git branch -D feature/name
+git push origin -d feature/name
 
 # Tag release
 git tag -a vX.Y.Z -m "vX.Y.Z - description"
 git push origin master --follow-tags
+```
+
+Bulk cleanup (remove all branches merged to master):
+
+```
+git branch --merged | grep -v 'master' | xargs -n 1 git branch -d
+git fetch -p  # Clean stale remote tracking branches
 ```
 
 ---

@@ -48,7 +48,7 @@
     },
     "merge": {
       "description": "Squash merge feature branch to master and cleanup",
-      "template": "Merge the current feature branch to master:\n\n1) Verify branch is ready:\n   - Check CI status\n   - Confirm linked Linear issue exists\n\n2) Squash merge:\n   - git checkout master && git pull origin master\n   - git merge --squash <feature-branch>\n   - git commit -m \"feat: <summary>\"\n   - git push origin master\n\n3) Create release tag if appropriate:\n   - git tag -a vX.Y.Z -m \"vX.Y.Z - <description>\"\n   - git push origin master --follow-tags\n\n4) Cleanup:\n   - git branch -d <feature-branch>\n   - git push origin -d <feature-branch>\n\n5) Close the linked Linear issue"
+      "template": "Merge the current feature branch to master:\n\n1) Verify branch is ready:\n   - Confirm linked Linear issue exists\n\n2) Squash merge:\n   - git checkout master && git pull origin master\n   - git merge --squash <feature-branch>\n   - git commit -m \"feat: <summary>\"\n   - git push origin master\n\n3) Create release tag if appropriate:\n   - git tag -a vX.Y.Z -m \"vX.Y.Z - <description>\"\n   - git push origin master --follow-tags\n\n4) Cleanup:\n   - git branch -d <feature-branch>\n   - git push origin -d <feature-branch>\n\n5) Close the linked Linear issue"
     },
     "research-plan": {
       "description": "Research a topic with Perplexity, then extract rules and propose a safe plan",
