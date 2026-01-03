@@ -28,7 +28,41 @@ AGENTS_MD_GLOBAL_LOADED
 - Do not modify repository settings or secrets unless explicitly stated.
 - Prefer planning before execution for PRs and merges.
 - Always link related Linear issues when applicable.
-- Never auto-merge unless CI is green.
+
+---
+
+## Git workflow (solo owner)
+
+Use feature branches with squash merge to master:
+
+```bash
+# Create feature
+git checkout -b feature/name origin/master
+
+# Develop with frequent commits
+git add -p && git commit -m "feat(scope): description"
+
+# Keep up-to-date
+git fetch origin
+git rebase origin/master
+git push -f origin feature/name
+
+# Self-review on GitHub/GitLab web UI
+# Make any final tweaks and push
+
+# Merge to master (squash)
+git checkout master && git pull origin master
+git merge --squash feature/name
+git commit -m "feat: description"
+git push origin master
+
+# Clean up
+git branch -d feature/name && git push origin -d feature/name
+
+# Tag release
+git tag -a vX.Y.Z -m "vX.Y.Z - description"
+git push origin master --follow-tags
+```
 
 ---
 

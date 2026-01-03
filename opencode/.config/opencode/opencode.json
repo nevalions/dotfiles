@@ -38,17 +38,17 @@
       "agent": "plan"
     },
     "pr": {
-      "description": "Create or update a PR for a Linear issue (solo-owner workflow)",
-      "template": "For Linear issue $ARGUMENTS:\n\n- Propose a branch name (or use the current branch if appropriate)\n- Summarize the changes made or planned\n- Generate a clean PR title and description\n- Link the Linear issue\n- Open or update the pull request in GitHub\n\nUse a draft PR if the work is not complete."
+      "description": "Prepare feature branch for merge (solo-owner workflow)",
+      "template": "For Linear issue $ARGUMENTS:\n\n- Verify current branch is appropriate or propose a new feature branch name\n- Ensure branch is up-to-date: git fetch origin && git rebase origin/master\n- Summarize the changes made\n- Push to remote: git push -f origin <branch-name>\n\nNote: This is a solo-owner workflow. PRs are optional. The `merge` command will perform a squash merge to master."
     },
     "triage": {
-      "description": "Triage GitHub PRs and issues for this repository",
+      "description": "Triage GitHub feature branches and issues for this repository",
       "agent": "plan",
-      "template": "Triage the current GitHub repository.\n\nTasks:\n- List open pull requests with:\n  - PR number and title\n  - Linked Linear issue (if any)\n  - CI status (pass/fail/pending)\n  - Review status\n- List open issues that appear actionable or blocked.\n- Identify blockers (failing CI, missing reviews, unclear scope).\n- Highlight anything security-related or time-sensitive.\n\nOutput a concise summary with recommended next actions.\nDo NOT modify GitHub state."
+      "template": "Triage the current GitHub repository.\n\nTasks:\n- List feature branches:\n  - Branch names\n  - Linked Linear issue (if any)\n  - Last commit date and author\n  - CI status (pass/fail/pending)\n- List open issues that appear actionable or blocked.\n- Identify stale branches (>14 days old) and cleanup candidates.\n- Identify blockers (failing CI, unclear scope).\n- Highlight anything security-related or time-sensitive.\n\nOutput a concise summary with recommended next actions.\nDo NOT modify GitHub state."
     },
     "merge": {
-      "description": "Merge the current PR if checks are green",
-      "template": "If the current pull request has all required checks passing:\n- Merge it using the default strategy\n- Close the linked Linear issue\n\nIf checks are failing, explain why and do not merge."
+      "description": "Squash merge feature branch to master and cleanup",
+      "template": "Merge the current feature branch to master:\n\n1) Verify branch is ready:\n   - Check CI status\n   - Confirm linked Linear issue exists\n\n2) Squash merge:\n   - git checkout master && git pull origin master\n   - git merge --squash <feature-branch>\n   - git commit -m \"feat: <summary>\"\n   - git push origin master\n\n3) Create release tag if appropriate:\n   - git tag -a vX.Y.Z -m \"vX.Y.Z - <description>\"\n   - git push origin master --follow-tags\n\n4) Cleanup:\n   - git branch -d <feature-branch>\n   - git push origin -d <feature-branch>\n\n5) Close the linked Linear issue"
     },
     "research-plan": {
       "description": "Research a topic with Perplexity, then extract rules and propose a safe plan",
