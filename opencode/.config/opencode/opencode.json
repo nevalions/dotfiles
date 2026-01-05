@@ -51,23 +51,23 @@
       "template": "Merge the current feature branch to master:\n\n1) Verify branch is ready:\n   - Confirm linked Linear issue exists\n\n2) Squash merge:\n   - git checkout master && git pull origin master\n   - git merge --squash <feature-branch>\n   - git commit -m \"feat: <summary>\"\n   - git push origin master\n\n3) Create release tag if appropriate:\n   - git tag -a vX.Y.Z -m \"vX.Y.Z - <description>\"\n   - git push origin master --follow-tags\n\n4) Cleanup:\n   - git branch -d <feature-branch>\n   - git push origin -d <feature-branch>\n\n5) Close the linked Linear issue"
     },
     "search-plan": {
-      "description": "Search a topic with Perplexity, then extract rules and propose a safe plan",
+      "description": "Search a topic with Perplexity mcp (dont use research), then extract rules and propose a safe plan",
       "agent": "plan",
-      "template": "First, use Perplexity MCP to search the following topic.\n\nThen:\n- Extract concrete rules or constraints\n- Propose a safe implementation plan\n- Identify what should NOT be automated\n- List verification steps\n\nTopic:\n$ARGUMENTS"
+      "template": "First, use Perplexity MCP to search (dont use research) the following topic.\n\nThen:\n- Extract concrete rules or constraints\n- Propose a safe implementation plan\n- Identify what should NOT be automated\n- List verification steps\n\nTopic:\n$ARGUMENTS"
     },
     "search-ecosystem": {
       "description": "Search the current ecosystem state for a tool or framework",
       "agent": "plan",
-      "template": "Using Perplexity MCP, search the current state of the ecosystem.\n\nRequirements:\n- Check release notes and recent announcements\n- Identify breaking changes\n- Identify recommended defaults\n- Note migration considerations\n\nOutput:\n- TL;DR\n- What to adopt now\n- What to avoid\n- Migration notes\n\nTopic:\n$ARGUMENTS"
+      "template": "Using Perplexity MCP, search (dont use research) the current state of the ecosystem.\n\nRequirements:\n- Check release notes and recent announcements\n- Identify breaking changes\n- Identify recommended defaults\n- Note migration considerations\n\nOutput:\n- TL;DR\n- What to adopt now\n- What to avoid\n- Migration notes\n\nTopic:\n$ARGUMENTS"
     },
     "search-security": {
       "description": "Search latest security guidance and standards",
       "agent": "plan",
-      "template": "Search the latest security guidance using Perplexity MCP.\n\nFocus on:\n- Official standards (RFCs, W3C, OWASP, browser vendors)\n- Recent changes or deprecations\n- Real-world pitfalls\n\nOutput:\n- Short summary\n- Do / Don’t list\n- What has changed recently\n- Actionable recommendations for a production system\n\nTopic:\n$ARGUMENTS"
+      "template": "Search the latest security guidance using Perplexity MCP (dont use research).\n\nFocus on:\n- Official standards (RFCs, W3C, OWASP, browser vendors)\n- Recent changes or deprecations\n- Real-world pitfalls\n\nOutput:\n- Short summary\n- Do / Don’t list\n- What has changed recently\n- Actionable recommendations for a production system\n\nTopic:\n$ARGUMENTS"
     },
     "search": {
       "description": "General web-backed search using Perplexity",
-      "template": "Use Perplexity MCP to search the following.\n\nRequirements:\n- Use up-to-date web sources\n- Prefer official docs, specs, or authoritative blogs\n- Summarize findings clearly\n- Include practical recommendations\n- Note any disagreements or trade-offs\n- Avoid implementation guesses\n\nQuestion:\n$ARGUMENTS",
+      "template": "Use Perplexity MCP to search (dont use research) the following.\n\nRequirements:\n- Use up-to-date web sources\n- Prefer official docs, specs, or authoritative blogs\n- Summarize findings clearly\n- Include practical recommendations\n- Note any disagreements or trade-offs\n- Avoid implementation guesses\n\nQuestion:\n$ARGUMENTS",
       "agent": "plan"
     },
     "scan-security": {
