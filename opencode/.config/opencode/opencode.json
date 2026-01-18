@@ -23,7 +23,7 @@
     "semgrep": {
       "type": "local",
       "command": ["semgrep", "mcp"],
-      "enabled": true
+      "enabled": false
     },
     "vibe-check-mcp": {
       "type": "local",
