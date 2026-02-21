@@ -4,7 +4,7 @@ import = [
 ]
 
 [env]
-TERM = "xterm-256color"
+TERM = "alacritty"
 
 [terminal.shell]
 program = "/usr/bin/zsh"
@@ -21,12 +21,66 @@ blur = true
 normal.family = "JetBrains Mono Nerd Font"
 size = 14.0
 
+[font.offset]
+x = 0
+y = 1
+
+[font.glyph_offset]
+x = 0
+y = 1
+
+[cursor]
+style = { shape = "Block", blinking = "Off" }
+thickness = 0.2
+
+[colors.cursor]
+text = "#1e1e1e"
+cursor = "#ffcc00"
+
+[colors.search.matches]
+foreground = "#000000"
+background = "#00aa55"
+
+[colors.search.focused_match]
+foreground = "#ffffff"
+background = "#ff0055"
+
+[colors.hints.start]
+foreground = "#000000"
+background = "#ffaa00"
+
+[colors.hints.end]
+foreground = "#000000"
+background = "#ff8800"
+
+[bell]
+animation = "EaseOutExpo"
+duration = 100
+color = "#ff5555"
+
+[mouse]
+hide_when_typing = true
+
+[hints]
+alphabet = "asdfghjklqwertyuiopzxcvbnm"
+
+[[hints.enabled]]
+regex = "(https?://[^\"]+)"
+command = "xdg-open"   # macOS: "open"
+post_processing = true
+mouse.enabled = true
+binding = { key = "U", mods = "Control|Shift" }
+
+[selection]
+save_to_clipboard = true
+
 [keyboard]
 bindings = [
   { key = "Home",     chars = "\u001bOH",   mode = "AppCursor" },
   { key = "Home",     chars = "\u001b[H",   mode = "~AppCursor" },
   { key = "End",      chars = "\u001bOF",   mode = "AppCursor" },
   { key = "End",      chars = "\u001b[F",   mode = "~AppCursor" },
+  { key = "Space", mods = "Control", action = "ToggleViMode" },
   # { key = "Home", chars = "\u001bOH" },
   # { key = "End", chars = "\u001bOF" },
   { key = "C", mods = "Control|Shift", action = "Copy" },
