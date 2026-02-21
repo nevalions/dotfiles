@@ -28,9 +28,29 @@ alias gb='git branch'
 alias gba='git branch -a'
 alias gadd='git add'
 alias ga='git add -p'
-alias gcoall='git checkout -- .'
 alias gr='git remote'
-alias gres='git reset'
+
+unalias gcoall 2>/dev/null
+unalias gres 2>/dev/null
+
+confirm_action() {
+  local prompt="$1"
+  local answer
+  read "answer?$prompt [y/N]: "
+  [[ "$answer" =~ ^[Yy]$ ]]
+}
+
+gcoall() {
+  confirm_action 'Discard all unstaged tracked changes in this repo?' || return 1
+  git restore --worktree -- .
+}
+
+gres() {
+  if [[ "$*" == *--hard* ]]; then
+    confirm_action 'Run git reset --hard and lose local changes?' || return 1
+  fi
+  git reset "$@"
+}
 
 alias k="kubectl"
 alias ka="kubectl apply -f"
@@ -55,6 +75,49 @@ alias tr1="tree -a -L 1 -I '.git'"
 alias obo='cd ~/vault && FILE=$(find . -type f -name "*.md" | fzf --preview "bat --color=always {}" | tr -d "\n"); [ -n "$FILE" ] && nvim "$FILE"'
 
 alias lg="lazygit"
+
+# Optional monitoring and disk tools
+has() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+if has btm; then
+  alias bt='btm'
+fi
+
+if has dust; then
+  alias dux='dust'
+fi
+
+if has dua; then
+  alias duai='dua i'
+fi
+
+if has iotop; then
+  alias io='sudo iotop -oPa'
+fi
+
+# Safer delete defaults for interactive shells
+alias rm='rm -I --preserve-root'
+
+if has trash-put; then
+  alias del='trash-put'
+fi
+
+trash_empty() {
+  confirm_action 'Empty all files from Trash?' || return 1
+
+  if has trash-empty; then
+    trash-empty
+  elif has gio; then
+    gio trash --empty
+  else
+    echo 'No trash empty command found (install trash-cli or gio).' >&2
+    return 127
+  fi
+}
+
+alias tempty='trash_empty'
 
 HISTFILE=~/.history
 HISTSIZE=10000
@@ -125,7 +188,7 @@ ZSH_THEME="powerlevel10k/powerlevel10k"
 
 plugins=(git zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlighting tmuxinator)
 
-source $ZSH/oh-my-zsh.sh
+source "$ZSH/oh-my-zsh.sh"
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 eval "$(zoxide init --cmd cd zsh)"
