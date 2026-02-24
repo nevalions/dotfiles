@@ -13,6 +13,15 @@
       "command": ["npx", "-y", "mcp-remote", "https://mcp.linear.app/mcp"],
       "enabled": true
     },
+    "vikunja": {
+      "type": "local",
+      "command": ["npx", "-y", "@aimbitgmbh/vikunja-mcp"],
+      "enabled": true,
+      "environment": {
+        "VIKUNJA_URL": "https://vik.butakov.su/api/v1",
+        "VIKUNJA_API_TOKEN": "{env:VIKUNJA_API_TOKEN}"
+      }
+    },
     "perplexity": {
       "type": "local",
       "command": ["npx", "-y", "@perplexity-ai/mcp-server"],

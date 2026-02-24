@@ -1,0 +1,16 @@
+name: lo-news-backend
+root: ~/code/lo-news/lo-news-backend
+
+enable_pane_titles: true
+
+windows:
+  - editor:
+      layout: 7084,132x61,0,0[132x51,0,0,5,132x9,0,52,6]
+      panes:
+        - lo-news-backend:
+            - cd ~/code/lo-news/lo-news-backend
+            - v
+        - lo-news-backend-terminal:
+            - cd ~/code/lo-news/lo-news-backend
+            - ./scripts/dev-infra.sh
+            - ./scripts/run-dev.sh
