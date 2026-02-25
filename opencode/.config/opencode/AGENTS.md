@@ -120,6 +120,13 @@ pipx install semgrep
 
 ---
 
+## Vikunja usage
+
+- Vikunja uses **HTML** for task/project descriptions, not markdown
+- When setting descriptions via API, use HTML tags (`<h2>`, `<ul>`, `<pre>`, `<code>`, etc.)
+
+---
+
 ## Context7 usage (official documentation)
 
 Use **Context7 MCP** as the **primary source** for:
