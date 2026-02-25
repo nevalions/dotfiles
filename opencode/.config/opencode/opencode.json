@@ -84,6 +84,14 @@
       "template": "Use Perplexity MCP to search (dont use research) the following.\n\nRequirements:\n- Use up-to-date web sources\n- Prefer official docs, specs, or authoritative blogs\n- Summarize findings clearly\n- Include practical recommendations\n- Note any disagreements or trade-offs\n- Avoid implementation guesses\n\nQuestion:\n$ARGUMENTS",
       "agent": "plan"
     },
+    "work": {
+      "description": "Work on a Linear issue (e.g. /work STAB-8)",
+      "template": "Start working on Linear issue $ARGUMENTS.\n\nRules:\n- Linear team: StatsboardBack\n- Only change files related to the issue\n- Follow FastAPI and async SQLAlchemy best practices\n- Prefer typed code (Pyright-friendly)\n- Run backend checks after changes (tests/lint/typecheck if available)\n- Update the Linear issue with progress\n- Move the issue to Done only when tests pass and checks are green for the scope"
+    },
+    "vi": {
+      "description": "Work on a Vikunja issue (e.g. /vi 123)",
+      "template": "Start working on Vikunja issue $ARGUMENTS.\n\nRules:\n- Only change files related to the issue\n- Follow project conventions and best practices\n- Run available checks after changes (tests/lint/typecheck if configured)\n- Update the Vikunja issue with progress\n- Mark the issue as done only when tests pass and checks are green for the scope"
+    },
     "scan-security": {
       "description": "Run Semgrep mcp security scan and file results to Linear (plan only, no code changes)",
       "agent": "plan",
