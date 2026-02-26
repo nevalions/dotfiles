@@ -31,6 +31,14 @@ AGENTS_MD_GLOBAL_LOADED
 
 ---
 
+## Git constraints (agent)
+
+- NEVER use interactive git commands: `git add -i`, `git rebase -i`, `git commit -v`, etc.
+- Use `git add -p` only when the terminal supports non-interactive patch staging; otherwise prefer `git add <file>` or `git add -A`
+- Always use non-interactive flags: `git rebase --onto`, `git commit -m "..."`, `git merge --squash`
+
+---
+
 ## Git workflow (solo owner)
 
 Use prefixes consistently:
@@ -124,6 +132,7 @@ pipx install semgrep
 
 - Vikunja uses **HTML** for task/project descriptions, not markdown
 - When setting descriptions via API, use HTML tags (`<h2>`, `<ul>`, `<pre>`, `<code>`, etc.)
+- Task **comments** use plain text (not HTML, not markdown)
 
 ---
 
