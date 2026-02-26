@@ -90,7 +90,7 @@
     },
     "vi": {
       "description": "Work on a Vikunja issue (e.g. /vi ANS-5)",
-      "template": "Start working on Vikunja issue $ARGUMENTS.\n\n1. First, search for the task by prefix in the title using vikunja_tasks_list with search=\"$ARGUMENTS\"\n2. If found, get the task ID and proceed\n3. Work on the task:\n   - Only change files related to the issue\n   - Follow project conventions and best practices\n   - Run available checks after changes (tests/lint/typecheck if configured)\n   - Update the Vikunja issue with progress\n   - Mark the issue as done only when tests pass and checks are green for the scope"
+      "template": "Start working on Vikunja issue $ARGUMENTS.\n\n1. First, search for the task by prefix in the title using vikunja_tasks_list with search=\"$ARGUMENTS\"\n2. If found, get the task ID and proceed\n3. Move the task to \"Doing\":\n   - List the kanban view buckets with vikunja_buckets_list\n   - Move the task to the \"Doing\" bucket using vikunja_tasks_bulk_update with bucketId of the Doing bucket\n4. Work on the task:\n   - Only change files related to the issue\n   - Follow project conventions and best practices\n   - Run available checks after changes (tests/lint/typecheck if configured)\n   - Update the Vikunja issue with progress\n   - Mark the issue as done only when tests pass and checks are green for the scope"
     },
     "vic": {
       "description": "Create a new Vikunja issue (e.g. /vic Add feature X)",
