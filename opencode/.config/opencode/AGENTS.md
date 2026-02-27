@@ -138,7 +138,10 @@ pipx install semgrep
 - Vikunja uses **HTML** for task/project descriptions, not markdown
 - When setting descriptions via API, use HTML tags (`<h2>`, `<ul>`, `<pre>`, `<code>`, etc.)
 - Task **comments** use plain text (not HTML, not markdown)
-- **CRITICAL:** Always pass `description` when calling `vikunja_task_create`. Never create a task without a description. Draft the HTML description before making the API call. An empty or missing description is not acceptable.
+- **CRITICAL:** `vikunja_task_create` does NOT support the `description` parameter — it is silently ignored. Always use a two-step pattern:
+  1. `vikunja_task_create` — title, projectId, priority only
+  2. `vikunja_task_update` — set description immediately after (required, never skip)
+- Draft the HTML description before calling `vikunja_task_create`. An empty or missing description after creation is not acceptable.
 
 ---
 
