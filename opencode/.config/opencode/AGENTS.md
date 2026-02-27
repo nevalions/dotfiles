@@ -1,4 +1,9 @@
-# Base Agent Instructions (Global)
+# Base Agent Instructions (Global) — OpenCode Agent
+
+> **This is an OpenCode agent configuration.**
+> - Do NOT create or suggest `claude.md` files.
+> - Do NOT refactor `opencode.json` with Claude-specific parameters or model config.
+> - Configuration lives in `opencode.json` and follows the OpenCode schema.
 
 These instructions apply to all projects unless explicitly overridden
 by a project-specific agents.md.
