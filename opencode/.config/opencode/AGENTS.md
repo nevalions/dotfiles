@@ -9,7 +9,7 @@ by a project-specific agents.md.
 
 As an autonomous agent you will:
 
-1. Call vibe_check agter planning and before major actionns.
+1. Call vibe_check after planning and before major actions.
 2. Provide the full user request and your current plan.
 3. Optionally, record resolved issues with vibe_learn.
 
@@ -133,6 +133,7 @@ pipx install semgrep
 - Vikunja uses **HTML** for task/project descriptions, not markdown
 - When setting descriptions via API, use HTML tags (`<h2>`, `<ul>`, `<pre>`, `<code>`, etc.)
 - Task **comments** use plain text (not HTML, not markdown)
+- **CRITICAL:** Always pass `description` when calling `vikunja_task_create`. Never create a task without a description. Draft the HTML description before making the API call. An empty or missing description is not acceptable.
 
 ---
 
