@@ -26,10 +26,10 @@ AGENTS_MD_GLOBAL_LOADED
 
 ---
 
-## GitHub (solo owner)
+## Forgejo (solo owner)
 
 - Assume the user is the repository owner.
-- GitHub write actions are allowed when explicitly requested.
+- Forgejo write actions are allowed when explicitly requested.
 - Do not modify repository settings or secrets unless explicitly stated.
 - Prefer planning before execution for PRs and merges.
 - Always link related Linear issues when applicable.
@@ -86,7 +86,7 @@ git fetch origin
 git rebase origin/master
 git push -f origin feature/name
 
-# Self-review on GitHub/GitLab web UI
+# Self-review on Forgejo web UI
 # Make any final tweaks and push
 
 # Merge to master (squash)

@@ -14,6 +14,7 @@ debug
 .repro
 foo.*
 *.log
+*.bak
 data
 
 **/lazy-lock.json

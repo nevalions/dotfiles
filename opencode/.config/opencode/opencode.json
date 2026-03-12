@@ -1,6 +1,5 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "theme": "catppuccin",
   "plugin": ["opencode-anthropic-auth"],
   "mcp": {
     "context7": {
@@ -13,12 +12,32 @@
       "command": ["npx", "-y", "mcp-remote", "https://mcp.linear.app/mcp"],
       "enabled": false
     },
+    "forgejo-read": {
+      "type": "local",
+      "command": ["npx", "-y", "@ric_/forgejo-mcp"],
+      "enabled": true,
+      "environment": {
+        "FORGEJO_URL": "{env:FORGEJO_URL}",
+        "FORGEJO_TOKEN": "{env:FORGEJO_TOKEN_READ}"
+      },
+      "timeout": 10000
+    },
+    "forgejo-write": {
+      "type": "local",
+      "command": ["npx", "-y", "@ric_/forgejo-mcp"],
+      "enabled": true,
+      "environment": {
+        "FORGEJO_URL": "{env:FORGEJO_URL}",
+        "FORGEJO_TOKEN": "{env:FORGEJO_TOKEN_WRITE}"
+      },
+      "timeout": 10000
+    },
     "vikunja": {
       "type": "local",
       "command": ["npx", "-y", "@aimbitgmbh/vikunja-mcp"],
       "enabled": true,
       "environment": {
-        "VIKUNJA_URL": "https://vik.butakov.su/api/v1",
+        "VIKUNJA_URL": "{env:VIKUNJA_URL}",
         "VIKUNJA_API_TOKEN": "{env:VIKUNJA_API_TOKEN}"
       }
     },
@@ -52,9 +71,9 @@
       "template": "For Linear issue $ARGUMENTS:\n\n- Verify current branch is appropriate or propose a new feature branch name\n- Ensure branch is up-to-date: git fetch origin && git rebase origin/master\n- Summarize the changes made\n- Push to remote: git push -f origin <branch-name>\n\nNote: This is a solo-owner workflow. PRs are optional. The `merge` command will perform a squash merge to master."
     },
     "triage": {
-      "description": "Triage GitHub feature branches and issues for this repository",
+      "description": "Triage Forgejo branches, pull requests, and issues for this repository",
       "agent": "plan",
-      "template": "Triage the current GitHub repository.\n\nTasks:\n- List feature branches:\n  - Branch names\n  - Linked Linear issue (if any)\n  - Last commit date and author\n  - CI status (pass/fail/pending)\n- List open issues that appear actionable or blocked.\n- Identify stale branches (>14 days old) and cleanup candidates.\n- Identify blockers (failing CI, unclear scope).\n- Highlight anything security-related or time-sensitive.\n\nOutput a concise summary with recommended next actions.\nDo NOT modify GitHub state."
+      "template": "Triage the current Forgejo repository using Forgejo MCP tools.\n\nTasks:\n- Collect repository context with forgejo-read_get_repo.\n- List feature branches with forgejo-read_list_branches:\n  - Branch names\n  - Linked Linear issue (if any)\n  - Last commit date and author\n  - CI status (pass/fail/pending); if unavailable, mark as unknown\n- List open pull requests with forgejo-read_list_pull_requests and note blockers.\n- List open issues with forgejo-read_list_issues that appear actionable or blocked.\n- Identify stale branches (>14 days old) and cleanup candidates.\n- Identify blockers (failing CI, merge conflicts, unclear scope).\n- Highlight anything security-related or time-sensitive.\n\nOutput a concise summary with recommended next actions.\nDo NOT modify Forgejo state."
     },
     "docs&commit": {
       "description": "Check docs for refactoring needs after changes, then commit",
@@ -77,7 +96,7 @@
     "search-security": {
       "description": "Search latest security guidance and standards",
       "agent": "plan",
-      "template": "Search the latest security guidance using Perplexity MCP (dont use research).\n\nFocus on:\n- Official standards (RFCs, W3C, OWASP, browser vendors)\n- Recent changes or deprecations\n- Real-world pitfalls\n\nOutput:\n- Short summary\n- Do / Don’t list\n- What has changed recently\n- Actionable recommendations for a production system\n\nTopic:\n$ARGUMENTS"
+      "template": "Search the latest security guidance using Perplexity MCP (dont use research).\n\nFocus on:\n- Official standards (RFCs, W3C, OWASP, browser vendors)\n- Recent changes or deprecations\n- Real-world pitfalls\n\nOutput:\n- Short summary\n- Do / Don't list\n- What has changed recently\n- Actionable recommendations for a production system\n\nTopic:\n$ARGUMENTS"
     },
     "search": {
       "description": "General web-backed search using Perplexity",
