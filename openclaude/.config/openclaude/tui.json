@@ -1,0 +1,10 @@
+{
+  "scroll_acceleration": {
+    "enabled": true
+  },
+  "diff_style": "auto",
+  "keybinds": {
+    "session_compact": "none"
+  },
+  "theme": "catppuccin"
+}

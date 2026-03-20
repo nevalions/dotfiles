@@ -1,0 +1,266 @@
+# Base Agent Instructions (Global) — OpenClaude Agent
+
+> **This is an OpenClaude agent configuration.**
+> - Do NOT create or suggest `claude.md` files.
+> - Do NOT refactor `openclaude.json` with Claude-specific parameters or model config.
+> - Configuration lives in `openclaude.json` and follows the OpenClaude schema.
+
+These instructions apply to all projects unless explicitly overridden
+by a project-specific agents.md.
+
+---
+
+## Mandatory
+
+As an autonomous agent you will:
+
+1. Call vibe_check after planning and before major actions.
+2. Provide the full user request and your current plan.
+3. Optionally, record resolved issues with vibe_learn.
+
+---
+
+## Canary
+
+AGENTS_MD_OPENCLAUDE_LOADED
+
+---
+
+## Forgejo (solo owner)
+
+- Assume the user is the repository owner.
+- Forgejo write actions are allowed when explicitly requested.
+- Do not modify repository settings or secrets unless explicitly stated.
+- Prefer planning before execution for PRs and merges.
+- Always link related Linear issues when applicable.
+
+---
+
+## Git constraints (agent)
+
+- NEVER use interactive git commands: `git add -i`, `git rebase -i`, `git commit -v`, etc.
+- Use `git add -p` only when the terminal supports non-interactive patch staging; otherwise prefer `git add <file>` or `git add -A`
+- Always use non-interactive flags: `git rebase --onto`, `git commit -m "..."`, `git merge --squash`
+
+---
+
+## Git workflow (solo owner)
+
+Use prefixes consistently:
+
+feature/ — new functionality
+
+bugfix/ — non-urgent bug fixes
+
+hotfix/ — urgent production fixes
+
+refactor/ — code cleanup
+
+docs/ — documentation updates
+
+Commit frequently and atomically while on your feature branch:
+
+```
+git add -p
+git commit -m "feat(auth): add login form component"
+
+git add -p
+git commit -m "feat(auth): add backend login endpoint"
+
+git add -p
+git commit -m "feat(auth): implement JWT token generation"
+
+```
+
+Use feature branches with squash merge to master:
+
+```bash
+# Create feature
+git checkout -b feature/name origin/master
+
+# Develop with frequent commits
+git add -p && git commit -m "feat(scope): description"
+
+# Keep up-to-date
+git fetch origin
+git rebase origin/master
+git push -f origin feature/name
+
+# Self-review on Forgejo web UI
+# Make any final tweaks and push
+
+# Merge to master (squash)
+git checkout master && git pull origin master
+git merge --squash feature/name
+git commit -m "feat: description"
+git push origin master
+
+# Clean up
+# git branch -d feature/name
+# error: The branch 'feature/name' is not fully merged.
+git branch -D feature/name
+git push origin -d feature/name
+
+# Tag release
+git tag -a vX.Y.Z -m "vX.Y.Z - description"
+git push origin master --follow-tags
+```
+
+Bulk cleanup (remove all branches merged to master):
+
+```
+git branch --merged | grep -v 'master' | xargs -n 1 git branch -d
+git fetch -p  # Clean stale remote tracking branches
+```
+
+---
+
+## Semgrep usage
+
+- Use Semgrep MCP for:
+  - Security scanning
+  - Code pattern detection
+  - OWASP and framework-specific issues
+- Prefer Semgrep before manual security review.
+- Do not auto-fix findings unless explicitly instructed.
+- Create Linear issues for medium/high severity findings.
+
+**Arch Linux installation:**
+
+```bash
+pipx install semgrep
+```
+
+---
+
+## Vikunja usage
+
+- Vikunja uses **HTML** for task/project descriptions, not markdown
+- When setting descriptions via API, use HTML tags (`<h2>`, `<ul>`, `<pre>`, `<code>`, etc.)
+- Task **comments** use plain text (not HTML, not markdown)
+- **CRITICAL:** `vikunja_task_create` does NOT support the `description` parameter — it is silently ignored. Always use a two-step pattern:
+  1. `vikunja_task_create` — title, projectId, priority only
+  2. `vikunja_task_update` — set description immediately after (required, never skip)
+- Draft the HTML description before calling `vikunja_task_create`. An empty or missing description after creation is not acceptable.
+
+---
+
+## Context7 usage (official documentation)
+
+Use **Context7 MCP** as the **primary source** for:
+
+- Official framework documentation
+- Library APIs and configuration
+- Idiomatic usage patterns
+- Version-accurate guidance
+
+Examples:
+
+- FastAPI routing, dependencies, lifespan
+- SQLAlchemy async sessions and transactions
+- Angular, NgRx, ESLint rules
+- Postgres configuration and SQL behavior
+
+Context7 SHOULD be used when:
+
+- Implementing or modifying code
+- Verifying API correctness
+- Following framework-recommended patterns
+
+Context7 SHOULD NOT be used for:
+
+- Ecosystem comparisons
+- Release/news tracking
+- Security advisories outside official docs
+- Opinionated or forward-looking guidance
+
+If Context7 information is insufficient or outdated, explicitly switch to Perplexity.
+
+---
+
+## Perplexity usage (web-backed research)
+
+Use **Perplexity MCP** only when up-to-date or web-based information is required.
+
+Examples:
+
+- Security standards and guidance (CSP, OAuth, OWASP, browser changes)
+- Ecosystem updates (framework releases, breaking changes, migrations)
+- Accessibility standards and tooling
+- Comparative analysis (tool A vs tool B)
+
+Do NOT use Perplexity for:
+
+- Reading or understanding the local codebase
+- Implementing framework APIs when official docs are already available locally
+- Guessing versions, APIs, or defaults
+
+Always summarize conclusions clearly and avoid speculation.
+
+---
+
+## Research commands
+
+Prefer the following commands over ad-hoc questions:
+
+- **/research-plan**
+  Research a topic using Perplexity, then:
+  - Extract concrete rules or constraints
+  - Propose a safe implementation plan
+  - Identify what should NOT be automated
+  - List verification steps
+
+- **/research-ecosystem**
+  Research the current state of a tool or framework:
+  - Check release notes and recent announcements
+  - Identify breaking changes
+  - Identify recommended defaults
+  - Note migration considerations
+
+- **/research-security**
+  Research latest security guidance:
+  - Prefer official standards (RFCs, W3C, OWASP, browser vendors)
+  - Note recent changes or deprecations
+  - Provide Do / Don't lists and production recommendations
+
+- **/research**
+  General up-to-date research using authoritative sources.
+
+---
+
+## Source prioritization
+
+When multiple sources are available, prefer in this order:
+
+1. Official standards and specifications
+2. Official framework or vendor documentation
+3. Widely accepted community guidance
+4. Blogs and secondary commentary (clearly marked as such)
+
+Always call out uncertainty or disagreements between sources.
+
+---
+
+## Output expectations
+
+When Perplexity is used:
+
+- Provide a short summary first
+- Include actionable recommendations
+- Clearly separate facts from opinions
+- Avoid inventing APIs, versions, or guarantees
+
+---
+
+## Safety & integrity
+
+- Never fabricate citations, standards, or release notes
+- Never assume security posture without verification
+- When unsure, say so and propose a validation step
+
+---
+
+## User Notes
+
+- Do not add AGENTS.md to README.md - this file is for development reference only.
+- All commits must be by linroot with email nevalions@gmail.com
