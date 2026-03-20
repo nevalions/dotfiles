@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__forgejo-read__*",
+      "mcp__forgejo-write__*"
+    ]
+  }
+}

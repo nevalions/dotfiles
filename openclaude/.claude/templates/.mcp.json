@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "forgejo-read": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@ric_/forgejo-mcp"],
+      "env": {
+        "FORGEJO_URL": "${FORGEJO_URL}",
+        "FORGEJO_TOKEN": "${FORGEJO_TOKEN_READ}"
+      }
+    },
+    "forgejo-write": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@ric_/forgejo-mcp"],
+      "env": {
+        "FORGEJO_URL": "${FORGEJO_URL}",
+        "FORGEJO_TOKEN": "${FORGEJO_TOKEN_WRITE}"
+      }
+    }
+  }
+}
