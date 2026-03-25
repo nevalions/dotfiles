@@ -191,8 +191,6 @@ plugins=(git zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlightin
 source "$ZSH/oh-my-zsh.sh"
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
-eval "$(zoxide init --cmd cd zsh)"
-
 if command -v atuin &> /dev/null; then
   # . "$HOME/.atuin/bin/env"
   eval "$(atuin init zsh --disable-up-arrow)"
@@ -254,3 +252,5 @@ idf() {
 
 unset ESPPORT
 # export ESPPORT=/dev/ttyUSB0
+
+eval "$(zoxide init --cmd cd zsh)"
