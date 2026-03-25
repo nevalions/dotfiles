@@ -23,4 +23,5 @@ nvim/.config/nvim/lsp-local.lua
 
 .nvimlog
 
-CLAUDE.md
+# CLAUDE.md is tracked for openclaude stow package
+!openclaude/.claude/CLAUDE.md
