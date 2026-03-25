@@ -1,29 +1,16 @@
 {
   "permissions": {
     "allow": [
-      "Bash(find /home/linroot -name *.rs -exec grep -l \"Model Context Protocol\\\\|context7\\\\|forgejo\\\\|vikunja\" {})",
-      "Bash(2)",
-      "Bash(npx --version)",
-      "Bash(curl -s -I https://mcp.context7.com/mcp)",
-      "Bash(timeout 5 npx -y @ric_/forgejo-mcp --help)",
-      "Bash(echo \"Exit code: $?\")",
-      "Bash(timeout 5 npx -y @aimbitgmbh/vikunja-mcp --help)",
-      "Bash(timeout 5 npx -y @perplexity-ai/mcp-server --help)",
-      "Bash(timeout 5 npx -y @pv-bhat/vibe-check-mcp start --stdio --help)",
-      "Bash(timeout 5 FORGEJO_TOKEN=\"$FORGEJO_TOKEN_READ\" FORGEJO_URL=\"$FORGEJO_URL\" npx -y @ric_/forgejo-mcp --help)",
-      "Bash(pacman -Ql openclaude)",
-      "Bash(grep -E \"\\\\.rs$|bin/openclaude\")",
-      "Bash(env FORGEJO_TOKEN=\"$FORGEJO_TOKEN_READ\" FORGEJO_URL=\"$FORGEJO_URL\" timeout 5 npx -y @ric_/forgejo-mcp --help)",
-      "Bash(command -v openclaude)",
-      "Bash(pacman -Q openclaude)",
-      "Bash(yay -Q openclaude)",
-      "Bash(ls -la ~/.local/bin/openclaude*)",
-      "Read(//usr/local/bin/**)",
-      "Bash(echo $PATH)",
-      "Bash(while read:*)",
-      "Bash(do ls:*)",
-      "Bash(done)",
-      "Bash(opencode --version)"
+      "Bash(git:*)",
+      "Bash(claude mcp:*)",
+      "Bash(stow:*)",
+      "Bash(cp:*)",
+      "WebSearch",
+      "mcp__vikunja__*",
+      "mcp__forgejo__*",
+      "mcp__perplexity__*",
+      "mcp__context7__*",
+      "mcp__vibe-check-mcp__*"
     ]
   }
 }
