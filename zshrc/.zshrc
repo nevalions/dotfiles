@@ -221,6 +221,9 @@ if command -v direnv >/dev/null 2>&1; then
   eval "$(direnv hook zsh)"
 fi
 
+# Claude Code MCP env vars
+[[ -f ~/.env.claude ]] && source ~/.env.claude
+
 # opencode wrapper that works with direnv exec
 opencode() {
   local env_dir="$HOME/dotfiles/opencode/.config/opencode"
@@ -252,5 +255,12 @@ idf() {
 
 unset ESPPORT
 # export ESPPORT=/dev/ttyUSB0
+
+# Claude Code env
+if [ -f "$HOME/.env.claude" ]; then
+  set -a
+  source "$HOME/.env.claude"
+  set +a
+fi
 
 eval "$(zoxide init --cmd cd zsh)"
