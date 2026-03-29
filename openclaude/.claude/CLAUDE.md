@@ -33,9 +33,12 @@ Source priority: official standards > official docs > community guidance > blogs
 
 - Descriptions use **HTML** (`<h2>`, `<ul>`, `<pre>`, `<code>`), not markdown
 - Comments use **plain text**
-- `task_create` does NOT support `description` — always two-step:
-  1. `task_create` (title, projectId, priority)
-  2. `task_update` (set description immediately after)
+- A webhook fires on `task_create` that adds identifier prefix (e.g. "ANS-21:") and **wipes description and priority**
+- Always use a two-step pattern with delay:
+  1. `task_create` (title, projectId, priority only — description will be wiped by webhook)
+  2. Wait for webhook to settle (create all tasks first, then update)
+  3. `task_update` (set description and priority — updates after webhook persist)
+- `task_update` supports partial updates — only include fields you want to change
 
 ## Safety
 
