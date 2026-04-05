@@ -1,4 +1,8 @@
 {
+  "statusLine": {
+    "type": "command",
+    "command": "bash ~/.claude/statusline-command.sh"
+  },
   "permissions": {
     "allow": [
       "Bash(git:*)",
@@ -10,7 +14,8 @@
       "mcp__forgejo__*",
       "mcp__perplexity__*",
       "mcp__context7__*",
-      "mcp__vibe-check-mcp__*"
+      "mcp__vibe-check-mcp__*",
+      "Grep"
     ]
   }
 }

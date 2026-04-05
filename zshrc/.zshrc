@@ -5,6 +5,12 @@ export ZSH="$HOME/.oh-my-zsh"
 
 export EDITOR=nvim
 
+# COSMIC + NVIDIA Wayland
+export COSMIC_DISABLE_DIRECT_SCANOUT=true
+export WLR_NO_HARDWARE_CURSORS=1
+export GBM_BACKEND=nvidia-drm
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+
 alias v="nvim"
 alias vs="sudo -E nvim"
 
@@ -263,4 +269,5 @@ if [ -f "$HOME/.env.claude" ]; then
   set +a
 fi
 
+export _ZO_DOCTOR=0
 eval "$(zoxide init --cmd cd zsh)"
