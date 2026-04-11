@@ -1,0 +1,11 @@
+name: news-dev
+root: ~/code
+
+windows:
+  - all:
+      layout: tiled
+      panes:
+        - cd ~/code/lo-news/lo-news-backend && uv run python main.py
+        - cd ~/code/lo-news/lo-news-frontend && npm run dev
+        - cd ~/code/spb-news/spb-news-backend && uv run python main.py
+        - cd ~/code/spb-news/spb-news-frontend && PORT=3001 npm run dev
