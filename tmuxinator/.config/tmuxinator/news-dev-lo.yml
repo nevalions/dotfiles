@@ -1,0 +1,9 @@
+name: news-dev-lo
+root: ~/code
+
+windows:
+  - all:
+      layout: tiled
+      panes:
+        - cd ~/code/news-backend && ./scripts/dev-infra.sh && ./scripts/run-dev.sh lo
+        - cd ~/code/news-frontend && npm run dev:lo
