@@ -21,9 +21,7 @@ Priority: official standards > official docs > community > blogs.
 
 Descriptions: HTML. Comments: plain text. Priority: 0=None 1=Low 2=Medium 3=High 4+=Urgent.
 
-Webhook on `task_create` adds prefix (e.g. "ANS-21:") and **wipes description+priority**. Two-step pattern:
-1. `task_create` (title, projectId only)
-2. After all creates settle: `task_update` (description, priority)
+Reconciler adds prefix (e.g. "ANS-21:") to task titles and preserves all other fields. One-step `task_create` with description and priority works.
 
 Quirks: `tasks_list` needs projectId. `tasks_list_all` unreliable. `task_complete`/`buckets_list` have type bugs — use `task_update(done=true)`. `tasks_bulk_update` may 401 — use individual updates.
 
