@@ -14,4 +14,4 @@ windows:
         - stats-backend-terminal:
             - cd ~/code/statsboard/statsboards-backend/
             - . ./venv/bin/activate
-            - python src/runserver.py
+            - python -m src.runserver
