@@ -205,7 +205,7 @@ fi
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
 
-export PATH="$HOME/.local/share/gem/ruby/3.3.0/bin:$PATH"
+export PATH="$(ruby -e 'print Gem.user_dir')/bin:$PATH"
 
 
 # Load Angular CLI autocompletion.
