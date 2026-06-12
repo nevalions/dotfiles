@@ -19,4 +19,7 @@ windows:
         - stats-backend-terminal:
             - cd ~/code/statsboard/statsboards-backend/
             - . ./venv/bin/activate
-            - python -m src.runserver
+            # exec replaces the shell so uvicorn's reload supervisor IS the pane
+            # process. Ctrl-C reaches it directly, and there is no shell left to
+            # adopt an orphaned reload worker as a stale background process.
+            - exec python -m src.runserver
