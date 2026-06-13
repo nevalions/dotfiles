@@ -12,7 +12,8 @@
       "mcp__context7__*",
       "mcp__vibe-check-mcp__*",
       "Grep"
-    ]
+    ],
+    "defaultMode": "auto"
   },
   "hooks": {
     "SessionStart": [
@@ -150,5 +151,8 @@
     }
   },
   "skipDangerousModePermissionPrompt": true,
-  "agentPushNotifEnabled": true
+  "skipWorkflowUsageWarning": true,
+  "agentPushNotifEnabled": true,
+  "skipAutoPermissionPrompt": true,
+  "model": "claude-fable-5[1m]"
 }
