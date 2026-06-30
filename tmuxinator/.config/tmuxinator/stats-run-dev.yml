@@ -1,6 +1,11 @@
 name: stats-run-dev
 root: ~/
 
+# Redis backs play-detection state (src/match_videos/play_detection.py).
+# Started with the session; removed on `tmuxinator stop stats-run-dev`.
+on_project_start: docker start statsboards-redis 2>/dev/null || docker run -d --name statsboards-redis -p 6379:6379 redis:7-alpine
+on_project_stop: docker rm -f statsboards-redis 2>/dev/null || true
+
 enable_pane_titles: true
 
 windows:
