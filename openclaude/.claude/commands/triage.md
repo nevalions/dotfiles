@@ -9,7 +9,7 @@ Tasks:
 - Collect repository context with forgejo-read_get_repo.
 - List feature branches with forgejo-read_list_branches:
   - Branch names
-  - Linked Vikunja task (if any)
+  - Linked bd (beads) issue (if any)
   - Last commit date and author
   - CI status (pass/fail/pending); if unavailable, mark as unknown
 - List open pull requests with forgejo-read_list_pull_requests and note blockers.

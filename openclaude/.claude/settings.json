@@ -6,7 +6,7 @@
       "Bash(stow:*)",
       "Bash(cp:*)",
       "WebSearch",
-      "mcp__vikunja__*",
+      "Bash(bd:*)",
       "mcp__forgejo__*",
       "mcp__perplexity__*",
       "mcp__context7__*",

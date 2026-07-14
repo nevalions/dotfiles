@@ -20,7 +20,7 @@ As an autonomous agent you will:
 - Use Semgrep MCP for security scanning and code pattern detection
 - Prefer Semgrep before manual security review
 - Do not auto-fix findings unless explicitly instructed
-- Create Vikunja tasks for medium/high severity findings
+- Create bd (beads) issues for medium/high severity findings
 
 ---
 

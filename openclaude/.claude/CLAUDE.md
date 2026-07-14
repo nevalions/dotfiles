@@ -17,13 +17,15 @@ Solo owner. Write actions only when requested. No settings/secrets changes unles
 
 Priority: official standards > official docs > community > blogs.
 
-## Vikunja
+## Beads (bd)
 
-Descriptions: HTML. Comments: plain text. Priority: 0=None 1=Low 2=Medium 3=High 4+=Urgent.
+Per-repo issue tracker (`bd`), replaces Vikunja. Data lives in `.beads/`. Run `bd prime` for full workflow. If a repo has no `.beads/`, `bd init` first.
 
-Reconciler adds prefix (e.g. "ANS-21:") to task titles and preserves all other fields. One-step `task_create` with description and priority works.
+Priority is INVERTED vs Vikunja: `-p 0..4`, **0 = highest**. 0=Urgent 1=High 2=Medium 3=Low 4=Trivial.
 
-Quirks: `tasks_list` needs projectId. `tasks_list_all` unreliable. `task_complete`/`buckets_list` have type bugs — use `task_update(done=true)`. `tasks_bulk_update` may 401 — use individual updates.
+Descriptions/notes: plain text or markdown (no HTML). Use `bd remember` for persistent knowledge, not MEMORY.md.
+
+Core commands: `bd ready` (available work), `bd show <id>`, `bd create "<title>" -p <0-4> -l <labels> -d <desc> --acceptance <ac>`, `bd update <id> --claim` (start), `bd update <id> --append-notes <text>` (progress), `bd close <id>` (done), `bd list --status open --json`.
 
 ## Safety
 

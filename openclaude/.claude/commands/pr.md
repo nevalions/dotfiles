@@ -2,7 +2,7 @@
 description: "Prepare feature branch for merge (solo-owner workflow)"
 ---
 
-For Vikunja task $ARGUMENTS:
+For bd (beads) issue $ARGUMENTS:
 
 - Verify current branch is appropriate or propose a new feature branch name
 - Ensure branch is up-to-date: git fetch origin && git rebase origin/master

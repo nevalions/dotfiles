@@ -1,41 +1,34 @@
 ---
-description: "Create a new Vikunja issue (e.g. /create Add feature X)"
+description: "Create a new bd (beads) issue (e.g. /create Add feature X)"
 agent: "plan"
 ---
 
-Create a new Vikunja task for: $ARGUMENTS
+Create a new bd (beads) issue for: $ARGUMENTS
 
-Vikunja formatting rules:
-- Task descriptions use HTML (e.g. <h2>, <ul>, <pre>, <code>)
-- Task comments use plain text only
-
-CRITICAL: vikunja_task_create does NOT support the description parameter — it is silently ignored. Always use a two-step pattern:
-  Step A: vikunja_task_create — title, projectId, priority only
-  Step B: vikunja_task_update — set description immediately after (REQUIRED, never skip)
-An empty or missing description after creation is not acceptable.
+bd notes:
+- Descriptions, acceptance, and notes are plain text / markdown (no HTML).
+- Priority is inverted vs Vikunja: `-p 0..4`, 0 = highest. 0=Urgent 1=High 2=Medium (default) 3=Low 4=Trivial.
 
 Steps:
-1. List available projects with vikunja_projects_list
-2. Determine the appropriate project based on:
-   - Current working directory/repo context
-   - Project naming conventions (ansible -> ANS-, statsboard-back -> STAB-, etc.)
-   - If uncertain, ask user to select from project list
-3. List available labels with vikunja_labels_list
-4. Draft the HTML description BEFORE making any API call:
-   - Use HTML format: <h2>Context</h2>, <h2>Why</h2>, <h2>Acceptance Criteria</h2>, <ul>, <li>, <code>, <pre>
-   - Include: what the task is, why it's needed, how to verify it's done
-   - Minimum: a <p> paragraph explaining the task
-5. Create task with vikunja_task_create:
-   - title: Descriptive title (prefix added automatically by webhook)
-   - priority: Infer from urgency (default: Medium = 2)
-   - projectId: Selected project
-   - DO NOT pass description here — it will be silently ignored
-6. Immediately call vikunja_task_update with the description drafted in step 4
-7. Apply relevant labels with vikunja_labels_bulk_set_on_task
-8. Confirm creation with task ID and link
+1. Confirm bd is initialized here: `bd ready` (or check for a `.beads/` dir). If none, tell the user to run `bd init` first and stop.
+2. Draft the issue BEFORE the create call:
+   - title: descriptive, action-oriented, imperative
+   - description: what the task is, why it's needed, how to verify it's done
+   - acceptance criteria when applicable
+   - priority: infer from urgency using the scale above
+   - labels: bug, feature, enhancement, documentation, etc.
+3. Create it:
+   ```
+   bd create "<title>" \
+     -p <0-4> \
+     -l <comma,separated,labels> \
+     -d "<description>" \
+     --acceptance "<acceptance criteria>"
+   ```
+4. Confirm creation with the returned issue id.
 
 Best practices:
-- Use descriptive, action-oriented titles
-- Include 'Why' and 'How' in description
+- Descriptive, action-oriented titles
+- Include why and how-to-verify in the description
 - Add acceptance criteria when applicable
-- Tag with appropriate labels (bug, feature, enhancement, documentation, etc.)
+- Tag with appropriate labels
