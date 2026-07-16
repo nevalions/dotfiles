@@ -278,3 +278,11 @@ eval "$(zoxide init --cmd cd zsh)"
 # bun
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
+
+# k8s: merge existing kubeconfigs (skip missing so kubectl/k9s don't error)
+kubeconfigs=""
+for f in "$HOME/.kube/config" "$HOME/.kube/vas-tunnel.conf"; do
+  [ -r "$f" ] && kubeconfigs="${kubeconfigs:+$kubeconfigs:}$f"
+done
+[ -n "$kubeconfigs" ] && export KUBECONFIG="$kubeconfigs"
+unset kubeconfigs f
