@@ -85,4 +85,5 @@ bindings = [
   # { key = "End", chars = "\u001bOF" },
   { key = "C", mods = "Control|Shift", action = "Copy" },
   { key = "V", mods = "Control|Shift", action = "Paste" },
+  { key = "Return", mods = "Shift", chars = "\u001B\r" },
 ]
