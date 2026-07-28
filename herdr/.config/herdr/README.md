@@ -215,21 +215,23 @@ as part of its command. None of them start an agent or an editor.
 - **back/front** — one product with two halves: tabs `code`, `run`, `cli`, each
   split into two vertical panes. `code` and `cli` are bare shells; `run` starts
   the backend and the dev server. `news-lo`, `news-spb`, `news-writer`,
-  `statsboard`, `stills-bank`. The halves are separate repos under `~/code` for
-  `news-*`, subdirectories of one checkout for `statsboard`, and for
-  `stills-bank` the repo root against `app/ui` — the htmx UI its own FastAPI
-  app serves — so `run/front` is `uvicorn --reload` where the others run a
-  frontend dev server. The layout is identical either way.
+  `statsboard`. The halves are separate repos under `~/code` for `news-*` and
+  subdirectories of one checkout for `statsboard` — the layout is identical
+  either way.
 - **tab-per-project** — a family of independent apps: the tab is the app, the
   panes are `code` and `run`. `portals` (Astro sites, no backend at all) and
   `scrimmage-line` (engine, UI, trainer). The four streaming repos started here
   and moved out to one project each — `stream-cms`, `stream-ui`, `uploader`,
   `stream-controller` — once it was clear you work on one of them at a time.
 
-**A pane per half, only when there are two halves.** The Go services carry a
-frontend but `go:embed` it into the same binary, so there is no second process
-to face the server and no second command to type: `stream-cms`, `stream-ui`,
-`uploader` and `stream-controller` are one pane per tab. `kube-lvl47` fits no
+**A pane per half, only when there are two halves.** The test is whether the
+half runs a process of its own, not whether it has its own directory. The Go
+services carry a frontend but `go:embed` it into the same binary, and
+`stills-bank` serves its htmx UI from the same FastAPI app — neither has a
+second process to face the server or a second command to type, so `stream-cms`,
+`stream-ui`, `uploader`, `stream-controller` and `stills-bank` are one pane per
+tab. `news-writer/frontend` has no `AGENTS.md` of its own but does run its own
+Vite server, so it stays a half. `kube-lvl47` fits no
 shape at all — nothing runs locally, so it is a repo shell, two `flux --watch`
 panes and `k9s`.
 

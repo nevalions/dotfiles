@@ -1,72 +1,56 @@
 # stills-bank — on-demand workspace for the frame ingest/retrieval service.
 #
-# Same shape as statsboard.toml: three tabs (code, run, cli), each split into
-# two vertical panes, back on the left and front on the right. The halves are
-# not separate repos or subprojects here — the backend is the repo root and the
-# front is app/ui — so only the front pane cd's, herdr-plus panes having no
-# per-pane cwd, only working_dir.
+# One pane per tab, like the Go services and unlike statsboard or news-*. It
+# does have a UI — app/ui is Jinja plus htmx at /ui (dashboard, library, search,
+# admin, persons), static under /ui/static — but the same FastAPI app serves it:
+# no build step, no node_modules, no dev server, no AGENTS.md of its own. A
+# front pane would have been a second shell one `cd app/ui` away from the first.
 #
-# The front half is real but unusual: app/ui is Jinja templates plus htmx
-# served by the same FastAPI app at /ui (dashboard, library, search, admin,
-# persons), static under /ui/static. No build step, no node_modules, no dev
-# server of its own — so where statsboard runs `ng s`, run/front runs the app
-# itself under `uvicorn --reload`, which is what makes template and app.js
-# edits show up on save. Verified: /ui/, /ui/library, /ui/search and /ui/admin
-# all render from http://localhost:8010.
+# run is `scripts/up.sh`: it checks .env, generates the nginx cert if missing,
+# builds any missing image, runs `alembic upgrade head`, then `compose up -d`
+# and exits — the stack stays up in docker and the pane returns to a prompt.
+# That prompt is where the other two run modes go, neither of which belongs on
+# workspace open:
 #
-# Port 8010 rather than the container's 8000, because 8000 is news-lo's backend
-# (news-backend/deploy/sites/lo/.env, NEWS_PORT) and uvicorn refuses to bind a
-# taken port — the pane would die whenever that workspace was open. See
-# ~/code/PORTS.md.
+#   docker compose logs -f stills-api stills-worker      # watch the stack
+#   uv run uvicorn app.api.main:create_app --factory --reload --port 8010
 #
-# run/back is scripts/up.sh: it checks .env, generates the nginx cert if
-# missing, builds any missing image, runs `alembic upgrade head`, then
-# `compose up -d` and exits back to a prompt — the stack keeps running in
-# docker, so the pane is free for `docker compose logs -f stills-api
-# stills-worker` when you want to watch it.
+# The second is the UI loop. Templates and app.js are baked into the stills-api
+# image, so through compose every edit costs a rebuild, while --reload picks
+# them up on save. Verified: /ui/, /ui/library, /ui/search and /ui/admin all
+# render from http://localhost:8010. Port 8010 rather than the container's 8000
+# because 8000 is news-lo's backend (news-backend/deploy/sites/lo/.env,
+# NEWS_PORT) and uvicorn refuses to bind a taken port — see ~/code/PORTS.md.
 #
-# The two halves are independent: back is the deployed shape (nginx on 80/443,
-# stills-api internal-only, https://stills.lan/ui/ and /docs), front is the
-# same code on 8010 without docker. Either runs without the other. Both read
-# .env, whose DATABASE_URL points at the deployed database — this is a
-# live-data UI, not a sandbox, so treat the admin pages as production. The
-# compose postgres is profile "dev" and off by default; `docker compose
-# --profile dev up` in the cli pane is the offline path.
+# Both modes read .env, whose DATABASE_URL points at the deployed database —
+# this is a live-data UI, not a sandbox, so treat the admin pages as
+# production. The compose postgres is profile "dev" and off by default;
+# `docker compose --profile dev up` is the offline path.
+#
+# nginx is the only service publishing ports (80 and 443 on the host);
+# stills-api is internal-only to compose. The stack answers at
+# https://stills.lan — /ui/ for the UI, /docs for Swagger, /api/v1 with the
+# STILLS_API_TOKEN bearer. The cert is self-signed by docker/nginx/gen-cert.sh
+# and stills.lan has to resolve locally, so a fresh machine needs an /etc/hosts
+# entry first. Stop the stack with the Stop Local Stacks quick action — closing
+# the workspace does not.
 
 name = "stills-bank"
-description = "stills-bank — code, run, cli; service and its ui side by side"
+description = "stills-bank — code, run, cli; one pane each, api and ui in one app"
 working_dir = "~/code/stills-bank"
 
 [[tabs]]
 name = "code"
 
 [[tabs.panes]]
-label = "back"
-
-[[tabs.panes]]
-label = "front"
-command = "cd app/ui"
-split = "right"
 
 [[tabs]]
 name = "run"
 
 [[tabs.panes]]
-label = "back"
 command = "./scripts/up.sh"
-
-[[tabs.panes]]
-label = "front"
-command = "uv run uvicorn app.api.main:create_app --factory --reload --port 8010"
-split = "right"
 
 [[tabs]]
 name = "cli"
 
 [[tabs.panes]]
-label = "back"
-
-[[tabs.panes]]
-label = "front"
-command = "cd app/ui"
-split = "right"
