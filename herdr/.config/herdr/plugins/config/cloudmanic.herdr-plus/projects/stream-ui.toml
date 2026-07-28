@@ -10,10 +10,10 @@
 # command to type, not something to fire on every workspace open.
 #
 # LISTEN_ADDR moves it to :8081. Both this and stream-cms default to :8080, and
-# cms has the claim — see ~/code/PORTS.md. The dashboard starts without
-# REDIS_ADDR, MEDIAMTX_API_URL or a kubeconfig-reachable streaming namespace,
-# but its tabs stay empty until it can reach them; set them in the pane when you
-# need real data.
+# cms has the claim — see kube-lvl47/docs/operations/local-dev-ports.md. The
+# dashboard starts without REDIS_ADDR, MEDIAMTX_API_URL or a kubeconfig-
+# reachable streaming namespace, but its tabs stay empty until it can reach
+# them; set them in the pane when you need real data.
 
 name = "stream-ui"
 description = "stream-ui — code, run, cli; one pane each, API and SPA in one binary"

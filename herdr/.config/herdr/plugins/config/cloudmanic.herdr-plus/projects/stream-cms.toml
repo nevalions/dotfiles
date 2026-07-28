@@ -13,8 +13,9 @@
 # The postgres from the README's local recipe is folded into the run pane the
 # way statsboard.toml folds redis, herdr-plus having no setup hook. The
 # container is named and reused rather than --rm, so a restart keeps whatever
-# schedule you were testing against. Listens on :8080 — see ~/code/PORTS.md;
-# PUBLIC_BASE_URL has to match it for absolute OG URLs to resolve.
+# schedule you were testing against. Listens on :8080 — see
+# kube-lvl47/docs/operations/local-dev-ports.md; PUBLIC_BASE_URL has to match it
+# for absolute OG URLs to resolve.
 #
 # Deploys live in kube-lvl47, not here.
 

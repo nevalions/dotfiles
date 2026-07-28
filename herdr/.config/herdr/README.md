@@ -241,9 +241,12 @@ pane and renames the pane with it. Where the tab is the role (`code`, `run`,
 label, the tab name already being the whole story. Where the tab is the repo
 (`portals`, `scrimmage-line`) the label names the role instead.
 
-**Dev ports are tracked in `~/code/PORTS.md`.** Several workspaces are usually
-open at once, and a taken port either kills the pane (uvicorn, Go) or silently
-moves (Vite, Astro). Pin new ones there before adding a project.
+**Dev ports are tracked in the kube-lvl47 repo**, at
+`docs/operations/local-dev-ports.md` — the workstation half of the apps that
+repo deploys, and the nearest version-controlled home for it. Several
+workspaces are usually open at once, and a taken port either kills the pane
+(uvicorn, Go) or silently moves (Vite, Astro). Pin new ones there before adding
+a project.
 
 **Two plugins answer `worktree.created`.** workspace-manager applies layouts from
 its `config.yml`, and herdr-plus would apply layouts from its own `worktrees/`
