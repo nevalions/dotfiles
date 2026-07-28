@@ -3,7 +3,39 @@
 [Herdr](https://herdr.dev) — terminal workspace manager for AI coding agents.
 Server/client split: a headless server owns the panes, clients attach to it.
 
-## Install
+## Install herdr
+
+Not in the Arch repos, and no package manager owns it: herdr is a single static
+binary that lands in `~/.local/bin/herdr`. Two routes to the same release asset.
+
+```bash
+# Upstream one-liner. Resolves the platform asset from a manifest and moves it
+# into $HERDR_INSTALL_DIR (default ~/.local/bin), then chmod +x.
+curl -fsSL https://herdr.dev/install.sh | sh
+
+# Or by hand — same asset, no remote script in the shell.
+curl -fsSL -o ~/.local/bin/herdr \
+  https://github.com/ogulcancelik/herdr/releases/latest/download/herdr-linux-x86_64
+chmod +x ~/.local/bin/herdr
+```
+
+Also packaged as `brew install herdr` and `mise use -g herdr`.
+
+Neither route verifies what it downloaded: upstream ships no checksum or
+signature beside these binaries, so there is nothing to check against. The
+by-hand form at least keeps a remote script out of the shell and names the exact
+asset. Worth knowing that the plugins are stricter than the app here — each one
+verifies a SHA-256 from its own release before installing.
+
+Upgrades come from herdr itself, no reinstall:
+
+```bash
+herdr update                # fetch and install the latest
+herdr update --handoff      # and hand the live session over to the new binary
+herdr --version
+```
+
+## Install this config
 
 ```bash
 cd ~/dotfiles && stow herdr
