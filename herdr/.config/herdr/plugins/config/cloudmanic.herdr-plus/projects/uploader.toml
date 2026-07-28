@@ -1,41 +1,32 @@
 # uploader — on-demand workspace for the portal-media upload UI.
 #
-# Split out of the old stream.toml. Like the other two it has both halves — a Go
-# server and internal/server/templates/index.html, the Authelia-protected page
-# that turns a camera master into a published portal video — so code and cli
-# split back (repo root) against front (the template).
+# Split out of the old stream.toml, so this repo now has a workspace of its own.
 #
-# There is no run tab. uploader needs S3 credentials, a Forgejo token and a job
-# namespace before it does anything, and it drives encoder Jobs in the cluster,
-# so nothing here starts locally: `go build ./...` and `go test ./...` are what
-# the back pane is for. Deploys live in kube-lvl47, and the encoder it launches
-# lives in the portals repo (scripts/, portal-media-encoder).
+# One pane per tab, as in stream-cms.toml and stream-ui.toml. It has a frontend
+# half — internal/server/templates/index.html, the Authelia-protected page that
+# turns a camera master into a published portal video — but it is go:embed'ed
+# into the same binary, so there is nothing to run opposite the server and
+# nothing for a second shell to own.
 #
-# code and cli hold the same two shells, as they do for news-lo — code is where
+# There is no run tab at all. uploader needs S3 credentials, a Forgejo token and
+# a job namespace before it does anything, and it drives encoder Jobs in the
+# cluster, so nothing here starts locally: `go build ./...` and `go test ./...`
+# are what the pane is for. Deploys live in kube-lvl47, and the encoder it
+# launches lives in the portals repo (scripts/, portal-media-encoder).
+#
+# code and cli are the same shell twice, as they are for news-lo — code is where
 # an editor or agent goes, cli is where commands go.
 
 name = "uploader"
-description = "uploader — code and cli; Go server and its template side by side"
+description = "uploader — code and cli; one pane each, nothing runs locally"
 working_dir = "~/code/uploader"
 
 [[tabs]]
 name = "code"
 
 [[tabs.panes]]
-label = "back"
-
-[[tabs.panes]]
-label = "front"
-command = "cd internal/server/templates"
-split = "right"
 
 [[tabs]]
 name = "cli"
 
 [[tabs.panes]]
-label = "back"
-
-[[tabs.panes]]
-label = "front"
-command = "cd internal/server/templates"
-split = "right"

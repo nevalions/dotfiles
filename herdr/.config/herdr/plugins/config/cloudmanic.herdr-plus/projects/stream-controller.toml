@@ -20,4 +20,3 @@ working_dir = "~/code/stream-controller"
 name = "code"
 
 [[tabs.panes]]
-label = "back"

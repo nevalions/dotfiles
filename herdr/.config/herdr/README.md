@@ -222,14 +222,22 @@ as part of its command. None of them start an agent or an editor.
   frontend dev server. The layout is identical either way.
 - **tab-per-project** — a family of independent apps: the tab is the app, the
   panes are `code` and `run`. `portals` (Astro sites, no backend at all) and
-  `scrimmage-line` (engine, UI, trainer). It only fits when the members have
-  nothing to split: the four streaming repos started here and moved out to
-  `stream-cms`, `stream-ui`, `uploader` and `stream-controller`, because the
-  first three are each a Go server *plus* a `go:embed`ded frontend and a single
-  tab had nowhere to put the second half.
+  `scrimmage-line` (engine, UI, trainer). The four streaming repos started here
+  and moved out to one project each — `stream-cms`, `stream-ui`, `uploader`,
+  `stream-controller` — once it was clear you work on one of them at a time.
 
-`kube-lvl47` fits neither — nothing runs locally, so it is a repo shell, two
-`flux --watch` panes and `k9s`.
+**A pane per half, only when there are two halves.** The Go services carry a
+frontend but `go:embed` it into the same binary, so there is no second process
+to face the server and no second command to type: `stream-cms`, `stream-ui`,
+`uploader` and `stream-controller` are one pane per tab. `kube-lvl47` fits no
+shape at all — nothing runs locally, so it is a repo shell, two `flux --watch`
+panes and `k9s`.
+
+**Pane labels follow the tab.** herdr-plus takes an undocumented `label` per
+pane and renames the pane with it. Where the tab is the role (`code`, `run`,
+`cli`) the label names the half — `back`, `front` — so a lone pane gets no
+label, the tab name already being the whole story. Where the tab is the repo
+(`portals`, `scrimmage-line`) the label names the role instead.
 
 **Dev ports are tracked in `~/code/PORTS.md`.** Several workspaces are usually
 open at once, and a taken port either kills the pane (uvicorn, Go) or silently

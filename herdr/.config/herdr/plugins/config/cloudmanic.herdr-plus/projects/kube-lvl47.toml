@@ -25,7 +25,6 @@ working_dir = "~/code/kube-lvl47"
 name = "code"
 
 [[tabs.panes]]
-label = "repo"
 
 [[tabs]]
 name = "flux"
@@ -43,5 +42,4 @@ split = "right"
 name = "k9s"
 
 [[tabs.panes]]
-label = "k9s"
 command = "k9s"

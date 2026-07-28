@@ -1,15 +1,13 @@
 # stream-ui — on-demand workspace for the streaming namespace admin dashboard.
 #
-# Split out of the old stream.toml for the same reason as stream-cms: it is a Go
-# API *and* a single-page frontend — static/index.html, app.js, watch.html,
-# watch.js — so back and front each need a pane. code and cli split the repo
-# root against static/.
+# Split out of the old stream.toml, so this repo now has a workspace of its own.
 #
-# run is one pane: static/ is compiled in with go:embed, so the frontend has no
-# server of its own and an asset edit is picked up by restarting this pane.
-# `node --test --watch tests/js/*.test.js` is the closest thing to a frontend
-# loop, but it is a command to type in the front pane, not something to fire on
-# every workspace open.
+# One pane per tab, as in stream-cms.toml. The single-page frontend —
+# static/index.html, app.js, watch.html, watch.js — is compiled in with
+# go:embed, so it has no server of its own to face the API across a split, and
+# an asset edit is picked up by restarting the one pane. `node --test --watch
+# tests/js/*.test.js` is the closest thing to a frontend loop, but it is a
+# command to type, not something to fire on every workspace open.
 #
 # LISTEN_ADDR moves it to :8081. Both this and stream-cms default to :8080, and
 # cms has the claim — see ~/code/PORTS.md. The dashboard starts without
@@ -18,34 +16,21 @@
 # need real data.
 
 name = "stream-ui"
-description = "stream-ui — code, run, cli; Go API and its SPA side by side"
+description = "stream-ui — code, run, cli; one pane each, API and SPA in one binary"
 working_dir = "~/code/stream-ui"
 
 [[tabs]]
 name = "code"
 
 [[tabs.panes]]
-label = "back"
-
-[[tabs.panes]]
-label = "front"
-command = "cd static"
-split = "right"
 
 [[tabs]]
 name = "run"
 
 [[tabs.panes]]
-label = "back"
 command = "LISTEN_ADDR=:8081 go run ."
 
 [[tabs]]
 name = "cli"
 
 [[tabs.panes]]
-label = "back"
-
-[[tabs.panes]]
-label = "front"
-command = "cd static"
-split = "right"
