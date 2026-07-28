@@ -114,7 +114,7 @@ every `Ctrl+a`.
 | `prefix r` | reviewr diff sidebar (toggle) |
 | `prefix f` | file viewer, split beside the pane |
 | `prefix Alt+f` | file viewer, own tab |
-| `prefix Up` | herdr-plus: projects picker (`news-backend`, `-spb`, `news-frontend`, `statsboard`) |
+| `prefix Up` | herdr-plus: projects picker (`news-lo`, `news-spb`, `statsboard`) |
 | `prefix Down` | herdr-plus: quick actions |
 | `prefix Shift+l` | apply workspace layout (plugin binding) |
 
@@ -207,6 +207,15 @@ prebuilt fallback that `scripts/build.sh` does not actually implement.
 `prefix Up` / `prefix Down` pickers run as plugin actions, the managed dir is
 the one that counts. `projects/` is stowed from this repo; `worktrees/` is
 deliberately left empty — see below.
+
+**Every project uses the same three tabs** — `code`, `run`, `cli` — each split
+into two vertical panes, `back` on the left and `front` on the right. Panes have
+no per-pane cwd in herdr-plus, only the project-level `working_dir`, so each
+pane `cd`s into its own half as part of its command. `code` and `cli` are bare
+shells; `run` starts the backend and the dev server. None of them start an
+agent or an editor. For `news-*` the two halves are separate repos under
+`~/code`, for `statsboard` they are subdirectories of one checkout — the layout
+is identical either way.
 
 **Two plugins answer `worktree.created`.** workspace-manager applies layouts from
 its `config.yml`, and herdr-plus would apply layouts from its own `worktrees/`

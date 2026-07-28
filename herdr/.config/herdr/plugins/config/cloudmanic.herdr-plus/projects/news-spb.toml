@@ -1,0 +1,45 @@
+# news, spb environment — identical to news-lo.toml but for the site argument
+# in the run tab. See that file for why the layout is shaped this way.
+#
+# Kept as a separate file rather than a variant: herdr-plus resolves one
+# template per file, so an environment split is a second file.
+
+name = "news-spb"
+description = "news, spb environment — code, run, cli; backend and frontend side by side"
+working_dir = "~/code"
+
+[[tabs]]
+name = "code"
+
+[[tabs.panes]]
+label = "back"
+command = "cd news-backend"
+
+[[tabs.panes]]
+label = "front"
+command = "cd news-frontend"
+split = "right"
+
+[[tabs]]
+name = "run"
+
+[[tabs.panes]]
+label = "back"
+command = "cd news-backend && ./scripts/dev-infra.sh && ./scripts/run-dev.sh spb"
+
+[[tabs.panes]]
+label = "front"
+command = "cd news-frontend && npm run dev:spb"
+split = "right"
+
+[[tabs]]
+name = "cli"
+
+[[tabs.panes]]
+label = "back"
+command = "cd news-backend"
+
+[[tabs.panes]]
+label = "front"
+command = "cd news-frontend"
+split = "right"
