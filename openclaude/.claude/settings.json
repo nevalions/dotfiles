@@ -16,32 +16,6 @@
     "defaultMode": "auto"
   },
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-check-update.js\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"/home/linroot/.claude/hooks/gsd-session-state.sh\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.claude/hooks/context-mode-cache-heal.mjs\""
-          }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "Bash|Edit|Write|MultiEdit|Agent|Task",
@@ -126,6 +100,42 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-check-update.js\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"/home/linroot/.claude/hooks/gsd-session-state.sh\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/home/linroot/.claude/hooks/context-mode-cache-heal.mjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '/home/linroot/.claude/hooks/herdr-agent-state.sh' session",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   },
   "statusLine": {
@@ -133,13 +143,13 @@
     "command": "bash ~/.claude/statusline-command.sh"
   },
   "enabledPlugins": {
-    "superpowers@claude-plugins-official": true,
     "beads@beads-marketplace": true,
-    "skill-creator@claude-plugins-official": true,
-    "context-mode@context-mode": true,
+    "clangd-lsp@claude-plugins-official": true,
     "claude-mem@thedotmack": true,
+    "context-mode@context-mode": true,
     "frontend-design@claude-plugins-official": true,
-    "clangd-lsp@claude-plugins-official": true
+    "skill-creator@claude-plugins-official": true,
+    "superpowers@claude-plugins-official": true
   },
   "extraKnownMarketplaces": {
     "beads-marketplace": {
