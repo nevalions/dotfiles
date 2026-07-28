@@ -72,7 +72,7 @@ git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-$
 | **K9s** | Kubernetes cluster management UI | `k9s/` |
 | **Atuin** | Shell history management | `atuin/` |
 | **Tmuxinator** | Project templating system | `tmuxinator/` |
-| **Herdr** | Terminal workspace manager for AI coding agents | `herdr/` |
+| **Herdr** | Terminal workspace manager for AI coding agents, with declarative project layouts | `herdr/` |
 
 ## Key Features
 

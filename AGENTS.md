@@ -21,6 +21,8 @@
 - `herdr config check` - Validate `config.toml`
 - `herdr server reload-config` - Apply config changes without restarting the server
 - `herdr --default-config` - Print the full option reference
+- `herdr plugin action invoke validate --plugin herdr-plugin-workspace-manager` - Validate project layouts
+- `herdr plugin log list --plugin herdr-plugin-workspace-manager --limit 1` - Read plugin action output (actions are async)
 
 ## Code Style Guidelines
 

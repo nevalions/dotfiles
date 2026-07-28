@@ -34,9 +34,11 @@ version_check = true
 manifest_check = true
 
 [keys]
-# tmux uses ctrl+a (see tmux/.config/tmux/tmux.conf), so herdr keeps ctrl+b —
-# both multiplexers stay usable when nested.
-prefix = "ctrl+b"
+# Same prefix as tmux (tmux/.config/tmux/tmux.conf sets `set -g prefix ^A`).
+# Note: herdr has no send-prefix binding, so ctrl+a no longer reaches the shell
+# as readline beginning-of-line inside a herdr pane — use Home instead.
+# Don't nest herdr and tmux with this prefix; the outer one eats every ctrl+a.
+prefix = "ctrl+a"
 
 # --- session ---------------------------------------------------------------
 help = "prefix+?"
@@ -50,8 +52,11 @@ goto = "prefix+g"
 new_workspace = "prefix+shift+n"
 rename_workspace = "prefix+shift+w"
 close_workspace = "prefix+shift+d"
-previous_workspace = "prefix+shift+h"
-next_workspace = "prefix+shift+l"
+# prefix+shift+h/j/k/l are herdr's built-in swap_pane_* — keep them, and put
+# workspace cycling on direct ctrl+alt chords (the one modifier family no
+# terminal or desktop environment claims, per herdr's keyboard docs).
+previous_workspace = "ctrl+alt+p"
+next_workspace = "ctrl+alt+n"
 switch_workspace = "prefix+shift+1..9"
 
 # --- git worktrees ---------------------------------------------------------
@@ -79,6 +84,15 @@ resize_mode = "prefix+r"
 edit_scrollback = "prefix+e"
 cycle_pane_next = "prefix+tab"
 cycle_pane_previous = "prefix+shift+tab"
+# Copy mode: hjkl / w b e / { } / ctrl+u ctrl+d to move, / and ? to search,
+# v or Space to select, y or Enter to copy, q or Esc to leave.
+copy_mode = "prefix+["
+# Moved off the built-in prefix+shift+hjkl: herdr-plugin-workspace-manager's
+# manifest binds prefix+shift+l to its "apply layout" action.
+swap_pane_left = "ctrl+alt+h"
+swap_pane_down = "ctrl+alt+j"
+swap_pane_up = "ctrl+alt+k"
+swap_pane_right = "ctrl+alt+l"
 
 # --- agents ----------------------------------------------------------------
 previous_agent = "prefix+comma"

@@ -1,0 +1,179 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/razajamil/herdr-plugin-workspace-manager/main/schema.json
+#
+# herdr-plugin-workspace-manager — declarative tab/pane layouts.
+# The herdr answer to tmuxinator project files (../../../../tmuxinator/).
+#
+# Applied automatically when a linked git worktree is created for a mapped repo.
+# The repo's own main checkout is never touched. To apply by hand:
+#   herdr plugin action invoke apply --plugin herdr-plugin-workspace-manager
+#   (or prefix+shift+l inside herdr — that rebuilds the first tab, so don't run
+#    it against a workspace with live work in tab 1)
+#
+# Validate after edits:
+#   herdr plugin action invoke validate --plugin herdr-plugin-workspace-manager
+#
+# split: vertical = side by side (default), horizontal = stacked.
+# size: 40 (cells) | "60%" | 0.6. Commands run in your interactive login shell,
+# so zsh aliases (`v`) and venv activation work the same as in tmuxinator.
+
+layouts:
+  # --- news-backend ---------------------------------------------------------
+  # tmuxinator equivalent: news-backend-lo.yml
+  - id: news-backend
+    tabs:
+      - title: code
+        panes:
+          - title: agent
+            agent: claude
+            agentName: news-backend
+          - title: editor
+            command: v
+            split: vertical
+            size: "60%"
+      - title: server
+        panes:
+          - title: infra
+            command: ./scripts/dev-infra.sh
+          - title: dev
+            command: ./scripts/run-dev.sh lo
+            split: horizontal
+      - title: git
+        panes:
+          - title: lazygit
+            command: lazygit
+            persist: false
+
+  # tmuxinator equivalent: news-backend-spb.yml — same shape, spb environment.
+  - id: news-backend-spb
+    tabs:
+      - title: code
+        panes:
+          - title: agent
+            agent: claude
+            agentName: news-backend-spb
+          - title: editor
+            command: v
+            split: vertical
+            size: "60%"
+      - title: server
+        panes:
+          - title: infra
+            command: ./scripts/dev-infra.sh
+          - title: dev
+            command: ./scripts/run-dev.sh spb
+            split: horizontal
+
+  # --- news-frontend --------------------------------------------------------
+  # tmuxinator equivalent: news-frontend-lo.yml
+  - id: news-frontend
+    tabs:
+      - title: code
+        panes:
+          - title: agent
+            agent: claude
+            agentName: news-frontend
+          - title: editor
+            command: v
+            split: vertical
+            size: "60%"
+      - title: server
+        panes:
+          - title: dev
+            command: npm run dev:lo
+          - title: shell
+            split: horizontal
+            size: 12
+      - title: git
+        panes:
+          - title: lazygit
+            command: lazygit
+            persist: false
+
+  # --- statsboard -----------------------------------------------------------
+  # tmuxinator equivalent: stats-tmx-backend.yml / stats-run-dev.yml.
+  # Redis backs play-detection state (src/match_videos/play_detection.py);
+  # tmuxinator did this in on_project_start, here it is the layout setup step.
+  - id: statsboard
+    setup:
+      command: "docker start statsboards-redis 2>/dev/null || docker run -d --name statsboards-redis -p 6379:6379 redis:7-alpine"
+      blocking: true
+    tabs:
+      - title: code
+        panes:
+          - title: agent
+            agent: claude
+            agentName: statsboard
+            setup: true
+          - title: editor
+            command: v
+            split: vertical
+            size: "60%"
+      - title: backend
+        panes:
+          - title: api
+            command: cd statsboards-backend && . ./venv/bin/activate && python -m src.runserver
+          - title: shell
+            command: cd statsboards-backend && . ./venv/bin/activate
+            split: horizontal
+            size: 12
+      - title: frontend
+        panes:
+          - title: ng
+            command: cd statsboards-frontend && ng s
+
+  # --- trimmed variants -----------------------------------------------------
+  # For short-lived branches: agent + editor, no servers, no docker.
+  - id: hotfix
+    tabs:
+      - title: code
+        panes:
+          - title: agent
+            agent: claude
+          - title: editor
+            command: v
+            split: vertical
+
+  # For docs/ branches: editor and a shell.
+  - id: docs
+    tabs:
+      - title: docs
+        panes:
+          - title: editor
+            command: v
+          - title: shell
+            split: vertical
+
+# ---------------------------------------------------------------------------
+# Map repos to layouts. `repo` is the main checkout path; every linked worktree
+# of it gets the layout. layoutMatching routes by branch name, first match wins,
+# and follows the branch prefixes in ~/.claude/CLAUDE.md.
+workspaces:
+  - repo: ~/code/news-backend
+    defaultLayout: news-backend
+    layoutMatching:
+      - title: Bugfix and hotfix branches
+        worktreePattern: "{bugfix,hotfix}/*"
+        layout: hotfix
+      - title: Docs branches
+        worktreePattern: docs/*
+        layout: docs
+
+  - repo: ~/code/news-frontend
+    defaultLayout: news-frontend
+    layoutMatching:
+      - title: Bugfix and hotfix branches
+        worktreePattern: "{bugfix,hotfix}/*"
+        layout: hotfix
+      - title: Docs branches
+        worktreePattern: docs/*
+        layout: docs
+
+  - repo: ~/code/statsboard
+    defaultLayout: statsboard
+    layoutMatching:
+      - title: Bugfix and hotfix branches
+        worktreePattern: "{bugfix,hotfix}/*"
+        layout: hotfix
+      - title: Docs branches
+        worktreePattern: docs/*
+        layout: docs
