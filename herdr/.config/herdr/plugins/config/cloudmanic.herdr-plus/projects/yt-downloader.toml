@@ -1,0 +1,40 @@
+# yt-downloader — on-demand workspace for the download service.
+#
+# One pane per tab, like stills-bank and the Go services. app/templates
+# (index.html, admin.html) and app/static are served by the same FastAPI app
+# that owns the API, with no build step and no dev server of their own, so
+# there is no second half to face across a split.
+#
+# run is the README's local recipe with the port changed: uvicorn --reload
+# against the checkout's own downloads.db, so nothing here touches the deployed
+# instance (kube-lvl47/yt-downloader).
+#
+# Port 8011, not the 8000 the app defaults to. 8000 is news-lo's backend, and
+# uvicorn refuses to bind a taken port — see
+# kube-lvl47/docs/operations/local-dev-ports.md. Note the compose file hardcodes
+# "8000:8000", so `docker compose up` here collides with news-lo no matter what
+# this pane does; the local uvicorn is the way to run it while that workspace is
+# open.
+#
+# No compose pane: the stack is one app container plus volumes, and running it
+# in docker only adds a build between an edit and seeing it.
+
+name = "yt-downloader"
+description = "yt-downloader — code, run, cli; one pane each, api and ui in one app"
+working_dir = "~/code/yt-downloader"
+
+[[tabs]]
+name = "code"
+
+[[tabs.panes]]
+
+[[tabs]]
+name = "run"
+
+[[tabs.panes]]
+command = "uv run uvicorn app.main:app --reload --port 8011"
+
+[[tabs]]
+name = "cli"
+
+[[tabs.panes]]

@@ -1,0 +1,34 @@
+# lenobl-announces — on-demand workspace for the lenobl.ru announcement watcher.
+#
+# code and cli, one pane each, and deliberately no run tab — the uploader shape,
+# for a sharper reason than uploader's missing credentials.
+#
+# `uv run python -m app bot` ends in app.run_polling(): Telegram long polling.
+# The deployed instance (kube-lvl47/lenobl-announces) is already polling, and
+# two getUpdates consumers on one token do not coexist — Telegram answers one of
+# them with "Conflict: terminated by other getUpdates request", and whichever
+# wins steals updates from the other. Starting it on workspace open would take
+# production offline for as long as the pane is up.
+#
+# `uv run python -m app check` is the one-shot path, but it is not a dry run
+# either: a new announcement means a real Telegram notification to real
+# subscribers. Both are commands to type deliberately, in the cli pane, against
+# a test token — which is why neither is wired to a pane.
+#
+# State is sqlite under data/, so a local run also writes the seen-announcement
+# history it shares nothing with. `uv run python -m pytest tests/ -v` is the
+# safe loop.
+
+name = "lenobl-announces"
+description = "lenobl-announces — code and cli; polling bot, never started on open"
+working_dir = "~/code/lenobl-announces"
+
+[[tabs]]
+name = "code"
+
+[[tabs.panes]]
+
+[[tabs]]
+name = "cli"
+
+[[tabs.panes]]

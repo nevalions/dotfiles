@@ -1,0 +1,35 @@
+# vidarh — on-demand workspace for the shoot-folder video archiver.
+#
+# One pane per tab, and for a plainer reason than the other single-pane
+# projects: vidarh is a PySide6 desktop app, one process with no client/server
+# split to make. `uv run vidarh` opens the window; there is no port, no
+# container and nothing else to put beside it.
+#
+# run holds the app because it is a GUI — the pane keeps its stdout and
+# tracebacks while the window is up, which is where PySide6 failures surface.
+# Quitting the window frees the pane.
+#
+# cli is where the rest lives: `uv run pytest` and `uv run pyinstaller
+# vidarh.spec`, the Windows build (see build/ and vidarh.spec). Neither should
+# fire on workspace open — pyinstaller in particular writes into build/ and
+# takes minutes.
+
+name = "vidarh"
+description = "vidarh — code, run, cli; one pane each, PySide6 desktop app"
+working_dir = "~/code/vidarh"
+
+[[tabs]]
+name = "code"
+
+[[tabs.panes]]
+
+[[tabs]]
+name = "run"
+
+[[tabs.panes]]
+command = "uv run vidarh"
+
+[[tabs]]
+name = "cli"
+
+[[tabs.panes]]
