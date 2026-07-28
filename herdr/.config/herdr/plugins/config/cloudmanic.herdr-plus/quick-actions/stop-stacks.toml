@@ -1,0 +1,53 @@
+# Stop the docker stacks the `run` tabs leave behind.
+#
+# Closing a workspace kills its panes and nothing else — `compose up -d` and
+# `docker run -d` containers belong to the docker daemon, so they outlive the
+# workspace by hours. stills-bank alone is ~900MB resident across its api,
+# worker and nginx.
+#
+# The work is in ../../../scripts/stop-stacks.sh (stowed from this repo, linked
+# into ~/.config/herdr/scripts/). It uses `stop` rather than `down`, so nothing
+# is destroyed and the next `run` tab starts from a warm container; it skips
+# stacks that are not up; and it reports what it did as a herdr notification,
+# since a quick action runs through `sh -c` with nowhere to print.
+#
+# "Everything" is first because it is the reason this action exists — the
+# per-project entries are for when only one workspace is done with.
+
+name = "Stop Local Stacks"
+description = "Stop the docker containers left running by a project's run tab"
+type = "select"
+command = "$HOME/.config/herdr/scripts/stop-stacks.sh {{.Value}}"
+
+[[options]]
+label = "Everything"
+value = "all"
+description = "every stack below, skipping the ones already down"
+
+[[options]]
+heading = "One project"
+
+[[options]]
+label = "stills-bank"
+value = "stills-bank"
+description = "stills-api, stills-worker, nginx (~900MB)"
+
+[[options]]
+label = "news-writer"
+value = "news-writer"
+description = "postgres (5433), redis (6380)"
+
+[[options]]
+label = "news (lo + spb)"
+value = "news"
+description = "redis 6383 and 6384, both sites"
+
+[[options]]
+label = "statsboard"
+value = "statsboard"
+description = "redis (6379) and the test database"
+
+[[options]]
+label = "stream"
+value = "stream"
+description = "stream-cms throwaway postgres (55432)"
