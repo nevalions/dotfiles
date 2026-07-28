@@ -1,0 +1,62 @@
+# scrimmage-line — on-demand workspace for the virtual-line graphics stack.
+#
+# Three sibling repos, one product: scrimmage-line (C++/CUDA engine),
+# scrimmage-line-ui (React/Vite operator app talking to the engine over the WS
+# contract in src/control/messages.h) and scrimmage-line-trainer (training and
+# ONNX export for DLFieldNet, which the engine loads). Separate checkouts, so
+# the tab is the repo and the panes are code and run — the portals.toml shape.
+# working_dir is ~/code and every pane cd's into its repo.
+#
+# The engine's run pane is a build, not a server: `ninja` in the configured
+# build/ directory, which leaves the pane sitting in build/ where the next
+# command is `./scrimmage-line --in <clip>` with whatever flags that run needs.
+# The tree is already configured (build/build.ninja exists); a fresh clone needs
+# `cmake -G Ninja ..` once before this pane does anything.
+#
+# The trainer's run pane is `uv run pytest` rather than a training command.
+# Training is scripts/train.py with per-run flags and a GPU budget — not
+# something to fire on workspace open — so the pane gives you the suite that
+# gates it and a prompt in the right directory.
+#
+# The UI is pnpm, not npm (pnpm-lock.yaml), and vite serves on :5173 with the
+# /ws proxy pointed at the engine.
+
+name = "scrimmage-line"
+description = "scrimmage-line — engine, ui and trainer; code and run side by side"
+working_dir = "~/code"
+
+[[tabs]]
+name = "engine"
+
+[[tabs.panes]]
+label = "code"
+command = "cd scrimmage-line"
+
+[[tabs.panes]]
+label = "run"
+command = "cd scrimmage-line/build && ninja"
+split = "right"
+
+[[tabs]]
+name = "ui"
+
+[[tabs.panes]]
+label = "code"
+command = "cd scrimmage-line-ui"
+
+[[tabs.panes]]
+label = "run"
+command = "cd scrimmage-line-ui && pnpm dev"
+split = "right"
+
+[[tabs]]
+name = "trainer"
+
+[[tabs.panes]]
+label = "code"
+command = "cd scrimmage-line-trainer"
+
+[[tabs.panes]]
+label = "run"
+command = "cd scrimmage-line-trainer && uv run pytest"
+split = "right"

@@ -1,0 +1,78 @@
+# stream — on-demand workspace for the MediaMTX streaming pipeline.
+#
+# Four repos, one product: stream-cms (scheduler + public pages),
+# stream-controller (reconcile loop that drives the transcoder Deployments),
+# stream-ui (admin dashboard for the streaming namespace) and uploader (raw
+# master to published portal video). They are separate checkouts, so the tab is
+# the repo and the panes are code and run — the portals.toml shape, not the
+# back/front one. working_dir is ~/code and every pane cd's into its repo.
+#
+# Only two of the four are usefully runnable on this machine:
+#
+#   cms  — the README's local recipe, with its throwaway postgres folded into
+#          the run pane the way statsboard.toml folds redis. The container is
+#          named and reused rather than --rm so a restart keeps the schedule.
+#          Listens on :8080; PUBLIC_BASE_URL must match for OG URLs to resolve.
+#   ui   — LISTEN_ADDR moved to :8081 because both binaries default to :8080
+#          and cms has the claim. It starts without REDIS_ADDR, MEDIAMTX_API_URL
+#          or a kubeconfig-reachable streaming namespace, but the tabs stay
+#          empty until it can reach them — set them in the pane when you need
+#          real data.
+#
+# controller and uploader get `go test ./...` as their run pane instead of a
+# server. The controller is an in-cluster reconcile loop with nothing to serve
+# locally, and uploader needs S3 credentials, a Forgejo token and a job
+# namespace before it will do anything — the test suite is the honest local
+# feedback loop for both. Deploys live in kube-lvl47.
+
+name = "stream"
+description = "stream — one tab per pipeline repo; code and run side by side"
+working_dir = "~/code"
+
+[[tabs]]
+name = "cms"
+
+[[tabs.panes]]
+label = "code"
+command = "cd stream-cms"
+
+[[tabs.panes]]
+label = "run"
+command = "docker start stream-cms-pg 2>/dev/null || docker run -d --name stream-cms-pg -p 55432:5432 -e POSTGRES_PASSWORD=pw -e POSTGRES_USER=stream_cms -e POSTGRES_DB=stream_cms postgres:17; cd stream-cms && PGHOST=localhost PGPORT=55432 PGUSER=stream_cms PGPASSWORD=pw PGDATABASE=stream_cms MEDIA_DIR=./media EDGE_HLS_BASE=https://stream.monitoring-v.ru PUBLIC_BASE_URL=http://localhost:8080 go run ./cmd/stream-cms"
+split = "right"
+
+[[tabs]]
+name = "controller"
+
+[[tabs.panes]]
+label = "code"
+command = "cd stream-controller"
+
+[[tabs.panes]]
+label = "run"
+command = "cd stream-controller && go test ./..."
+split = "right"
+
+[[tabs]]
+name = "ui"
+
+[[tabs.panes]]
+label = "code"
+command = "cd stream-ui"
+
+[[tabs.panes]]
+label = "run"
+command = "cd stream-ui && LISTEN_ADDR=:8081 go run ."
+split = "right"
+
+[[tabs]]
+name = "uploader"
+
+[[tabs.panes]]
+label = "code"
+command = "cd uploader"
+
+[[tabs.panes]]
+label = "run"
+command = "cd uploader && go test ./..."
+split = "right"

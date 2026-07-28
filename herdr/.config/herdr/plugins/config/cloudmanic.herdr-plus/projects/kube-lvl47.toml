@@ -1,0 +1,47 @@
+# kube-lvl47 — on-demand workspace for the Flux GitOps cluster repo.
+#
+# Neither the back/front shape (statsboard, news-*) nor the tab-per-project one
+# (portals, stream) fits: there is one repo and nothing to run locally. Pushing
+# to master is the deploy, so the workspace is an editing pane plus the two
+# views you want open while a reconcile lands.
+#
+# code — a shell at the repo root. One pane, not two: the repo is a single tree
+#        of manifests, so a second bare shell would have nothing distinct in it.
+# flux — kustomizations on the left, helmreleases on the right, both --watch.
+#        These are the two things that go Unknown/False after a push, and they
+#        fail independently, which is why they get a pane each rather than one
+#        pane you keep re-running by hand.
+# k9s  — the pods view. Separate tab because it is a full-screen TUI and would
+#        make a split unreadable.
+#
+# All three read the ambient kubeconfig; nothing here changes context, so the
+# panes follow whatever cluster your shell is already pointed at.
+
+name = "kube-lvl47"
+description = "kube-lvl47 — repo shell, flux watches, k9s"
+working_dir = "~/code/kube-lvl47"
+
+[[tabs]]
+name = "code"
+
+[[tabs.panes]]
+label = "repo"
+
+[[tabs]]
+name = "flux"
+
+[[tabs.panes]]
+label = "kustomizations"
+command = "flux get kustomizations --all-namespaces --watch"
+
+[[tabs.panes]]
+label = "helmreleases"
+command = "flux get helmreleases --all-namespaces --watch"
+split = "right"
+
+[[tabs]]
+name = "k9s"
+
+[[tabs.panes]]
+label = "k9s"
+command = "k9s"

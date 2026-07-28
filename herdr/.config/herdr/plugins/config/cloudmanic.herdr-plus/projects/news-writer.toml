@@ -1,0 +1,61 @@
+# news-writer — on-demand workspace for the article pipeline.
+#
+# Same shape as statsboard.toml and news-*.toml: three tabs (code, run, cli),
+# each split into two vertical panes, back on the left and front on the right.
+# The backend is the repo root and the frontend is ./frontend, so only the
+# front pane cd's — herdr-plus panes have no per-pane cwd, only working_dir.
+#
+# dev-stack.sh would start the frontend too, which would leave the front pane
+# with nothing to own. --no-fe stops it after infra + API + Celery workers +
+# beat, and dev-frontend.sh (cd frontend && npm run dev) takes the other pane.
+# The split is what makes either half restartable on its own; ./dev-stack.sh
+# with no flag, in one pane, is the alternative if you'd rather not care.
+#
+# The stack script needs .env (it exits if missing) and owns its own docker
+# containers for postgres and redis, so there is no infra pane and no folded
+# docker start like statsboard needs.
+#
+# Flower is not a pane. It is one command — `uv run celery -A app.celery_app
+# flower --port=5555` — and it belongs in the cli/back pane on the days you
+# want it, not running on every workspace open.
+#
+# No venv activation in the cli tab: the backend runs under `uv run`, same as
+# news-lo.toml.
+
+name = "news-writer"
+description = "news-writer — code, run, cli; backend and frontend side by side"
+working_dir = "~/code/news-writer"
+
+[[tabs]]
+name = "code"
+
+[[tabs.panes]]
+label = "back"
+
+[[tabs.panes]]
+label = "front"
+command = "cd frontend"
+split = "right"
+
+[[tabs]]
+name = "run"
+
+[[tabs.panes]]
+label = "back"
+command = "./dev-stack.sh --no-fe"
+
+[[tabs.panes]]
+label = "front"
+command = "./dev-frontend.sh"
+split = "right"
+
+[[tabs]]
+name = "cli"
+
+[[tabs.panes]]
+label = "back"
+
+[[tabs.panes]]
+label = "front"
+command = "cd frontend"
+split = "right"

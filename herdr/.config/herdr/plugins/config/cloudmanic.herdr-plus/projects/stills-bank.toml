@@ -1,0 +1,58 @@
+# stills-bank — on-demand workspace for the frame ingest/retrieval service.
+#
+# Three tabs (code, run, cli) like the back/front projects, but the panes are
+# not halves of a codebase: stills-bank is one Python service that runs as
+# docker compose (stills-api, stills-worker, nginx), so the split is the app on
+# the left and what it is doing on the right.
+#
+# run/app is scripts/up.sh, which checks .env, generates the nginx cert if
+# missing, builds any image that is absent, runs `alembic upgrade head` and
+# then `compose up -d` — so it exits back to a prompt rather than holding the
+# server. That is why the right pane tails the logs: without it the run tab
+# would go quiet the moment the stack was up.
+#
+# The compose postgres is profile "dev" and off by default — the real database
+# is remote, per docker-compose.yml — so there is no local psql pane and no
+# folded `docker start` like statsboard needs. `docker compose --profile dev up`
+# in the cli pane is the offline path.
+#
+# cli/app is a plain shell for `uv run` commands (alembic, scripts/) and
+# cli/compose is where one-off `docker compose exec|run` lines go.
+
+name = "stills-bank"
+description = "stills-bank — code, run, cli; app and its compose stack side by side"
+working_dir = "~/code/stills-bank"
+
+[[tabs]]
+name = "code"
+
+[[tabs.panes]]
+label = "app"
+
+[[tabs.panes]]
+label = "docs"
+command = "cd docs"
+split = "right"
+
+[[tabs]]
+name = "run"
+
+[[tabs.panes]]
+label = "app"
+command = "./scripts/up.sh"
+
+[[tabs.panes]]
+label = "logs"
+command = "docker compose logs -f stills-api stills-worker"
+split = "right"
+
+[[tabs]]
+name = "cli"
+
+[[tabs.panes]]
+label = "app"
+
+[[tabs.panes]]
+label = "compose"
+command = "docker compose ps"
+split = "right"
