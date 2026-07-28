@@ -1,0 +1,187 @@
+# herdr configuration — ~/.config/herdr/config.toml
+# Terminal workspace manager for AI coding agents.
+# Reference dump of every option: `herdr --default-config`
+# Validate after edits:                `herdr config check`
+# Apply without restarting the server: `herdr server reload-config` (or prefix+shift+r)
+
+# Config here is deliberate, so skip the first-run notification wizard.
+onboarding = false
+
+[theme]
+# Built-in: catppuccin, terminal, tokyo-night, dracula, nord, gruvbox,
+#           one-dark, solarized, kanagawa, rose-pine, vesper
+# Matches tmux (omerxx/catppuccin-tmux), nvim and kitty.
+name = "catppuccin"
+
+# Follow the host terminal's light/dark appearance.
+# auto_switch = false
+# dark_name  = "catppuccin"
+# light_name = "catppuccin-latte"
+
+[terminal]
+# Empty = $SHELL (zsh here), then /bin/sh.
+default_shell = ""
+
+# "auto" | "login" | "non_login" — "auto" only forces login shells on macOS.
+shell_mode = "auto"
+
+# CWD for new panes/tabs/workspaces: "follow" | "home" | "current" | fixed path.
+new_cwd = "follow"
+
+[update]
+channel = "stable"
+version_check = true
+manifest_check = true
+
+[keys]
+# tmux uses ctrl+a (see tmux/.config/tmux/tmux.conf), so herdr keeps ctrl+b —
+# both multiplexers stay usable when nested.
+prefix = "ctrl+b"
+
+# --- session ---------------------------------------------------------------
+help = "prefix+?"
+settings = "prefix+s"
+detach = "prefix+q"
+reload_config = "prefix+shift+r"
+
+# --- workspaces (spaces) ---------------------------------------------------
+workspace_picker = "prefix+w"
+goto = "prefix+g"
+new_workspace = "prefix+shift+n"
+rename_workspace = "prefix+shift+w"
+close_workspace = "prefix+shift+d"
+previous_workspace = "prefix+shift+h"
+next_workspace = "prefix+shift+l"
+switch_workspace = "prefix+shift+1..9"
+
+# --- git worktrees ---------------------------------------------------------
+new_worktree = "prefix+shift+g"
+
+# --- tabs ------------------------------------------------------------------
+new_tab = "prefix+c"
+rename_tab = "prefix+shift+t"
+previous_tab = "prefix+p"
+next_tab = "prefix+n"
+switch_tab = "prefix+1..9"
+close_tab = "prefix+shift+x"
+
+# --- panes (vim motions, same muscle memory as tmux + vim-tmux-navigator) ---
+focus_pane_left = "prefix+h"
+focus_pane_down = "prefix+j"
+focus_pane_up = "prefix+k"
+focus_pane_right = "prefix+l"
+split_vertical = "prefix+v"
+split_horizontal = "prefix+minus"
+close_pane = "prefix+x"
+rename_pane = "prefix+shift+p"
+zoom = "prefix+z"
+resize_mode = "prefix+r"
+edit_scrollback = "prefix+e"
+cycle_pane_next = "prefix+tab"
+cycle_pane_previous = "prefix+shift+tab"
+
+# --- agents ----------------------------------------------------------------
+previous_agent = "prefix+comma"
+next_agent = "prefix+period"
+focus_agent = "prefix+alt+1..9"
+open_notification_target = "prefix+o"
+toggle_sidebar = "prefix+b"
+
+# Navigate-mode movement (active only while the navigate overlay is open).
+navigate_workspace_up = "up"
+navigate_workspace_down = "down"
+navigate_pane_left = "h"
+navigate_pane_down = "j"
+navigate_pane_up = "k"
+navigate_pane_right = "l"
+
+# Custom commands. type = "shell" (detached) | "pane" (temp pane) | "popup" (modal).
+[[keys.command]]
+key = "prefix+alt+g"
+type = "popup"
+command = "lazygit"
+width = "80%"
+height = "80%"
+
+[[keys.command]]
+key = "prefix+alt+k"
+type = "popup"
+command = "k9s"
+width = "90%"
+height = "90%"
+
+[worktrees]
+directory = "~/.herdr/worktrees"
+
+[ui]
+sidebar_width = 26
+sidebar_min_width = 18
+sidebar_max_width = 36
+sidebar_start_collapsed = false
+sidebar_collapsed_mode = "compact"
+
+accent = "#89b4fa" # catppuccin blue
+
+mouse_capture = true
+copy_on_select = true
+mouse_scroll_lines = 3
+
+confirm_close = true
+prompt_new_tab_name = true
+prompt_new_workspace_name = false
+
+pane_borders = true
+pane_gaps = true
+show_agent_labels_on_pane_borders = true
+hide_tab_bar_when_single_tab = true
+
+# "spaces" groups by workspace; "priority" surfaces agents needing attention first.
+agent_panel_sort = "spaces"
+
+[ui.sidebar.agents]
+row_gap = 0
+rows = [["state_icon", "workspace", "tab"], ["agent"]]
+
+[ui.sidebar.agents.rows_by_agent]
+claude = [["state_icon", "workspace", "tab"], ["terminal_title_stripped"], ["agent"]]
+
+[ui.sidebar.spaces]
+row_gap = 0
+rows = [["state_icon", "workspace"], ["branch", "git_status"]]
+
+[ui.toast]
+# off | herdr (in-app toast) | terminal | system (OS notification service)
+delivery = "herdr"
+delay_seconds = 1
+
+[ui.toast.herdr]
+position = "bottom-right"
+
+[ui.toast.clipboard]
+enabled = true
+position = "bottom-center"
+
+[ui.sound]
+# Sound on agent state change in background workspaces.
+enabled = true
+
+[ui.sound.agents]
+droid = "off"
+
+[session]
+# Restore agent panes into their native conversation sessions after a server restart.
+resume_agents_on_restore = true
+
+[remote]
+# Keeps `herdr --remote` alive over the tailnet: herdr wraps ~/.ssh/config and
+# adds ServerAliveInterval/ControlMaster fallbacks without overriding your values.
+manage_ssh_config = true
+
+[experimental]
+# Nesting herdr inside a herdr pane stays off; use tabs/workspaces instead.
+allow_nested = false
+kitty_graphics = false
+pane_history = false
+
+[advanced]
+scrollback_limit_bytes = 10000000

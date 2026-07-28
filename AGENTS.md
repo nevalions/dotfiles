@@ -17,6 +17,11 @@
 - `tmux source-file ~/.config/tmux/tmux.conf` - Reload configuration
 - `~/.config/tmux/plugins/tpm/bin/install_plugins` - Install TPM plugins
 
+### Herdr
+- `herdr config check` - Validate `config.toml`
+- `herdr server reload-config` - Apply config changes without restarting the server
+- `herdr --default-config` - Print the full option reference
+
 ## Code Style Guidelines
 
 ### Lua (Neovim)
