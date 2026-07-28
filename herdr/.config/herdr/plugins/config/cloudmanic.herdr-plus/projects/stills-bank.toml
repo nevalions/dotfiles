@@ -19,12 +19,25 @@
 # cli/app is a plain shell for `uv run` commands (alembic, scripts/) and
 # cli/compose is where one-off `docker compose exec|run` lines go.
 #
-# There is no frontend and no dev-server port to open. nginx is the only
-# service that publishes ports (80 and 443 on the host), stills-api is
-# internal-only, and the entry point is https://stills.lan — Swagger at
-# https://stills.lan/docs, REST under /api/v1 with the STILLS_API_TOKEN bearer.
-# The cert is self-signed by docker/nginx/gen-cert.sh and stills.lan has to
-# resolve locally, so a fresh machine needs a /etc/hosts entry first.
+# The UI is not a separate frontend: app/ui is Jinja templates plus htmx served
+# by the same FastAPI app, mounted at /ui (dashboard, library, search, admin,
+# persons), with its static files under /ui/static. So it has no build step, no
+# node_modules and no dev server of its own — through the stack it is simply
+# https://stills.lan/ui/, and the run tab already starts everything it needs.
+#
+# The ui tab exists for working *on* it. Templates and app.js are baked into
+# the stills-api image, so with only the compose stack every edit costs a
+# rebuild; `uvicorn --reload` against the same .env picks them up on save
+# instead. Verified: /ui/, /ui/library, /ui/search and /ui/admin all render
+# from http://localhost:8000. It reads .env like the container does, and that
+# DATABASE_URL points at the deployed database — this is a live-data UI, not a
+# sandbox, so treat the admin pages there as production.
+#
+# nginx is the only service publishing ports (80 and 443 on the host);
+# stills-api is internal-only to compose. Swagger is at https://stills.lan/docs
+# and REST under /api/v1 with the STILLS_API_TOKEN bearer. The cert is
+# self-signed by docker/nginx/gen-cert.sh and stills.lan has to resolve
+# locally, so a fresh machine needs an /etc/hosts entry first.
 
 name = "stills-bank"
 description = "stills-bank — code, run, cli; app and its compose stack side by side"
@@ -51,6 +64,18 @@ command = "./scripts/up.sh"
 [[tabs.panes]]
 label = "logs"
 command = "docker compose logs -f stills-api stills-worker"
+split = "right"
+
+[[tabs]]
+name = "ui"
+
+[[tabs.panes]]
+label = "serve"
+command = "uv run uvicorn app.api.main:create_app --factory --reload --port 8000"
+
+[[tabs.panes]]
+label = "ui"
+command = "cd app/ui"
 split = "right"
 
 [[tabs]]
