@@ -150,6 +150,19 @@ key = "prefix+alt+f"
 type = "plugin_action"
 command = "herdr-file-viewer.open-file-viewer-tab"
 
+# herdr-plus: fuzzy-pick a project template and spin up its whole workspace.
+# Reads ~/.config/herdr-plus/projects/ (its own dir, not herdr's plugin config).
+[[keys.command]]
+key = "prefix+up"
+type = "plugin_action"
+command = "cloudmanic.herdr-plus.projects"
+
+# herdr-plus: fuzzy launcher for one-off scripts, run in the launch directory.
+[[keys.command]]
+key = "prefix+down"
+type = "plugin_action"
+command = "cloudmanic.herdr-plus.quick-actions"
+
 [worktrees]
 directory = "~/.herdr/worktrees"
 

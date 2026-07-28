@@ -114,6 +114,8 @@ every `Ctrl+a`.
 | `prefix r` | reviewr diff sidebar (toggle) |
 | `prefix f` | file viewer, split beside the pane |
 | `prefix Alt+f` | file viewer, own tab |
+| `prefix Up` | herdr-plus: projects picker |
+| `prefix Down` | herdr-plus: quick actions |
 | `prefix Shift+l` | apply workspace layout (plugin binding) |
 
 Copy mode (`prefix [`): `h j k l`, `w b e`, `{ }`, `Ctrl+u` / `Ctrl+d` to move,
@@ -175,22 +177,41 @@ Two more plugins, both Rust TUIs that herdr opens in a pane:
 ```bash
 herdr plugin install persiyanov/herdr-reviewr
 herdr plugin install smarzban/herdr-file-viewer
+herdr plugin install cloudmanic/herdr-plus     # needs a Go toolchain
 ```
 
 | Plugin | id | Purpose |
 | --- | --- | --- |
 | [herdr-reviewr](https://github.com/persiyanov/herdr-reviewr) | `persiyanov.reviewr` | Read the agent's diff beside the chat, comment on lines, send the notes back |
 | [herdr-file-viewer](https://github.com/smarzban/herdr-file-viewer) | `herdr-file-viewer` | Git-aware read-only file tree and preview |
+| [herdr-plus](https://github.com/cloudmanic/herdr-plus) | `cloudmanic.herdr-plus` | Projects (fuzzy-pick a workspace template) and Quick Actions (fuzzy script launcher) |
 
 Configs are stowed from this repo at
 `plugins/config/persiyanov.reviewr/config.toml` and
 `plugins/config/herdr-file-viewer/config.toml`, keyed by plugin id so they
 survive an uninstall/reinstall.
 
-Both install a prebuilt binary from the matching GitHub release and verify its
-SHA-256; file-viewer falls back to `cargo` on any miss. The checksum ships from
-the same release as the binary, so it covers transport, not a compromised
-release — reinstalls are worth a glance at the upstream diff.
+reviewr and file-viewer install a prebuilt binary from the matching GitHub
+release and verify its SHA-256; file-viewer falls back to `cargo` on any miss.
+The checksum ships from the same release as the binary, so it covers transport,
+not a compromised release — reinstalls are worth a glance at the upstream diff.
+herdr-plus is compiled from the cloned source with `go build` instead, so there
+is nothing to verify but also no binary to trust; its manifest mentions a
+prebuilt fallback that `scripts/build.sh` does not actually implement.
+
+**herdr-plus keeps its config elsewhere.** Unlike the others it ignores
+`plugins/config/cloudmanic.herdr-plus/` and reads `~/.config/herdr-plus/`
+(`projects/`, `quick-actions/`, `worktrees/`). Nothing is stowed there yet, and
+the directory not existing is what keeps its worktree hook inert — see below.
+
+**Two plugins answer `worktree.created`.** workspace-manager applies layouts from
+its `config.yml`, and herdr-plus applies layouts from
+`~/.config/herdr-plus/worktrees/` on both `worktree.created` and
+`worktree.opened`. Only workspace-manager is configured, so herdr-plus no-ops
+today. Populating `~/.config/herdr-plus/worktrees/` would put both in the same
+event with no defined ordering — herdr-plus skips a workspace that already has
+tabs, so the loser is whichever runs second. Pick one owner for worktree layout
+rather than relying on that.
 
 Keys are bound here in `config.toml`, not in the plugin manifests:
 
