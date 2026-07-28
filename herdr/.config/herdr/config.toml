@@ -196,7 +196,11 @@ sidebar_max_width = 36
 sidebar_start_collapsed = false
 sidebar_collapsed_mode = "compact"
 
-accent = "#89b4fa" # catppuccin blue
+# Trial: peach instead of catppuccin blue (#89b4fa). The focused pane border is
+# drawn in accent, and both the file viewer and reviewr render blue chrome of
+# their own, so blue-on-blue was costing the focus cue. Peach is the warmest
+# catppuccin accent and shares nothing with either plugin's palette.
+accent = "#fab387" # catppuccin peach
 
 mouse_capture = true
 copy_on_select = true
