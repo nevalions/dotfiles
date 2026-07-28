@@ -79,44 +79,44 @@ beginning-of-line inside a herdr pane (herdr has no send-prefix binding — use
 `Home`), and herdr and tmux must not be nested, because the outer one swallows
 every `Ctrl+a`.
 
-| Key | Action |
-| --- | --- |
-| `prefix ?` | help |
-| `prefix s` | settings |
-| `prefix q` | detach |
-| `prefix Alt+r` | reload config |
-| `prefix w` | workspace picker |
-| `prefix g` | goto |
-| `prefix Shift+n` | new workspace |
-| `Ctrl+Alt+p` / `Ctrl+Alt+n` | prev / next workspace (no prefix) |
-| `prefix Shift+1..9` | switch workspace by index |
-| `prefix Shift+w` / `Shift+d` | rename / close workspace |
-| `prefix Shift+g` | new git worktree |
-| `prefix c` | new tab |
-| `prefix p` / `n` | prev / next tab |
-| `prefix 1..9` | switch tab by index |
-| `prefix Shift+t` / `Shift+x` | rename / close tab |
-| `prefix h j k l` | focus pane (vim motions) |
-| `prefix Shift+h j k l` | swap pane in that direction |
-| `prefix v` / `-` | split vertical / horizontal |
-| `prefix x` | close pane |
-| `prefix z` | zoom pane |
-| `prefix Shift+r` | resize mode |
-| `prefix e` | edit scrollback in `$EDITOR` |
-| `prefix [` | copy mode |
-| `prefix Tab` / `Shift+Tab` | cycle panes |
-| `prefix ,` / `.` | prev / next agent |
-| `prefix Alt+1..9` | focus agent row |
-| `prefix o` | open notification target |
-| `prefix b` | toggle sidebar |
-| `prefix Alt+g` | lazygit popup |
-| `prefix Alt+k` | k9s popup |
-| `prefix r` | reviewr diff sidebar (toggle) |
-| `prefix f` | file viewer, split beside the pane |
-| `prefix Alt+f` | file viewer, own tab |
-| `prefix Up` | herdr-plus: projects picker (`news-lo`, `news-spb`, `statsboard`) |
-| `prefix Down` | herdr-plus: quick actions |
-| `prefix Shift+l` | apply workspace layout (plugin binding) |
+| Key                          | Action                                                            |
+| ---------------------------- | ----------------------------------------------------------------- | --------------------------- |
+| `prefix ?`                   | help                                                              |
+| `prefix s`                   | settings                                                          |
+| `prefix q`                   | detach                                                            |
+| `prefix Alt+r`               | reload config                                                     |
+| `prefix w`                   | workspace picker                                                  |
+| `prefix g`                   | goto                                                              |
+| `prefix Shift+n`             | new workspace                                                     |
+| `Ctrl+Alt+p` / `Ctrl+Alt+n`  | prev / next workspace (no prefix)                                 |
+| `prefix Shift+1..9`          | switch workspace by index                                         |
+| `prefix Shift+w` / `Shift+d` | rename / close workspace                                          |
+| `prefix Shift+g`             | new git worktree                                                  |
+| `prefix c`                   | new tab                                                           |
+| `prefix p` / `n`             | prev / next tab                                                   |
+| `prefix 1..9`                | switch tab by index                                               |
+| `prefix Shift+t` / `Shift+x` | rename / close tab                                                |
+| `prefix h j k l`             | focus pane (vim motions)                                          |
+| `prefix Shift+h j k l`       | swap pane in that direction                                       |
+| `prefix                      | `/`-`                                                             | split vertical / horizontal |
+| `prefix x`                   | close pane                                                        |
+| `prefix z`                   | zoom pane                                                         |
+| `prefix Shift+r`             | resize mode                                                       |
+| `prefix e`                   | edit scrollback in `$EDITOR`                                      |
+| `prefix [`                   | copy mode                                                         |
+| `prefix Tab` / `Shift+Tab`   | cycle panes                                                       |
+| `prefix ,` / `.`             | prev / next agent                                                 |
+| `prefix Alt+1..9`            | focus agent row                                                   |
+| `prefix o`                   | open notification target                                          |
+| `prefix b`                   | toggle sidebar                                                    |
+| `prefix Alt+g`               | lazygit popup                                                     |
+| `prefix Alt+k`               | k9s popup                                                         |
+| `prefix r`                   | reviewr diff sidebar (toggle)                                     |
+| `prefix f`                   | file viewer, split beside the pane                                |
+| `prefix Alt+f`               | file viewer, own tab                                              |
+| `prefix Up`                  | herdr-plus: projects picker (`news-lo`, `news-spb`, `statsboard`) |
+| `prefix Down`                | herdr-plus: quick actions                                         |
+| `prefix Shift+l`             | apply workspace layout (plugin binding)                           |
 
 Copy mode (`prefix [`): `h j k l`, `w b e`, `{ }`, `Ctrl+u` / `Ctrl+d` to move,
 `/` or `?` to search then `n` / `N`, `v` or `Space` to select, `y` or `Enter` to
@@ -153,11 +153,11 @@ herdr plugin log list --plugin herdr-plugin-workspace-manager --limit 1
 
 Differences from tmuxinator worth knowing:
 
-- **Trigger.** Layouts apply on *worktree creation* for a mapped repo, not on a
+- **Trigger.** Layouts apply on _worktree creation_ for a mapped repo, not on a
   `tmuxinator start <project>` command. The repo's main checkout is never
   touched — only linked worktrees.
-- **`prefix+Shift+l` applies a layout** (the plugin's own binding) and *rebuilds
-  the first tab*, taking its panes and processes with it. Safe on a fresh
+- **`prefix+Shift+l` applies a layout** (the plugin's own binding) and _rebuilds
+  the first tab_, taking its panes and processes with it. Safe on a fresh
   worktree, destructive on one with live work. herdr's `swap_pane_*` were moved
   to `Ctrl+Alt+hjkl` to keep out of its way.
 - **No `>-` block scalars.** The plugin's YAML parser rejects them; use a
@@ -180,11 +180,11 @@ herdr plugin install smarzban/herdr-file-viewer
 herdr plugin install cloudmanic/herdr-plus     # needs a Go toolchain
 ```
 
-| Plugin | id | Purpose |
-| --- | --- | --- |
-| [herdr-reviewr](https://github.com/persiyanov/herdr-reviewr) | `persiyanov.reviewr` | Read the agent's diff beside the chat, comment on lines, send the notes back |
-| [herdr-file-viewer](https://github.com/smarzban/herdr-file-viewer) | `herdr-file-viewer` | Git-aware read-only file tree and preview |
-| [herdr-plus](https://github.com/cloudmanic/herdr-plus) | `cloudmanic.herdr-plus` | Projects (fuzzy-pick a workspace template) and Quick Actions (fuzzy script launcher) |
+| Plugin                                                             | id                      | Purpose                                                                              |
+| ------------------------------------------------------------------ | ----------------------- | ------------------------------------------------------------------------------------ |
+| [herdr-reviewr](https://github.com/persiyanov/herdr-reviewr)       | `persiyanov.reviewr`    | Read the agent's diff beside the chat, comment on lines, send the notes back         |
+| [herdr-file-viewer](https://github.com/smarzban/herdr-file-viewer) | `herdr-file-viewer`     | Git-aware read-only file tree and preview                                            |
+| [herdr-plus](https://github.com/cloudmanic/herdr-plus)             | `cloudmanic.herdr-plus` | Projects (fuzzy-pick a workspace template) and Quick Actions (fuzzy script launcher) |
 
 Configs are stowed from this repo at
 `plugins/config/persiyanov.reviewr/config.toml` and
@@ -202,7 +202,7 @@ prebuilt fallback that `scripts/build.sh` does not actually implement.
 **herdr-plus config sits in the managed dir like the rest**, under
 `plugins/config/cloudmanic.herdr-plus/` — `projects/`, `quick-actions/` and
 `worktrees/` subdirs, plus an optional `config.toml`. It only falls back to
-`~/.config/herdr-plus/` when the binary runs *outside* herdr: under herdr,
+`~/.config/herdr-plus/` when the binary runs _outside_ herdr: under herdr,
 `HERDR_PLUGIN_CONFIG_DIR` is set and wins over `$XDG_CONFIG_HOME`. Since the
 `prefix Up` / `prefix Down` pickers run as plugin actions, the managed dir is
 the one that counts. `projects/` is stowed from this repo; `worktrees/` is
@@ -234,7 +234,7 @@ that already has tabs, so the winner is whichever runs first. The empty
 directory is the boundary.
 
 Known cost of the split: workspace-manager only hooks `worktree.created`, never
-`worktree.opened`, so *reopening* an existing worktree gets no layout. Apply one
+`worktree.opened`, so _reopening_ an existing worktree gets no layout. Apply one
 by hand with `prefix+Shift+l` — cheaper than giving up branch routing.
 
 Keys are bound here in `config.toml`, not in the plugin manifests:
@@ -253,7 +253,7 @@ List the ids with `herdr plugin action list`. Two gotchas:
   review work, showing the error instead. file-viewer is the opposite — a bad
   file silently falls back to defaults, flagged in its `?` overlay.
 - **file-viewer's tree width takes two keys.** `tree_width` (percent) and
-  `tree_max_cols` (hard column cap) both apply and the *smaller* wins, so raising
+  `tree_max_cols` (hard column cap) both apply and the _smaller_ wins, so raising
   only `tree_width` appears to do nothing.
 
 ## Cleanup
@@ -271,7 +271,7 @@ herdr-workspace-manager remove-gone
   both the file viewer and reviewr render blue chrome of their own, so a blue
   accent competed with the panes it had to stand out against.
 - `[theme.custom]` overrides single palette tokens on top of the base theme.
-  Only `overlay0` is set, dropped to `#45475a` (surface1): it colours *unfocused*
+  Only `overlay0` is set, dropped to `#45475a` (surface1): it colours _unfocused_
   pane borders, so darkening it widens the gap against the accent. Both halves of
   that contrast matter, because while you are typing the border colour is the
   only focus cue — herdr's DIM wash over unfocused panes applies solely outside
