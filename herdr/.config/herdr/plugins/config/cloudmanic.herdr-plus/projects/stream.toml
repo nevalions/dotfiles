@@ -19,12 +19,12 @@
 #          empty until it can reach them — set them in the pane when you need
 #          real data.
 #
-# controller and uploader start nothing in their run pane. The controller is an
-# in-cluster reconcile loop with nothing to serve locally, and uploader needs S3
-# credentials, a Forgejo token and a job namespace before it will do anything,
-# so for both the local feedback loop is `go test ./...` — typed when you want
-# it, not run on every workspace open. The pane is a shell in the repo.
-# Deploys live in kube-lvl47.
+# controller and uploader get a single pane, not a code/run split. Neither can
+# run here — the controller is an in-cluster reconcile loop with nothing to
+# serve locally, and uploader needs S3 credentials, a Forgejo token and a job
+# namespace before it will do anything — so a run pane would be a second shell
+# in the same directory as the first. `go build ./...` and `go test ./...` are
+# what you type in the one pane. Deploys live in kube-lvl47.
 
 name = "stream"
 description = "stream — one tab per pipeline repo; code and run side by side"
@@ -49,11 +49,6 @@ name = "controller"
 label = "code"
 command = "cd stream-controller"
 
-[[tabs.panes]]
-label = "run"
-command = "cd stream-controller"
-split = "right"
-
 [[tabs]]
 name = "ui"
 
@@ -72,8 +67,3 @@ name = "uploader"
 [[tabs.panes]]
 label = "code"
 command = "cd uploader"
-
-[[tabs.panes]]
-label = "run"
-command = "cd uploader"
-split = "right"

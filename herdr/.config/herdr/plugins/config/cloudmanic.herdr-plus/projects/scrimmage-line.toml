@@ -13,10 +13,10 @@
 # The tree is already configured (build/build.ninja exists); a fresh clone needs
 # `cmake -G Ninja ..` once before this pane does anything.
 #
-# The trainer's run pane starts nothing. Every trainer command is a per-run
-# decision — scripts/train.py with its flags and a GPU budget, eval.py,
-# export_skeleton.py, `uv run pytest` — and none of them should fire on
-# workspace open, so the pane is a shell already in the right directory.
+# The trainer gets a single pane. Every trainer command is a per-run decision —
+# scripts/train.py with its flags and a GPU budget, eval.py, export_skeleton.py,
+# `uv run pytest` — and none of them should fire on workspace open, so a run
+# pane would only be a second shell in the same directory as the first.
 #
 # Both engine panes export LD_LIBRARY_PATH for the out-of-tree OpenCV at
 # ~/opt/opencv4. That build links imgcodecs against libjxl 0.11 while Arch now
@@ -69,8 +69,3 @@ name = "trainer"
 [[tabs.panes]]
 label = "code"
 command = "cd scrimmage-line-trainer"
-
-[[tabs.panes]]
-label = "run"
-command = "cd scrimmage-line-trainer"
-split = "right"
