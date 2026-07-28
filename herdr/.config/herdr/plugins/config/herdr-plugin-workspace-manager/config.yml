@@ -119,7 +119,7 @@ layouts:
       - title: frontend
         panes:
           - title: ng
-            command: cd statsboards-frontend && ng s
+            command: cd frontend-angular-signals && ng s
 
   # --- trimmed variants -----------------------------------------------------
   # For short-lived branches: agent + editor, no servers, no docker.
