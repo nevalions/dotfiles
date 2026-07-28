@@ -215,10 +215,11 @@ as part of its command. None of them start an agent or an editor.
 - **back/front** — one product with two halves: tabs `code`, `run`, `cli`, each
   split into two vertical panes. `code` and `cli` are bare shells; `run` starts
   the backend and the dev server. `news-lo`, `news-spb`, `news-writer`,
-  `statsboard`. The halves are separate repos under `~/code` for `news-*` and
-  subdirectories of one checkout for `statsboard` — the layout is identical
-  either way. `stills-bank` is a variant: one service, so its panes are the app
-  and its compose stack, plus a `ui` tab for the htmx UI it serves itself.
+  `statsboard`, `stills-bank`. The halves are separate repos under `~/code` for
+  `news-*`, subdirectories of one checkout for `statsboard`, and for
+  `stills-bank` the repo root against `app/ui` — the htmx UI its own FastAPI
+  app serves — so `run/front` is `uvicorn --reload` where the others run a
+  frontend dev server. The layout is identical either way.
 - **tab-per-project** — a family of independent apps: the tab is the app, the
   panes are `code` and `run`. `portals` (Astro sites, no backend at all),
   `stream` (four Go repos), `scrimmage-line` (engine, UI, trainer).
