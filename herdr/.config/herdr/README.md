@@ -256,7 +256,17 @@ herdr-workspace-manager remove-gone
 
 ## Notes
 
-- Theme is `catppuccin` with a `#89b4fa` accent, matching tmux, nvim and kitty.
+- Theme is `catppuccin`, matching tmux, nvim and kitty. The accent is the one
+  deliberate departure: `#fab387` (peach) rather than the `#89b4fa` blue used
+  elsewhere. The focused pane's border and title are drawn in the accent, and
+  both the file viewer and reviewr render blue chrome of their own, so a blue
+  accent competed with the panes it had to stand out against.
+- `[theme.custom]` overrides single palette tokens on top of the base theme.
+  Only `overlay0` is set, dropped to `#45475a` (surface1): it colours *unfocused*
+  pane borders, so darkening it widens the gap against the accent. Both halves of
+  that contrast matter, because while you are typing the border colour is the
+  only focus cue — herdr's DIM wash over unfocused panes applies solely outside
+  terminal mode.
 - Toasts render in-app (`ui.toast.delivery = "herdr"`); set `"system"` for desktop
   notifications, `"off"` to silence them.
 - Worktrees are created under `~/.herdr/worktrees`.
