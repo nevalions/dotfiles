@@ -18,6 +18,17 @@ name = "catppuccin"
 # dark_name  = "catppuccin"
 # light_name = "catppuccin-latte"
 
+# Override individual palette tokens on top of the base theme.
+[theme.custom]
+# Unfocused pane borders. In normal typing mode the border colour is the ONLY
+# focus cue: src/ui/panes.rs draws the focused pane's border and title in
+# `accent` + bold and every other pane in `overlay0`. The DIM wash over
+# unfocused panes is gated on `!terminal_active`, so it disappears exactly when
+# you are typing. Dropping overlay0 from catppuccin's mid grey to surface1 makes
+# the other panes recede instead of competing — needed now that a file-viewer
+# split or reviewr sidebar puts several borders on screen at once.
+overlay0 = "#45475a"
+
 [terminal]
 # Empty = $SHELL (zsh here), then /bin/sh.
 default_shell = ""
@@ -112,10 +123,15 @@ navigate_pane_up = "k"
 navigate_pane_right = "l"
 
 # Custom commands. type = "shell" (detached) | "pane" (temp pane) | "popup" (modal).
+# `description` is what the `?` overlay shows for a custom command. Without it
+# every entry renders as the literal string "custom command", so each one below
+# sets it. Undocumented in `herdr --default-config`, but parsed (and tested) —
+# see src/config/keybinds.rs.
 [[keys.command]]
 key = "prefix+alt+g"
 type = "popup"
 command = "lazygit"
+description = "lazygit popup"
 width = "80%"
 height = "80%"
 
@@ -123,6 +139,7 @@ height = "80%"
 key = "prefix+alt+k"
 type = "popup"
 command = "k9s"
+description = "k9s popup"
 width = "90%"
 height = "90%"
 
@@ -137,31 +154,37 @@ height = "90%"
 key = "prefix+r"
 type = "plugin_action"
 command = "persiyanov.reviewr.toggle"
+description = "reviewr: diff sidebar (toggle)"
 
 # file viewer, split beside the current pane (herdr-file-viewer).
 [[keys.command]]
 key = "prefix+f"
 type = "plugin_action"
 command = "herdr-file-viewer.open-file-viewer"
+description = "file viewer (split)"
 
 # Same viewer in its own tab; switches to it if already open.
 [[keys.command]]
 key = "prefix+alt+f"
 type = "plugin_action"
 command = "herdr-file-viewer.open-file-viewer-tab"
+description = "file viewer (own tab)"
 
 # herdr-plus: fuzzy-pick a project template and spin up its whole workspace.
-# Reads ~/.config/herdr-plus/projects/ (its own dir, not herdr's plugin config).
+# Templates are stowed in plugins/config/cloudmanic.herdr-plus/projects/ — the
+# managed dir wins over ~/.config/herdr-plus when running under herdr.
 [[keys.command]]
 key = "prefix+up"
 type = "plugin_action"
 command = "cloudmanic.herdr-plus.projects"
+description = "projects picker"
 
 # herdr-plus: fuzzy launcher for one-off scripts, run in the launch directory.
 [[keys.command]]
 key = "prefix+down"
 type = "plugin_action"
 command = "cloudmanic.herdr-plus.quick-actions"
+description = "quick actions"
 
 [worktrees]
 directory = "~/.herdr/worktrees"
