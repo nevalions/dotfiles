@@ -1,0 +1,61 @@
+# portals — on-demand workspace for the marketing portal sites.
+#
+# Shaped unlike statsboard.toml and news-*.toml because there is no backend:
+# every portal is a standalone Astro static site, so the back/front split has
+# nothing to divide. Here the tab is the portal and the two vertical panes are
+# code (bare shell) on the left and run (dev server) on the right.
+#
+# One tab per checked-out portal. ~/code/portals is an umbrella repo whose
+# portal directories are separate gitignored clones — aerosemka.su,
+# prodayushchee-video.ru, videooperator-na-svadbu.ru, video-na-svadbu.su,
+# videosemka-svadbi.ru and kursi-videooperatora.ru are not checked out, so they
+# get no tab; add one when you clone one.
+#
+# Ports are pinned per portal. Astro would otherwise take 4321 for whichever
+# run pane starts first and shuffle the rest onto whatever is free, so the URL
+# for a given site would depend on start order. With --port each site always
+# answers on the same address.
+#
+# scripts/ (portal-media-encoder) gets no tab: it is a shell-script pipeline
+# run one command at a time, not a server, so the code pane of whichever portal
+# you are working on covers it.
+
+name = "portals"
+description = "portals — one tab per Astro portal site; code and run side by side"
+working_dir = "~/code/portals"
+
+[[tabs]]
+name = "videooperator"
+
+[[tabs.panes]]
+label = "code"
+command = "cd videooperator.su"
+
+[[tabs.panes]]
+label = "run"
+command = "cd videooperator.su && npm run dev -- --port 4321"
+split = "right"
+
+[[tabs]]
+name = "videosemka"
+
+[[tabs.panes]]
+label = "code"
+command = "cd videosemka.su"
+
+[[tabs.panes]]
+label = "run"
+command = "cd videosemka.su && npm run dev -- --port 4322"
+split = "right"
+
+[[tabs]]
+name = "ochistka"
+
+[[tabs.panes]]
+label = "code"
+command = "cd ochistka-musoroprovoda.ru"
+
+[[tabs.panes]]
+label = "run"
+command = "cd ochistka-musoroprovoda.ru && npm run dev -- --port 4323"
+split = "right"
