@@ -18,6 +18,20 @@
 # export_skeleton.py, `uv run pytest` — and none of them should fire on
 # workspace open, so the pane is a shell already in the right directory.
 #
+# Both engine panes export LD_LIBRARY_PATH for the out-of-tree OpenCV at
+# ~/opt/opencv4. That build links imgcodecs against libjxl 0.11 while Arch now
+# ships 0.12 — a SONAME bump — so every binary in build/ dies at exec with
+# "libjxl.so.0.11: cannot open shared object file". The 0.11 libraries (jxl,
+# jxl_threads and jxl_cms, which 0.11 needs its own copy of) are installed
+# beside the OpenCV tree from the pacman cache, but that alone is not enough:
+# the engine's RUNPATH covers its own direct dependencies, and libjxl is a
+# dependency of libopencv_imgcodecs, whose RUNPATH is /usr/lib. Only a search
+# path the loader applies to transitive lookups closes the gap.
+#
+# The permanent alternative is patchelf --set-rpath '$ORIGIN' on
+# libopencv_imgcodecs.so.4.13.0, which would make the binaries run from any
+# shell instead of only this workspace. It needs patchelf installed.
+#
 # The UI is pnpm, not npm (pnpm-lock.yaml), and vite serves on :5173 with the
 # /ws proxy pointed at the engine.
 
@@ -30,11 +44,11 @@ name = "engine"
 
 [[tabs.panes]]
 label = "code"
-command = "cd scrimmage-line"
+command = 'cd scrimmage-line && export LD_LIBRARY_PATH=$HOME/opt/opencv4/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}'
 
 [[tabs.panes]]
 label = "run"
-command = "cd scrimmage-line/build && ninja"
+command = 'cd scrimmage-line/build && export LD_LIBRARY_PATH=$HOME/opt/opencv4/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} && ninja'
 split = "right"
 
 [[tabs]]
