@@ -3,6 +3,11 @@
 #
 # Kept as a separate file rather than a variant: herdr-plus resolves one
 # template per file, so an environment split is a second file.
+#
+# The front pane overrides NEXT_PUBLIC_API_URL because the spb backend listens on
+# 8001 (deploy/sites/spb/.env) while news-frontend/.env.local — one file for both
+# sites — pins 8000 for lo. Without an override the frontend falls back to
+# siteConfig.defaultApiUrl, which is the production host.
 
 name = "news-spb"
 description = "news, spb environment — code, run, cli; backend and frontend side by side"
@@ -29,7 +34,7 @@ command = "cd news-backend && ./scripts/dev-infra.sh && ./scripts/run-dev.sh spb
 
 [[tabs.panes]]
 label = "front"
-command = "cd news-frontend && npm run dev:spb"
+command = "cd news-frontend && NEXT_PUBLIC_API_URL=http://localhost:8001 npm run dev:spb"
 split = "right"
 
 [[tabs]]
