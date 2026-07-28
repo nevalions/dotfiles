@@ -1725,7 +1725,16 @@
   #   - verbose: Enable instant prompt and print a warning when detecting console output during
   #              zsh initialization. Choose this if you've never tried instant prompt, haven't
   #              seen the warning, or if you are unsure what this all means.
-  typeset -g POWERLEVEL9K_INSTANT_PROMPT=verbose
+  # quiet, not verbose: direnv's hook runs at the first precmd and prints
+  # "direnv: loading ~/dotfiles/.envrc", which verbose mode answers with a
+  # 30-line warning in every new herdr pane (new_cwd = "follow" starts panes in
+  # the current directory, so any pane under a repo with an .envrc trips it).
+  # quiet keeps instant prompt fully on and only drops that warning; the prompt
+  # jumps down once after init. Silencing direnv instead was rejected: on 2.37.1
+  # DIRENV_LOG_FORMAT and DIRENV_LOG_FILTER are ignored, and the direnv.toml
+  # log_filter that does work also hides "\.envrc is blocked" — which direnv
+  # raises after every edit to an .envrc.
+  typeset -g POWERLEVEL9K_INSTANT_PROMPT=quiet
 
   # Hot reload allows you to change POWERLEVEL9K options after Powerlevel10k has been initialized.
   # For example, you can type POWERLEVEL9K_BACKGROUND=red and see your prompt turn red. Hot reload
