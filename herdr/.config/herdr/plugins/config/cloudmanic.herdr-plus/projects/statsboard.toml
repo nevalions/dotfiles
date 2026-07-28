@@ -1,0 +1,44 @@
+# statsboard — on-demand workspace for the main checkout.
+# Ported from the statsboard layout in workspace-manager's config.yml.
+#
+# The redis dependency needs care. workspace-manager runs it as a blocking
+# `setup:` step before any tab opens; herdr-plus has no setup hook, so the start
+# command is folded into the api pane that actually needs it (redis backs
+# play-detection state, src/match_videos/play_detection.py). Consequence: it is
+# no longer guaranteed to complete before the other tabs start — only before the
+# api server does, which is the pane that cares.
+#
+# See news-backend.toml for the other two porting losses (named agent panes,
+# pane sizes — the backend shell pane was 12 rows).
+
+name = "statsboard"
+description = "statsboard — agent, editor, redis + api, angular frontend"
+working_dir = "~/code/statsboard"
+
+[[tabs]]
+name = "code"
+
+[[tabs.panes]]
+label = "agent"
+command = "claude"
+
+[[tabs.panes]]
+label = "editor"
+command = "v"
+split = "right"
+
+[[tabs]]
+name = "backend"
+
+[[tabs.panes]]
+label = "api"
+command = "docker start statsboards-redis 2>/dev/null || docker run -d --name statsboards-redis -p 6379:6379 redis:7-alpine; cd statsboards-backend && . ./venv/bin/activate && python -m src.runserver"
+
+[[tabs.panes]]
+label = "shell"
+command = "cd statsboards-backend && . ./venv/bin/activate"
+split = "down"
+
+[[tabs]]
+name = "frontend"
+command = "cd statsboards-frontend && ng s"

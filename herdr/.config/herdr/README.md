@@ -114,7 +114,7 @@ every `Ctrl+a`.
 | `prefix r` | reviewr diff sidebar (toggle) |
 | `prefix f` | file viewer, split beside the pane |
 | `prefix Alt+f` | file viewer, own tab |
-| `prefix Up` | herdr-plus: projects picker |
+| `prefix Up` | herdr-plus: projects picker (`news-backend`, `-spb`, `news-frontend`, `statsboard`) |
 | `prefix Down` | herdr-plus: quick actions |
 | `prefix Shift+l` | apply workspace layout (plugin binding) |
 
@@ -199,19 +199,34 @@ herdr-plus is compiled from the cloned source with `go build` instead, so there
 is nothing to verify but also no binary to trust; its manifest mentions a
 prebuilt fallback that `scripts/build.sh` does not actually implement.
 
-**herdr-plus keeps its config elsewhere.** Unlike the others it ignores
-`plugins/config/cloudmanic.herdr-plus/` and reads `~/.config/herdr-plus/`
-(`projects/`, `quick-actions/`, `worktrees/`). Nothing is stowed there yet, and
-the directory not existing is what keeps its worktree hook inert — see below.
+**herdr-plus config sits in the managed dir like the rest**, under
+`plugins/config/cloudmanic.herdr-plus/` — `projects/`, `quick-actions/` and
+`worktrees/` subdirs, plus an optional `config.toml`. It only falls back to
+`~/.config/herdr-plus/` when the binary runs *outside* herdr: under herdr,
+`HERDR_PLUGIN_CONFIG_DIR` is set and wins over `$XDG_CONFIG_HOME`. Since the
+`prefix Up` / `prefix Down` pickers run as plugin actions, the managed dir is
+the one that counts. `projects/` is stowed from this repo; `worktrees/` is
+deliberately left empty — see below.
 
 **Two plugins answer `worktree.created`.** workspace-manager applies layouts from
-its `config.yml`, and herdr-plus applies layouts from
-`~/.config/herdr-plus/worktrees/` on both `worktree.created` and
-`worktree.opened`. Only workspace-manager is configured, so herdr-plus no-ops
-today. Populating `~/.config/herdr-plus/worktrees/` would put both in the same
-event with no defined ordering — herdr-plus skips a workspace that already has
-tabs, so the loser is whichever runs second. Pick one owner for worktree layout
-rather than relying on that.
+its `config.yml`, and herdr-plus would apply layouts from its own `worktrees/`
+subdir on both `worktree.created` and `worktree.opened`. That subdir is empty on
+purpose, so herdr-plus no-ops and only workspace-manager acts.
+
+The division, and why: workspace-manager owns **worktree** layout because it
+routes by branch name (`worktreePattern: "{bugfix,hotfix}/*"` → the trimmed
+`hotfix` layout), and herdr-plus matches on repo name only — one layout per
+repo, no branch routing. herdr-plus owns **on-demand start**, the tmuxinator
+`start` verb workspace-manager has no answer for, plus Quick Actions.
+
+Putting files in herdr-plus's `worktrees/` breaks that: both plugins then fire
+on the same event with no defined ordering, and herdr-plus skips a workspace
+that already has tabs, so the winner is whichever runs first. The empty
+directory is the boundary.
+
+Known cost of the split: workspace-manager only hooks `worktree.created`, never
+`worktree.opened`, so *reopening* an existing worktree gets no layout. Apply one
+by hand with `prefix+Shift+l` — cheaper than giving up branch routing.
 
 Keys are bound here in `config.toml`, not in the plugin manifests:
 
