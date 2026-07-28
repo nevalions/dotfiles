@@ -18,6 +18,13 @@
 #
 # cli/app is a plain shell for `uv run` commands (alembic, scripts/) and
 # cli/compose is where one-off `docker compose exec|run` lines go.
+#
+# There is no frontend and no dev-server port to open. nginx is the only
+# service that publishes ports (80 and 443 on the host), stills-api is
+# internal-only, and the entry point is https://stills.lan — Swagger at
+# https://stills.lan/docs, REST under /api/v1 with the STILLS_API_TOKEN bearer.
+# The cert is self-signed by docker/nginx/gen-cert.sh and stills.lan has to
+# resolve locally, so a fresh machine needs a /etc/hosts entry first.
 
 name = "stills-bank"
 description = "stills-bank — code, run, cli; app and its compose stack side by side"

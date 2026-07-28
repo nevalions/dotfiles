@@ -13,10 +13,10 @@
 # The tree is already configured (build/build.ninja exists); a fresh clone needs
 # `cmake -G Ninja ..` once before this pane does anything.
 #
-# The trainer's run pane is `uv run pytest` rather than a training command.
-# Training is scripts/train.py with per-run flags and a GPU budget — not
-# something to fire on workspace open — so the pane gives you the suite that
-# gates it and a prompt in the right directory.
+# The trainer's run pane starts nothing. Every trainer command is a per-run
+# decision — scripts/train.py with its flags and a GPU budget, eval.py,
+# export_skeleton.py, `uv run pytest` — and none of them should fire on
+# workspace open, so the pane is a shell already in the right directory.
 #
 # The UI is pnpm, not npm (pnpm-lock.yaml), and vite serves on :5173 with the
 # /ws proxy pointed at the engine.
@@ -58,5 +58,5 @@ command = "cd scrimmage-line-trainer"
 
 [[tabs.panes]]
 label = "run"
-command = "cd scrimmage-line-trainer && uv run pytest"
+command = "cd scrimmage-line-trainer"
 split = "right"

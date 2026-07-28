@@ -19,11 +19,12 @@
 #          empty until it can reach them — set them in the pane when you need
 #          real data.
 #
-# controller and uploader get `go test ./...` as their run pane instead of a
-# server. The controller is an in-cluster reconcile loop with nothing to serve
-# locally, and uploader needs S3 credentials, a Forgejo token and a job
-# namespace before it will do anything — the test suite is the honest local
-# feedback loop for both. Deploys live in kube-lvl47.
+# controller and uploader start nothing in their run pane. The controller is an
+# in-cluster reconcile loop with nothing to serve locally, and uploader needs S3
+# credentials, a Forgejo token and a job namespace before it will do anything,
+# so for both the local feedback loop is `go test ./...` — typed when you want
+# it, not run on every workspace open. The pane is a shell in the repo.
+# Deploys live in kube-lvl47.
 
 name = "stream"
 description = "stream — one tab per pipeline repo; code and run side by side"
@@ -50,7 +51,7 @@ command = "cd stream-controller"
 
 [[tabs.panes]]
 label = "run"
-command = "cd stream-controller && go test ./..."
+command = "cd stream-controller"
 split = "right"
 
 [[tabs]]
@@ -74,5 +75,5 @@ command = "cd uploader"
 
 [[tabs.panes]]
 label = "run"
-command = "cd uploader && go test ./..."
+command = "cd uploader"
 split = "right"
