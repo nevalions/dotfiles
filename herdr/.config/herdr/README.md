@@ -235,6 +235,11 @@ Vite server, so it stays a half. `kube-lvl47` fits no
 shape at all — nothing runs locally, so it is a repo shell, two `flux --watch`
 panes and `k9s`.
 
+**`cli` earns a tab only when something is running.** It exists so commands have
+a prompt while `run` holds a server. Where nothing starts locally —
+`uploader`, `lenobl-announces`, `stream-controller` — a cli tab would be a
+second idle shell, so those projects are a single `code` tab.
+
 **Pane labels follow the tab.** herdr-plus takes an undocumented `label` per
 pane and renames the pane with it. Where the tab is the role (`code`, `run`,
 `cli`) the label names the half — `back`, `front` — so a lone pane gets no
