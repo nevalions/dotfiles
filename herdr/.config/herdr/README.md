@@ -114,7 +114,7 @@ every `Ctrl+a`.
 | `prefix r`                   | reviewr diff sidebar (toggle)                                     |
 | `prefix f`                   | file viewer, split beside the pane                                |
 | `prefix Alt+f`               | file viewer, own tab                                              |
-| `prefix Up`                  | herdr-plus: projects picker (`news-lo`, `news-spb`, `statsboard`) |
+| `prefix Up`                  | herdr-plus: projects picker (9 projects — see below)               |
 | `prefix Down`                | herdr-plus: quick actions                                         |
 | `prefix Shift+l`             | apply workspace layout (plugin binding)                           |
 
@@ -208,14 +208,27 @@ prebuilt fallback that `scripts/build.sh` does not actually implement.
 the one that counts. `projects/` is stowed from this repo; `worktrees/` is
 deliberately left empty — see below.
 
-**Every project uses the same three tabs** — `code`, `run`, `cli` — each split
-into two vertical panes, `back` on the left and `front` on the right. Panes have
-no per-pane cwd in herdr-plus, only the project-level `working_dir`, so each
-pane `cd`s into its own half as part of its command. `code` and `cli` are bare
-shells; `run` starts the backend and the dev server. None of them start an
-agent or an editor. For `news-*` the two halves are separate repos under
-`~/code`, for `statsboard` they are subdirectories of one checkout — the layout
-is identical either way.
+**Projects follow one of two shapes.** Panes have no per-pane cwd in herdr-plus,
+only the project-level `working_dir`, so every pane `cd`s into its own directory
+as part of its command. None of them start an agent or an editor.
+
+- **back/front** — one product with two halves: tabs `code`, `run`, `cli`, each
+  split into two vertical panes. `code` and `cli` are bare shells; `run` starts
+  the backend and the dev server. `news-lo`, `news-spb`, `news-writer`,
+  `statsboard`. The halves are separate repos under `~/code` for `news-*` and
+  subdirectories of one checkout for `statsboard` — the layout is identical
+  either way. `stills-bank` is a variant: one service, so its panes are the app
+  and its compose stack, plus a `ui` tab for the htmx UI it serves itself.
+- **tab-per-project** — a family of independent apps: the tab is the app, the
+  panes are `code` and `run`. `portals` (Astro sites, no backend at all),
+  `stream` (four Go repos), `scrimmage-line` (engine, UI, trainer).
+
+`kube-lvl47` fits neither — nothing runs locally, so it is a repo shell, two
+`flux --watch` panes and `k9s`.
+
+**Dev ports are tracked in `~/code/PORTS.md`.** Several workspaces are usually
+open at once, and a taken port either kills the pane (uvicorn, Go) or silently
+moves (Vite, Astro). Pin new ones there before adding a project.
 
 **Two plugins answer `worktree.created`.** workspace-manager applies layouts from
 its `config.yml`, and herdr-plus would apply layouts from its own `worktrees/`
