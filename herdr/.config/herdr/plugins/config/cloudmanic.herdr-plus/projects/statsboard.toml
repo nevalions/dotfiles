@@ -1,44 +1,59 @@
 # statsboard — on-demand workspace for the main checkout.
-# Ported from the statsboard layout in workspace-manager's config.yml.
+#
+# Three tabs (code, run, cli), each split into two vertical panes: back on the
+# left, front on the right. herdr-plus panes have no per-pane cwd — only the
+# project-level working_dir — so each pane cd's into its own subdirectory as
+# part of its command.
 #
 # The redis dependency needs care. workspace-manager runs it as a blocking
 # `setup:` step before any tab opens; herdr-plus has no setup hook, so the start
-# command is folded into the api pane that actually needs it (redis backs
+# command is folded into the run/back pane that actually needs it (redis backs
 # play-detection state, src/match_videos/play_detection.py). Consequence: it is
 # no longer guaranteed to complete before the other tabs start — only before the
-# api server does, which is the pane that cares.
+# backend server does, which is the pane that cares.
 #
-# See news-backend.toml for the other two porting losses (named agent panes,
-# pane sizes — the backend shell pane was 12 rows).
+# No agent or editor pane: the code tab is two bare shells, one per subproject.
+# The cli tab is the same two shells with the backend venv already activated.
+#
+# See news-backend.toml for the other porting losses (named agent panes, pane
+# sizes — splits here are always even).
 
 name = "statsboard"
-description = "statsboard — agent, editor, redis + api, angular frontend"
+description = "statsboard — code, run, cli; backend and frontend side by side"
 working_dir = "~/code/statsboard"
 
 [[tabs]]
 name = "code"
 
 [[tabs.panes]]
-label = "agent"
-command = "claude"
+label = "back"
+command = "cd statsboards-backend"
 
 [[tabs.panes]]
-label = "editor"
-command = "v"
+label = "front"
+command = "cd frontend-angular-signals"
 split = "right"
 
 [[tabs]]
-name = "backend"
+name = "run"
 
 [[tabs.panes]]
-label = "api"
+label = "back"
 command = "docker start statsboards-redis 2>/dev/null || docker run -d --name statsboards-redis -p 6379:6379 redis:7-alpine; cd statsboards-backend && . ./venv/bin/activate && python -m src.runserver"
 
 [[tabs.panes]]
-label = "shell"
-command = "cd statsboards-backend && . ./venv/bin/activate"
-split = "down"
+label = "front"
+command = "cd frontend-angular-signals && ng s"
+split = "right"
 
 [[tabs]]
-name = "frontend"
-command = "cd statsboards-frontend && ng s"
+name = "cli"
+
+[[tabs.panes]]
+label = "back"
+command = "cd statsboards-backend && . ./venv/bin/activate"
+
+[[tabs.panes]]
+label = "front"
+command = "cd frontend-angular-signals"
+split = "right"
