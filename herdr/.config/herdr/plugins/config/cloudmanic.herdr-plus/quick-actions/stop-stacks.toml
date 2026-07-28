@@ -48,6 +48,6 @@ value = "statsboard"
 description = "redis (6379) and the test database"
 
 [[options]]
-label = "stream"
-value = "stream"
-description = "stream-cms throwaway postgres (55432)"
+label = "stream-cms"
+value = "stream-cms"
+description = "throwaway postgres (55432)"

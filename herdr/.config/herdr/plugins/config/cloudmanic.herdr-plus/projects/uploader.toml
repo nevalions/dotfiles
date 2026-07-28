@@ -1,0 +1,41 @@
+# uploader — on-demand workspace for the portal-media upload UI.
+#
+# Split out of the old stream.toml. Like the other two it has both halves — a Go
+# server and internal/server/templates/index.html, the Authelia-protected page
+# that turns a camera master into a published portal video — so code and cli
+# split back (repo root) against front (the template).
+#
+# There is no run tab. uploader needs S3 credentials, a Forgejo token and a job
+# namespace before it does anything, and it drives encoder Jobs in the cluster,
+# so nothing here starts locally: `go build ./...` and `go test ./...` are what
+# the back pane is for. Deploys live in kube-lvl47, and the encoder it launches
+# lives in the portals repo (scripts/, portal-media-encoder).
+#
+# code and cli hold the same two shells, as they do for news-lo — code is where
+# an editor or agent goes, cli is where commands go.
+
+name = "uploader"
+description = "uploader — code and cli; Go server and its template side by side"
+working_dir = "~/code/uploader"
+
+[[tabs]]
+name = "code"
+
+[[tabs.panes]]
+label = "back"
+
+[[tabs.panes]]
+label = "front"
+command = "cd internal/server/templates"
+split = "right"
+
+[[tabs]]
+name = "cli"
+
+[[tabs.panes]]
+label = "back"
+
+[[tabs.panes]]
+label = "front"
+command = "cd internal/server/templates"
+split = "right"

@@ -81,7 +81,7 @@ stop_container() {
 stop_stills_bank()  { stop_compose "stills-bank"  "$CODE/stills-bank"; }
 stop_news_writer()  { stop_compose "news-writer"  "$CODE/news-writer"; }
 stop_news()         { stop_compose "news"         "$CODE/news-backend" "docker-compose.dev.yml"; }
-stop_stream()       { stop_container "stream"     "stream-cms-pg"; }
+stop_stream_cms()   { stop_container "stream-cms" "stream-cms-pg"; }
 
 # statsboard has two: the redis the run pane starts with a bare `docker run -d`,
 # and a test database from docker-compose.test-db-only.yml that is started by
@@ -97,17 +97,17 @@ case "$TARGET" in
     news-writer) stop_news_writer ;;
     news)        stop_news ;;
     statsboard)  stop_statsboard ;;
-    stream)      stop_stream ;;
+    stream-cms)  stop_stream_cms ;;
     all|"")
         stop_stills_bank
         stop_news_writer
         stop_news
         stop_statsboard
-        stop_stream
+        stop_stream_cms
         ;;
     *)
         echo "unknown stack: $TARGET" >&2
-        echo "expected one of: stills-bank news-writer news statsboard stream all" >&2
+        echo "expected one of: stills-bank news-writer news statsboard stream-cms all" >&2
         exit 2
         ;;
 esac

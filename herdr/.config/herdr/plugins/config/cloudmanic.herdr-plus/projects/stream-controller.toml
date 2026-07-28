@@ -1,0 +1,23 @@
+# stream-controller — on-demand workspace for the pipeline reconcile loop.
+#
+# The odd one out of the four repos split from the old stream.toml: it has no
+# UI half to face, so there is no back/front split to make. It polls the
+# MediaMTX control API and runs one FFmpeg-QSV transcoder Deployment per live
+# stream plus one push Deployment per restream target — all of it in-cluster,
+# with nothing to serve or open locally.
+#
+# So the workspace is one tab and one pane: a shell in the repo, where
+# `go build ./...` and `go test ./...` are the whole local feedback loop. It
+# exists to be a workspace you can open by name alongside stream-cms and
+# stream-ui, not because there is a layout to lay out. Deploys live in
+# kube-lvl47.
+
+name = "stream-controller"
+description = "stream-controller — repo shell; in-cluster reconcile loop, nothing runs locally"
+working_dir = "~/code/stream-controller"
+
+[[tabs]]
+name = "code"
+
+[[tabs.panes]]
+label = "back"
