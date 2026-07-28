@@ -1,0 +1,28 @@
+# reviewr — code-review sidebar for herdr (persiyanov/herdr-reviewr)
+# Lives at ~/.config/herdr/plugins/config/persiyanov.reviewr/config.toml
+# (`herdr plugin config-dir persiyanov.reviewr`). Survives reinstall: config is
+# keyed by plugin id, not by the install path.
+#
+# CFG-WHOLE-FILE: one unknown key or bad value invalidates the ENTIRE file, and
+# an invalidated config makes the sidebar refuse all review work (it shows the
+# error instead). So every key here must come from the plugin's specs/config.md.
+
+# Match herdr, tmux, nvim and kitty. Also reviewr's own default (Catppuccin Mocha).
+theme = "catppuccin"
+
+# Base for the branch-scope diff, tried in order; `origin/` and `refs/` prefixes
+# are stripped and each entry resolves via origin first, then local.
+base_branches = ["main", "master"]
+
+# Scope the sidebar opens on: "uncommitted" | "branch" | "last-turn".
+default_scope = "branch"
+
+# Sidebar geometry. "split" keeps the diff beside the agent chat rather than
+# covering it, which is the point of the plugin.
+navigator_position = "right"
+toggle_placement = "split"
+toggle_direction = "right"
+
+# The manifest hooks worktree.created to auto-open, gated on this key. Left off
+# so a new worktree does not steal layout; prefix+shift+v opens it on demand.
+auto_open = false

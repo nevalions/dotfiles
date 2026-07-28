@@ -2,7 +2,7 @@
 # Terminal workspace manager for AI coding agents.
 # Reference dump of every option: `herdr --default-config`
 # Validate after edits:                `herdr config check`
-# Apply without restarting the server: `herdr server reload-config` (or prefix+shift+r)
+# Apply without restarting the server: `herdr server reload-config` (or prefix+alt+r)
 
 # Config here is deliberate, so skip the first-run notification wizard.
 onboarding = false
@@ -44,7 +44,9 @@ prefix = "ctrl+a"
 help = "prefix+?"
 settings = "prefix+s"
 detach = "prefix+q"
-reload_config = "prefix+shift+r"
+# Rarely needed by key (the CLI `herdr server reload-config` covers it), so it
+# yields prefix+shift+r to resize_mode, which in turn frees prefix+r for reviewr.
+reload_config = "prefix+alt+r"
 
 # --- workspaces (spaces) ---------------------------------------------------
 workspace_picker = "prefix+w"
@@ -80,7 +82,7 @@ split_horizontal = "prefix+minus"
 close_pane = "prefix+x"
 rename_pane = "prefix+shift+p"
 zoom = "prefix+z"
-resize_mode = "prefix+r"
+resize_mode = "prefix+shift+r"
 edit_scrollback = "prefix+e"
 cycle_pane_next = "prefix+tab"
 cycle_pane_previous = "prefix+shift+tab"
@@ -123,6 +125,30 @@ type = "popup"
 command = "k9s"
 width = "90%"
 height = "90%"
+
+# --- plugin actions ---------------------------------------------------------
+# Plugin actions bind here, in the user config, not in the plugin manifest.
+# command = "<plugin_id>.<action_id>" — the ids, not the titles.
+# List them with `herdr plugin action list`.
+# Note: herdr-plugin-workspace-manager already claims prefix+shift+l (apply).
+
+# reviewr: diff sidebar beside the agent chat (persiyanov.reviewr).
+[[keys.command]]
+key = "prefix+r"
+type = "plugin_action"
+command = "persiyanov.reviewr.toggle"
+
+# file viewer, split beside the current pane (herdr-file-viewer).
+[[keys.command]]
+key = "prefix+f"
+type = "plugin_action"
+command = "herdr-file-viewer.open-file-viewer"
+
+# Same viewer in its own tab; switches to it if already open.
+[[keys.command]]
+key = "prefix+alt+f"
+type = "plugin_action"
+command = "herdr-file-viewer.open-file-viewer-tab"
 
 [worktrees]
 directory = "~/.herdr/worktrees"

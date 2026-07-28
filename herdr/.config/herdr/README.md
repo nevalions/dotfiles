@@ -11,8 +11,10 @@ herdr config check          # validate config.toml
 ```
 
 `~/.config/herdr/` also holds runtime state herdr writes itself (`herdr*.log`,
-`session.json`, `*.sock`). Only `config.toml` is stowed — stow folds per file, so
-the logs stay out of the repo.
+`session.json`, `*.sock`) and the managed plugin installs under `plugins/github/`.
+Only `config.toml` and the per-plugin files under `plugins/config/` are stowed —
+stow folds per file, so the logs, sockets and downloaded binaries stay out of the
+repo while the configs beside them are tracked.
 
 Shell completions:
 
@@ -33,7 +35,7 @@ herdr server stop
 ## Reload config
 
 ```bash
-herdr server reload-config  # or prefix+shift+r inside herdr
+herdr server reload-config  # or prefix+alt+r inside herdr
 ```
 
 ## Keys
@@ -50,7 +52,7 @@ every `Ctrl+a`.
 | `prefix ?` | help |
 | `prefix s` | settings |
 | `prefix q` | detach |
-| `prefix Shift+r` | reload config |
+| `prefix Alt+r` | reload config |
 | `prefix w` | workspace picker |
 | `prefix g` | goto |
 | `prefix Shift+n` | new workspace |
@@ -67,7 +69,7 @@ every `Ctrl+a`.
 | `prefix v` / `-` | split vertical / horizontal |
 | `prefix x` | close pane |
 | `prefix z` | zoom pane |
-| `prefix r` | resize mode |
+| `prefix Shift+r` | resize mode |
 | `prefix e` | edit scrollback in `$EDITOR` |
 | `prefix [` | copy mode |
 | `prefix Tab` / `Shift+Tab` | cycle panes |
@@ -77,6 +79,10 @@ every `Ctrl+a`.
 | `prefix b` | toggle sidebar |
 | `prefix Alt+g` | lazygit popup |
 | `prefix Alt+k` | k9s popup |
+| `prefix r` | reviewr diff sidebar (toggle) |
+| `prefix f` | file viewer, split beside the pane |
+| `prefix Alt+f` | file viewer, own tab |
+| `prefix Shift+l` | apply workspace layout (plugin binding) |
 
 Copy mode (`prefix [`): `h j k l`, `w b e`, `{ }`, `Ctrl+u` / `Ctrl+d` to move,
 `/` or `?` to search then `n` / `N`, `v` or `Space` to select, `y` or `Enter` to
@@ -129,6 +135,49 @@ Differences from tmuxinator worth knowing:
 Beyond the plugin, workspaces/tabs/panes are fully scriptable — `herdr workspace
 create`, `herdr tab create`, `herdr pane split`, `herdr pane run` — see
 `herdr api schema`.
+
+## Review sidebar and file viewer
+
+Two more plugins, both Rust TUIs that herdr opens in a pane:
+
+```bash
+herdr plugin install persiyanov/herdr-reviewr
+herdr plugin install smarzban/herdr-file-viewer
+```
+
+| Plugin | id | Purpose |
+| --- | --- | --- |
+| [herdr-reviewr](https://github.com/persiyanov/herdr-reviewr) | `persiyanov.reviewr` | Read the agent's diff beside the chat, comment on lines, send the notes back |
+| [herdr-file-viewer](https://github.com/smarzban/herdr-file-viewer) | `herdr-file-viewer` | Git-aware read-only file tree and preview |
+
+Configs are stowed from this repo at
+`plugins/config/persiyanov.reviewr/config.toml` and
+`plugins/config/herdr-file-viewer/config.toml`, keyed by plugin id so they
+survive an uninstall/reinstall.
+
+Both install a prebuilt binary from the matching GitHub release and verify its
+SHA-256; file-viewer falls back to `cargo` on any miss. The checksum ships from
+the same release as the binary, so it covers transport, not a compromised
+release — reinstalls are worth a glance at the upstream diff.
+
+Keys are bound here in `config.toml`, not in the plugin manifests:
+
+```toml
+[[keys.command]]
+key = "prefix+r"
+type = "plugin_action"
+command = "persiyanov.reviewr.toggle"   # <plugin_id>.<action_id>
+```
+
+List the ids with `herdr plugin action list`. Two gotchas:
+
+- **reviewr rejects a config file whole.** One unknown key or bad value
+  invalidates every key (`CFG-WHOLE-FILE`) and the sidebar then refuses to do any
+  review work, showing the error instead. file-viewer is the opposite — a bad
+  file silently falls back to defaults, flagged in its `?` overlay.
+- **file-viewer's tree width takes two keys.** `tree_width` (percent) and
+  `tree_max_cols` (hard column cap) both apply and the *smaller* wins, so raising
+  only `tree_width` appears to do nothing.
 
 ## Cleanup
 

@@ -1,0 +1,26 @@
+# herdr-file-viewer — git-aware read-only file viewer (smarzban/herdr-file-viewer)
+# Lives at ~/.config/herdr/plugins/config/herdr-file-viewer/config.toml
+# (`herdr plugin config-dir herdr-file-viewer`).
+#
+# Fully annotated reference: config.example.toml in the upstream repo. Unlike
+# reviewr, a malformed file here is ignored whole and every key falls back to its
+# default, flagged in the `?` overlay's Settings tab. Read-only input, picked up
+# on relaunch — the viewer never writes this file.
+
+# This is a dotfiles machine: dot-prefixed entries are the point, so show them.
+# The `.` key still toggles at runtime.
+hide_dotfiles = false
+
+# Plugin updates come from `herdr plugin install`, so skip the once-a-day
+# release check rather than have it phone GitHub on every launch.
+update_check = false
+
+# Tree on the left, like nvim-tree. Both keys size the tree and the SMALLER wins,
+# so tree_max_cols is raised alongside tree_width or it silently caps at 30.
+tree_position = "left"
+tree_width = 30
+tree_max_cols = 40
+
+# editor is deliberately unset: it falls back to $EDITOR, which the shell config
+# already sets. markdown/diff/syntax likewise keep their defaults (glow, delta,
+# bat) — bat is configured in bat/ and picks up the same Catppuccin theme.
