@@ -1,0 +1,74 @@
+# scenario-writer — on-demand workspace for the drafting tool over the corpus.
+#
+# Same shape as news-writer.toml and statsboard.toml: three tabs (code, run,
+# cli), each split into two vertical panes, back on the left and front on the
+# right. The backend is the repo root and the frontend is ./frontend, so only
+# the front pane cd's — herdr-plus panes have no per-pane cwd, only working_dir.
+#
+# Unlike news-writer there is no dev-stack.sh here, so the run/back pane spells
+# the stack out: containers, then the API. Postgres comes from the repo's own
+# docker-compose.dev.yml (pgvector, port 5433) rather than statsboard's bare
+# `docker start X || docker run -d`, because the compose file already pins the
+# image and the port. `up -d` on a running container is a no-op, so reopening
+# the workspace is safe.
+#
+# --factory is load-bearing. app/main.py exposes create_app(), not a
+# module-level `app`; without the flag uvicorn exits with
+# `Attribute "app" not found`.
+#
+# The panes are split so either half restarts on its own, but the front half is
+# useless alone: vite proxies /api and /healthz to :8000, and answers HTTP 500
+# — not a connection error — when the API is down. A 500 on every page is the
+# symptom of a dead back pane, not a broken frontend.
+#
+# Watch the port on open. Vite wants 3004 and silently takes 3005 if something
+# already holds it, which is how you end up with two dev servers and a stale
+# tab pointed at the wrong one.
+#
+# No venv activation in the cli tab: the backend runs under `uv run`, same as
+# news-writer.toml and news-lo.toml.
+#
+# First run only, after the containers are up:
+#   cp .env.example .env && uv run alembic upgrade head
+#   uv run python scripts/seed_local.py     # 809 documents, ~4 seconds
+# Re-run the seeder any time for a clean copy; it TRUNCATES, and refuses unless
+# db_host is local. Tests never touch this database — tests/conftest.py starts a
+# throwaway Postgres via testcontainers.
+
+name = "scenario-writer"
+description = "scenario-writer — code, run, cli; backend and frontend side by side"
+working_dir = "~/code/scenario-writer"
+
+[[tabs]]
+name = "code"
+
+[[tabs.panes]]
+label = "back"
+
+[[tabs.panes]]
+label = "front"
+command = "cd frontend"
+split = "right"
+
+[[tabs]]
+name = "run"
+
+[[tabs.panes]]
+label = "back"
+command = "docker compose -f docker-compose.dev.yml up -d; uv run uvicorn app.main:create_app --factory --port 8000"
+
+[[tabs.panes]]
+label = "front"
+command = "cd frontend && npm run dev"
+split = "right"
+
+[[tabs]]
+name = "cli"
+
+[[tabs.panes]]
+label = "back"
+
+[[tabs.panes]]
+label = "front"
+command = "cd frontend"
+split = "right"
