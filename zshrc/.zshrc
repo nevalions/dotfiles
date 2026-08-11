@@ -192,7 +192,13 @@ fv() {
 
 ZSH_THEME="powerlevel10k/powerlevel10k"
 
-plugins=(git zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlighting tmuxinator)
+# git-auto-fetch: background `git fetch` so the p10k vcs segment can show
+# ahead/behind without a manual fetch. Neither git nor p10k ever touches the
+# network on its own. Disable per repo with `git-auto-fetch` (toggles
+# .git/NO_AUTO_FETCH).
+GIT_AUTO_FETCH_INTERVAL=300  # seconds between fetches per repo (default 60)
+
+plugins=(git git-auto-fetch zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlighting tmuxinator)
 
 source "$ZSH/oh-my-zsh.sh"
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
