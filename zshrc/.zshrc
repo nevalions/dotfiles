@@ -204,51 +204,103 @@ source "$ZSH/oh-my-zsh.sh"
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
-# Override the git-auto-fetch plugin's `git-fetch-all` with a version that
-# redraws the prompt once the background fetch lands, and hook it to chpwd so
-# it fires on `cd` rather than only when a new prompt line starts. The plugin
-# stays loaded for its `git-auto-fetch` toggle and NO_AUTO_FETCH semantics.
-# No p10k file is patched; the one internal used is guarded, so a p10k upgrade
-# that renames it degrades to "no auto redraw" instead of erroring.
-if [[ -o interactive ]] && (( $+functions[git-fetch-all] )); then
+# Print a git status line when entering a repo, so `cd` alone shows ahead/behind
+# without opening lazygit. p10k cannot do this on its own: its vcs segment is
+# only recomputed in precmd, and `p10k display -r` merely repaints the cached
+# prompt string, so a fetch that lands after the prompt is drawn stays invisible
+# until the next command. This hook fetches (bounded, rate-limited) *before*
+# printing, so the numbers shown are current. No p10k internals are used.
+#
+# Knobs: GIT_AUTO_FETCH_INTERVAL (shared with the git-auto-fetch plugin),
+# GIT_CD_FETCH_TIMEOUT (hard cap on how long `cd` may block on the network),
+# GIT_CD_STATUS=0 to disable. Per-repo opt-out: `git-auto-fetch` (NO_AUTO_FETCH)
+# suppresses the fetch; the status line still prints from local refs.
+if [[ -o interactive ]]; then
   zmodload zsh/datetime
   zmodload -F zsh/stat b:zstat
   autoload -Uz add-zsh-hook
 
-  typeset -gi _gaf_fd=0
+  : ${GIT_CD_FETCH_TIMEOUT:=3}
+  : ${GIT_CD_STATUS:=1}
+  typeset -g _gcr_last=''
 
-  # zle -F callback: fetch finished, so drop p10k's cached vcs status for the
-  # cwd and force a re-render to pick up new ahead/behind counts.
-  _gaf_on_done() {
-    local -i fd=$1
-    zle -F $fd
-    exec {fd}<&-
-    _gaf_fd=0
-    (( $+functions[_p9k_vcs_status_purge] )) && _p9k_vcs_status_purge ${PWD:A}
-    (( $+functions[p10k] )) && p10k display -r
-  }
+  _git_cd_report() {
+    emulate -L zsh
+    setopt local_options no_ksh_arrays extended_glob
 
-  git-fetch-all() {
+    (( GIT_CD_STATUS )) || return 0
+
     local gitdir
-    gitdir=$(command git rev-parse --git-dir 2>/dev/null) || return 0
-    [[ -w $gitdir && ! -f $gitdir/NO_AUTO_FETCH ]] || return 0
-    [[ ! -f $gitdir/FETCH_LOG || -w $gitdir/FETCH_LOG ]] || return 0
-    (( _gaf_fd )) && return 0  # one fetch in flight per shell
+    gitdir=$(command git rev-parse --git-dir 2>/dev/null) || { _gcr_last=''; return 0 }
+    gitdir=${gitdir:A}
+    # Report once per repo: moving between subdirs of the same repo stays quiet.
+    [[ $gitdir == $_gcr_last ]] && return 0
+    _gcr_last=$gitdir
 
-    local -i lastrun=$(zstat +mtime "$gitdir/FETCH_LOG" 2>/dev/null || echo 0)
-    (( EPOCHSECONDS - lastrun < GIT_AUTO_FETCH_INTERVAL )) && return 0
+    # Refresh remote refs first, honouring the plugin's rate limit and opt-out.
+    if [[ -w $gitdir && ! -f $gitdir/NO_AUTO_FETCH ]] &&
+       [[ ! -f $gitdir/FETCH_LOG || -w $gitdir/FETCH_LOG ]]; then
+      local -i lastrun=$(zstat +mtime "$gitdir/FETCH_LOG" 2>/dev/null || echo 0)
+      if (( EPOCHSECONDS - lastrun >= ${GIT_AUTO_FETCH_INTERVAL:-60} )); then
+        date -R >! "$gitdir/FETCH_LOG"
+        GIT_SSH_COMMAND="command ssh -o BatchMode=yes -o ConnectTimeout=3" \
+        GIT_TERMINAL_PROMPT=0 \
+          command timeout $GIT_CD_FETCH_TIMEOUT \
+            git fetch --all --quiet >>"$gitdir/FETCH_LOG" 2>&1
+      fi
+    fi
 
-    date -R >! "$gitdir/FETCH_LOG"
-    exec {_gaf_fd}< <(
-      GIT_SSH_COMMAND="command ssh -o BatchMode=yes -o ConnectTimeout=5" \
-      GIT_TERMINAL_PROMPT=0 \
-        command git fetch --all --recurse-submodules=yes >>"$gitdir/FETCH_LOG" 2>&1
-      print done
-    )
-    zle -F $_gaf_fd _gaf_on_done
+    # One porcelain=v2 call for branch, upstream, ahead/behind and file states.
+    local -i staged=0 unstaged=0 unmerged=0 untracked=0 ahead=0 behind=0
+    local head='' upstream='' line xy
+    while IFS= read -r line; do
+      case $line in
+        '# branch.head '*)     head=${line#'# branch.head '} ;;
+        '# branch.upstream '*) upstream=${line#'# branch.upstream '} ;;
+        '# branch.ab '*)
+          local ab=(${=line#'# branch.ab '})
+          ahead=${ab[1]#+} behind=${ab[2]#-} ;;
+        [12]' '*)
+          xy=${${(s: :)line}[2]}
+          [[ $xy[1] != '.' ]] && (( staged++ ))
+          [[ $xy[2] != '.' ]] && (( unstaged++ )) ;;
+        'u '*) (( unmerged++ )) ;;
+        '? '*) (( untracked++ )) ;;
+      esac
+    done < <(command git --no-optional-locks status --porcelain=v2 --branch 2>/dev/null)
+
+    [[ -n $head ]] || return 0
+
+    local -i stashes=$(command git rev-list --walk-reflogs --count refs/stash 2>/dev/null || print 0)
+
+    # In-progress operations, which porcelain=v2 does not report.
+    local action=''
+    if [[ -d $gitdir/rebase-merge || -d $gitdir/rebase-apply ]]; then action=rebase
+    elif [[ -f $gitdir/MERGE_HEAD ]];        then action=merge
+    elif [[ -f $gitdir/CHERRY_PICK_HEAD ]];  then action=cherry-pick
+    elif [[ -f $gitdir/REVERT_HEAD ]];       then action=revert
+    elif [[ -f $gitdir/BISECT_LOG ]];        then action=bisect
+    fi
+
+    local out="%F{blue}${${gitdir:h}:t}%f"
+    [[ $head == '(detached)' ]] &&
+      out+=" %F{yellow}@$(command git rev-parse --short HEAD 2>/dev/null)%f" ||
+      out+=" %F{76}$head%f"
+    [[ -z $upstream ]] && out+=" %F{242}(no upstream)%f"
+    (( behind ))    && out+=" %F{cyan}⇣$behind%f"
+    (( ahead ))     && out+=" %F{cyan}⇡$ahead%f"
+    (( staged ))    && out+=" %F{green}+$staged%f"
+    (( unstaged ))  && out+=" %F{178}!$unstaged%f"
+    (( untracked )) && out+=" %F{76}?$untracked%f"
+    (( unmerged ))  && out+=" %F{red}~$unmerged%f"
+    (( stashes ))   && out+=" %F{242}*$stashes%f"
+    [[ -n $action ]] && out+=" %F{red}$action%f"
+    (( staged + unstaged + untracked + unmerged == 0 )) && out+=" %F{green}✔%f"
+
+    print -P -- " $out"
   }
 
-  add-zsh-hook chpwd git-fetch-all
+  add-zsh-hook chpwd _git_cd_report
 fi
 if command -v atuin &> /dev/null; then
   # . "$HOME/.atuin/bin/env"
