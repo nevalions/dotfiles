@@ -203,6 +203,53 @@ plugins=(git git-auto-fetch zsh-autosuggestions zsh-syntax-highlighting fast-syn
 source "$ZSH/oh-my-zsh.sh"
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
+
+# Override the git-auto-fetch plugin's `git-fetch-all` with a version that
+# redraws the prompt once the background fetch lands, and hook it to chpwd so
+# it fires on `cd` rather than only when a new prompt line starts. The plugin
+# stays loaded for its `git-auto-fetch` toggle and NO_AUTO_FETCH semantics.
+# No p10k file is patched; the one internal used is guarded, so a p10k upgrade
+# that renames it degrades to "no auto redraw" instead of erroring.
+if [[ -o interactive ]] && (( $+functions[git-fetch-all] )); then
+  zmodload zsh/datetime
+  zmodload -F zsh/stat b:zstat
+  autoload -Uz add-zsh-hook
+
+  typeset -gi _gaf_fd=0
+
+  # zle -F callback: fetch finished, so drop p10k's cached vcs status for the
+  # cwd and force a re-render to pick up new ahead/behind counts.
+  _gaf_on_done() {
+    local -i fd=$1
+    zle -F $fd
+    exec {fd}<&-
+    _gaf_fd=0
+    (( $+functions[_p9k_vcs_status_purge] )) && _p9k_vcs_status_purge ${PWD:A}
+    (( $+functions[p10k] )) && p10k display -r
+  }
+
+  git-fetch-all() {
+    local gitdir
+    gitdir=$(command git rev-parse --git-dir 2>/dev/null) || return 0
+    [[ -w $gitdir && ! -f $gitdir/NO_AUTO_FETCH ]] || return 0
+    [[ ! -f $gitdir/FETCH_LOG || -w $gitdir/FETCH_LOG ]] || return 0
+    (( _gaf_fd )) && return 0  # one fetch in flight per shell
+
+    local -i lastrun=$(zstat +mtime "$gitdir/FETCH_LOG" 2>/dev/null || echo 0)
+    (( EPOCHSECONDS - lastrun < GIT_AUTO_FETCH_INTERVAL )) && return 0
+
+    date -R >! "$gitdir/FETCH_LOG"
+    exec {_gaf_fd}< <(
+      GIT_SSH_COMMAND="command ssh -o BatchMode=yes -o ConnectTimeout=5" \
+      GIT_TERMINAL_PROMPT=0 \
+        command git fetch --all --recurse-submodules=yes >>"$gitdir/FETCH_LOG" 2>&1
+      print done
+    )
+    zle -F $_gaf_fd _gaf_on_done
+  }
+
+  add-zsh-hook chpwd git-fetch-all
+fi
 if command -v atuin &> /dev/null; then
   # . "$HOME/.atuin/bin/env"
   eval "$(atuin init zsh --disable-up-arrow)"
