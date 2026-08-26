@@ -303,7 +303,6 @@ if [[ -o interactive ]]; then
   add-zsh-hook chpwd _git_cd_report
 fi
 if command -v atuin &> /dev/null; then
-  # . "$HOME/.atuin/bin/env"
   eval "$(atuin init zsh --disable-up-arrow)"
 fi
 
