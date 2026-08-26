@@ -10,6 +10,20 @@ Branches: feature/ bugfix/ hotfix/ refactor/ docs/ → atomic commits → squash
 
 Solo owner. Write actions only when requested. No settings/secrets changes unless stated. Plan before PRs/merges.
 
+## Subagents — token economy
+
+- Pick the cheapest model that can do the job: **haiku** for search/scan/triage
+  and mechanical lookups; **sonnet** for well-specified implementation (clear
+  spec, few files, TDD steps spelled out); default (big) model only for design,
+  architecture, cross-cutting debugging, and reviews.
+- Dispatch a **fresh** agent per task. Resume a long-lived agent only when its
+  accumulated context covers the exact files of the new task — an inherited
+  transcript outside that is dead-weight context re-read on every tool call.
+- Batch small shell commands into one call (one `python3`/`git` invocation with
+  several steps beats five one-liners). Per-file `git add` still applies.
+- Same rules for Workflow `agent()` calls: set `model`/`effort` down for
+  mechanical stages, keep the big model for verify/judge stages.
+
 ## MCP sources
 
 1. Context7 — docs, APIs, patterns (primary)
