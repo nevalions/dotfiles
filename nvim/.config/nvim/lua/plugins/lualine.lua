@@ -37,6 +37,13 @@ return {
       cond = hide_in_width,
     }
 
+    -- LSP indexing/progress, in place of fidget.nvim. Neovim's own statusline
+    -- shows this by default, but lualine replaces 'statusline' wholesale.
+    local lsp_progress = {
+      vim.ui.progress_status,
+      cond = hide_in_width,
+    }
+
     require('lualine').setup {
       options = {
         icons_enabled = true,
@@ -53,7 +60,7 @@ return {
         lualine_a = { mode },
         lualine_b = { 'branch' },
         lualine_c = { filename },
-        lualine_x = { diagnostics, diff, { 'encoding', cond = hide_in_width }, { 'filetype', cond = hide_in_width } },
+        lualine_x = { lsp_progress, diagnostics, diff, { 'encoding', cond = hide_in_width }, { 'filetype', cond = hide_in_width } },
         lualine_y = { 'location' },
         lualine_z = { 'progress' },
       },

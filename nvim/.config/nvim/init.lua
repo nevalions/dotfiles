@@ -1,6 +1,7 @@
 require 'core.options' -- Load general options
 require 'core.keymaps' -- Load general keymaps
-require 'core.snippets' -- Custom code snippets
+require 'core.diagnostics' -- Diagnostic appearance and yank highlight
+require 'core.completion' -- Builtin insert-mode completion
 require 'core.autocmds' -- Custom autocommands
 require 'core.floaterminal' -- Custom floaterminal
 
@@ -24,8 +25,7 @@ require('lazy').setup {
   require 'plugins.treesitter',
   require 'plugins.telescope',
   require 'plugins.lsp',
-  require 'plugins.autocompletion',
-  require 'plugins.none-ls',
+  require 'plugins.conform',
   require 'plugins.vgit',
   -- require 'plugins.gitsigns',
   require 'plugins.alpha',

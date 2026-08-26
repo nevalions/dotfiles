@@ -1,8 +1,11 @@
+-- Inline suggestions come from the builtin LSP client (:help lsp-copilot);
+-- see core/completion.lua. CopilotChat reads the OAuth token straight out of
+-- ~/.config/github-copilot/{hosts,apps}.json, so it needs no companion plugin
+-- for auth -- `:LspCopilotSignIn` writes the same file copilot.vim did.
 return {
   {
     'CopilotC-Nvim/CopilotChat.nvim',
     dependencies = {
-      { 'github/copilot.vim' }, -- or zbirenbaum/copilot.lua
       { 'nvim-lua/plenary.nvim', branch = 'master' }, -- for curl, log and async functions
     },
     build = 'make tiktoken', -- Only on MacOS or Linux
@@ -12,7 +15,7 @@ return {
     keys = {
       { '<leader>zc', ':CopilotChat<CR>', mode = 'n', desc = 'Chat with Copilot' },
       { '<leader>ze', ':CopilotChatExplain<CR>', mode = 'v', desc = 'Explain Code' },
-      { '<leader>zr', ':CopilotCahtReview<CR>', mode = 'v', desc = 'Review Copilot' },
+      { '<leader>zr', ':CopilotChatReview<CR>', mode = 'v', desc = 'Review Copilot' },
       { '<leader>zf', ':CopilotChatFix<CR>', mode = 'v', desc = 'Fix Code Issues' },
       { '<leader>zo', ':CopilotChatOptimize<CR>', mode = 'v', desc = 'Optimize Code' },
       { '<leader>zd', ':CopilotChatDocs<CR>', mode = 'v', desc = 'Generate Docs' },

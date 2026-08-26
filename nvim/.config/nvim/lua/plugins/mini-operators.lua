@@ -11,9 +11,10 @@ return {
         func = nil,
       },
 
-      -- Exchange text regions
+      -- Exchange text regions. Not `gx`: that is Neovim's built-in
+      -- "open URL / follow documentLink under cursor".
       exchange = {
-        prefix = 'gx',
+        prefix = 'cx',
 
         -- Whether to reindent new text to match previous indent
         reindent_linewise = true,
@@ -27,9 +28,10 @@ return {
         func = nil,
       },
 
-      -- Replace text with register
+      -- Replace text with register. Not `gr`: since Neovim 0.11 that prefix
+      -- belongs to the built-in LSP maps (`grr`, `gra`, `grn`, `gri`, `grt`).
       replace = {
-        prefix = 'gr',
+        prefix = 'cr',
 
         -- Whether to reindent new text to match previous indent
         reindent_linewise = true,
