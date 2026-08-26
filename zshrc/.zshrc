@@ -303,7 +303,17 @@ if [[ -o interactive ]]; then
   add-zsh-hook chpwd _git_cd_report
 fi
 if command -v atuin &> /dev/null; then
-  eval "$(atuin init zsh --disable-up-arrow)"
+  # Per-host init flags (--disable-ai on Ansible-managed servers) are written
+  # to ~/.config/atuin/init-flags by roles/atuin. This file is shared by every
+  # machine, so they cannot be hardcoded here. Blank lines are dropped so an
+  # empty flags file is harmless.
+  atuin_flags=(--disable-up-arrow)
+  if [[ -r ~/.config/atuin/init-flags ]]; then
+    atuin_flags+=(${(f)"$(<~/.config/atuin/init-flags)"})
+  fi
+  atuin_flags=(${atuin_flags:#})
+  eval "$(atuin init zsh $atuin_flags)"
+  unset atuin_flags
 fi
 
 export LC_ALL=en_US.UTF-8
