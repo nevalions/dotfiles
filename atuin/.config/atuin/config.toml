@@ -8,6 +8,11 @@ enter_accept = false
 ## Start the search TUI in vim normal mode.
 keymap_mode = "vim-normal"
 
+## Default to the current git repo. With ~50 repos under ~/code, global search
+## is mostly other projects' noise. ctrl-r cycles out to global/host/session.
+## Worktrees resolve to their main repo.
+filter_mode = "workspace"
+
 ## Commands never written to history.
 ## These are UNANCHORED regexes matched anywhere in the command, so they must
 ## be anchored explicitly. The previous list was a plain word list, which meant
@@ -16,6 +21,10 @@ keymap_mode = "vim-normal"
 history_filter = [
   ## navigation and listing noise, with or without arguments
   "^(ls|lsa|lt|lg|cl|cx|tree|cd|nvim)( |$)",
+  ## short aliases: v=nvim (was the single most-recorded command), l=eza,
+  ## b=bat, and bare . / .. -- note "./script" is deliberately still recorded
+  "^(v|l|b)( |$)",
+  "^\\.\\.?( |$)",
   ## tmuxinator shortcuts
   "^tr[123]( |$)",
   ## bare `git`, plus the two verbs that carry no useful history
