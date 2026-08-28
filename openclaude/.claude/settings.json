@@ -238,6 +238,5 @@
       "**Org-specific CLIs**: `bd` (Beads issue tracker, per-repo, replaces Vikunja; 99× usage) — routine under this repo's `.beads/` prefix",
       "and any \"routine under <user>/ prefix\" qualifiers: `uv` (155× usage — this repo's toolchain runner, routine)"
     ]
-  },
-  "model": "claude-fable-5[1m]"
+  }
 }

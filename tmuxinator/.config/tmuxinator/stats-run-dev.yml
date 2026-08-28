@@ -17,5 +17,5 @@ windows:
             - ng s
         - stats-backend-terminal:
             - cd ~/code/statsboard/statsboards-backend/
-            - . ./venv/bin/activate
+            - . ./.venv/bin/activate
             - python -m src.runserver
