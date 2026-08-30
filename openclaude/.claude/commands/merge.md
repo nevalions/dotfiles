@@ -18,7 +18,9 @@ Merge the current feature branch to master:
    - git push origin master --follow-tags
 
 4) Cleanup:
-   - git branch -d <feature-branch>
+   - git branch -D <feature-branch>
+     (-D, not -d: a squash merge leaves no merge commit, so -d always fails with
+     "the branch is not fully merged". Only run it after step 2's push succeeded.)
    - git push origin -d <feature-branch>
 
 5) Close the linked bd issue: bd close <id>
