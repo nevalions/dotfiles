@@ -53,3 +53,30 @@ columns = [
   { type = "exit", width = 3 },
   "command",
 ]
+
+[daemon]
+## Background daemon. Still marked *Experimental* upstream in 18.20, and
+## enabled HERE ONLY -- this is the workstation, not a server. Bead
+## ansible-n1j0.
+##
+## It does NOT give the atuin MCP server's atuin_output tool anything to read.
+## Measured on 18.20.1: capture happens only in `pty_proxy`, via OSC 133 in an
+## interactive shell. Commands run by an agent go through `zsh -c` with no PTY,
+## and `atuin history end` has no output argument at all, so agent-run commands
+## can never have their output stored by this version. pty_proxy is
+## deliberately NOT enabled: it re-execs the shell, and with `atuin init` at
+## line ~306 of ~400 that doubles startup from 0.46s to roughly 0.9s, to
+## capture human output only.
+##
+## The daemon still earns its place -- it owns sync and the history socket, and
+## a future atuin that can store agent output will find it already running.
+##
+## roles/atuin in the ansible repo keeps daemon.enabled = false for the server
+## profile, deliberately: cluster nodes gain nothing here and have no business
+## running an experimental daemon. Do not "fix" the asymmetry.
+enabled = true
+
+## No systemd unit ships with the Arch package, so the daemon is started by the
+## first shell that needs it rather than by the service manager. That is also
+## what makes it come back after a reboot.
+autostart = true
