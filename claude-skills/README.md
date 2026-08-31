@@ -13,6 +13,18 @@ Skills load into every session, so an upstream edit is a silent change to agent
 behaviour with no review prompt. Vendored skills are therefore committed to this
 repo and pinned below. Git is the review gate.
 
+## Local skills
+
+Written here rather than vendored, so there is no upstream to pin.
+
+| Skill | Purpose | Added |
+|-------|---------|-------|
+| `shell-history` | Query the atuin shell-history database through the atuin MCP server: what was actually executed, on this machine and on every host that syncs, with exit codes and agent intent. | 2026-08-31 |
+
+`shell-history` names no host and no address on purpose. The MCP server reads
+the local atuin database, so an agent never needs to know where the sync server
+is — which keeps this repo, which is public, free of infrastructure detail.
+
 ## Vendored skills
 
 | Skill | Upstream | Pinned commit | SKILL.md sha256 | Adopted |
