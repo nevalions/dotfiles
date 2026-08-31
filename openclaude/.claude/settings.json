@@ -1,212 +1,5 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(git:*)",
-      "Bash(claude mcp:*)",
-      "Bash(stow:*)",
-      "Bash(cp:*)",
-      "WebSearch",
-      "Bash(bd:*)",
-      "mcp__forgejo__*",
-      "mcp__perplexity__*",
-      "mcp__context7__*",
-      "mcp__vibe-check-mcp__*",
-      "Grep"
-    ],
-    "defaultMode": "auto"
-  },
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Bash|Edit|Write|MultiEdit|Agent|Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-context-monitor.js\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-read-injection-scanner.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"/home/linroot/.claude/hooks/gsd-phase-boundary.sh\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"/home/linroot/ansible/scripts/claude-hook-audit-hooks.sh\"",
-            "timeout": 30,
-            "statusMessage": "Auditing git hooks"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "atuin hook claude-code"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-prompt-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-read-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-workflow-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"/home/linroot/.claude/hooks/gsd-validate-commit.sh\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "atuin hook claude-code"
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-check-update.js\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"/home/linroot/.claude/hooks/gsd-session-state.sh\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.claude/hooks/context-mode-cache-heal.mjs\""
-          }
-        ]
-      },
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash '/home/linroot/.claude/hooks/herdr-agent-state.sh' session",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "PostToolUseFailure": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "atuin hook claude-code"
-          }
-        ]
-      }
-    ]
-  },
-  "statusLine": {
-    "type": "command",
-    "command": "bash ~/.claude/statusline-command.sh"
-  },
-  "enabledPlugins": {
-    "beads@beads-marketplace": true,
-    "clangd-lsp@claude-plugins-official": true,
-    "claude-mem@thedotmack": true,
-    "context-mode@context-mode": true,
-    "frontend-design@claude-plugins-official": true,
-    "skill-creator@claude-plugins-official": true,
-    "superpowers@claude-plugins-official": true,
-    "playwright@claude-plugins-official": true
-  },
-  "extraKnownMarketplaces": {
-    "beads-marketplace": {
-      "source": {
-        "source": "github",
-        "repo": "steveyegge/beads"
-      }
-    },
-    "context-mode": {
-      "source": {
-        "source": "github",
-        "repo": "mksglu/context-mode"
-      }
-    },
-    "thedotmack": {
-      "source": {
-        "source": "github",
-        "repo": "thedotmack/claude-mem"
-      }
-    }
-  },
-  "tui": "fullscreen",
-  "skipDangerousModePermissionPrompt": true,
-  "skipWorkflowUsageWarning": true,
-  "theme": "dark",
   "agentPushNotifEnabled": true,
-  "skipAutoPermissionPrompt": true,
   "autoMode": {
     "allow": [
       "$defaults",
@@ -238,5 +31,213 @@
       "**Org-specific CLIs**: `bd` (Beads issue tracker, per-repo, replaces Vikunja; 99× usage) — routine under this repo's `.beads/` prefix",
       "and any \"routine under <user>/ prefix\" qualifiers: `uv` (155× usage — this repo's toolchain runner, routine)"
     ]
-  }
+  },
+  "enabledPlugins": {
+    "beads@beads-marketplace": true,
+    "clangd-lsp@claude-plugins-official": true,
+    "claude-mem@thedotmack": true,
+    "context-mode@context-mode": true,
+    "frontend-design@claude-plugins-official": true,
+    "playwright@claude-plugins-official": true,
+    "skill-creator@claude-plugins-official": true,
+    "superpowers@claude-plugins-official": true
+  },
+  "extraKnownMarketplaces": {
+    "beads-marketplace": {
+      "source": {
+        "repo": "steveyegge/beads",
+        "source": "github"
+      }
+    },
+    "context-mode": {
+      "source": {
+        "repo": "mksglu/context-mode",
+        "source": "github"
+      }
+    },
+    "thedotmack": {
+      "source": {
+        "repo": "thedotmack/claude-mem",
+        "source": "github"
+      }
+    }
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-context-monitor.js\"",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash|Edit|Write|MultiEdit|Agent|Task"
+      },
+      {
+        "hooks": [
+          {
+            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-read-injection-scanner.js\"",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": "Read"
+      },
+      {
+        "hooks": [
+          {
+            "command": "bash \"/home/linroot/.claude/hooks/gsd-phase-boundary.sh\"",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit"
+      },
+      {
+        "hooks": [
+          {
+            "command": "bash \"/home/linroot/ansible/scripts/claude-hook-audit-hooks.sh\"",
+            "statusMessage": "Auditing git hooks",
+            "timeout": 30,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      },
+      {
+        "hooks": [
+          {
+            "command": "atuin hook claude-code",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "command": "atuin hook claude-code",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-prompt-guard.js\"",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit"
+      },
+      {
+        "hooks": [
+          {
+            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-read-guard.js\"",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit"
+      },
+      {
+        "hooks": [
+          {
+            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-workflow-guard.js\"",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit"
+      },
+      {
+        "hooks": [
+          {
+            "command": "bash \"/home/linroot/.claude/hooks/gsd-validate-commit.sh\"",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      },
+      {
+        "hooks": [
+          {
+            "command": "atuin hook claude-code",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-check-update.js\"",
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "command": "bash \"/home/linroot/.claude/hooks/gsd-session-state.sh\"",
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "command": "\"/home/linroot/.claude/hooks/context-mode-cache-heal.mjs\"",
+            "type": "command"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "command": "bash '/home/linroot/.claude/hooks/herdr-agent-state.sh' session",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "*"
+      }
+    ]
+  },
+  "model": "claude-fable-5[1m]",
+  "permissions": {
+    "allow": [
+      "Bash(git:*)",
+      "Bash(claude mcp:*)",
+      "Bash(stow:*)",
+      "Bash(cp:*)",
+      "WebSearch",
+      "Bash(bd:*)",
+      "mcp__forgejo__*",
+      "mcp__perplexity__*",
+      "mcp__context7__*",
+      "mcp__vibe-check-mcp__*",
+      "Grep"
+    ],
+    "defaultMode": "auto"
+  },
+  "skipAutoPermissionPrompt": true,
+  "skipDangerousModePermissionPrompt": true,
+  "skipWorkflowUsageWarning": true,
+  "statusLine": {
+    "command": "bash ~/.claude/statusline-command.sh",
+    "type": "command"
+  },
+  "theme": "dark",
+  "tui": "fullscreen"
 }
