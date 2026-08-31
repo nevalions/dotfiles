@@ -357,6 +357,12 @@ fi
 # Claude Code MCP env vars
 [[ -f ~/.env.claude ]] && source ~/.env.claude
 
+# Per-machine overrides that must not live in this repo. This repo is public,
+# so anything naming internal infrastructure belongs here instead -- e.g.
+# ATUIN_SYNC_ADDRESS, which points at the self-hosted sync server on the mesh.
+# Not stowed, so a dotfiles re-run never touches it.
+[[ -r ~/.zshrc.local ]] && source ~/.zshrc.local
+
 # opencode wrapper that works with direnv exec
 opencode() {
   local env_dir="$HOME/dotfiles/opencode/.config/opencode"
