@@ -1,37 +1,5 @@
 {
   "agentPushNotifEnabled": true,
-  "autoMode": {
-    "allow": [
-      "$defaults",
-      "Bash(bd:*) in ~/code/vidarh — routine per-repo issue tracker usage per CLAUDE.md"
-    ],
-    "environment": [
-      "### Org-wide",
-      "**Organization**: None configured",
-      "**Cloud provider(s)**: None configured",
-      "**Repository visibility**: assume private (not queryable via gh — self-hosted Forgejo host `git.butakov.su`, `nevalions/vidarh`; no public-visibility signal found)",
-      "**Internal sharing / snippet hosting**: None configured — treat public paste/gist services as outside the trust boundary",
-      "**Secrets management**: OS keychain / environment variable / plaintext `config.json` field (legacy) via `src/vidarh/secrets.py`, resolved in that order — no external secrets manager configured",
-      "**Default / protected branches**: `master` (default branch, per repo facts); protection/rulesets not queryable via gh for this host — treat `master` as protected by convention (CLAUDE.md: feature/bugfix/hotfix/refactor/docs branches → squash merge to master → tag)",
-      "**CI/CD deploy targets**: None configured",
-      "**Network posture**: None configured",
-      "**Source control**: Forgejo (self-hosted) at `git.butakov.su:2222`, repo `nevalions/vidarh` (origin) — this repo and its remote only",
-      "**Trusted internal domains**: `git.butakov.su` (Forgejo remote host); `llm.butakov.su` (contacted 3× — likely the LiteLLM/STT gateway referenced in CLAUDE.md)",
-      "**Trusted cloud buckets**: None configured",
-      "**Key internal services**: `llm.butakov.su` (LiteLLM gateway / OpenAI-compatible STT endpoint, per CLAUDE.md and usage); shared Postgres transcript index (host not specified in recon)",
-      "**Internal package registry**: None configured",
-      "**Sensitive data locations & audiences**: `src/vidarh/secrets.py`, `tests/test_secrets.py` (secrets-resolution code, not a secret store itself); `.beads-credential-key` (gitignored credential key file) — share only with audiences cleared at the [named+specifics] bar",
-      "**Data retention / declassification**: None configured",
-      "**Sensitive remote targets**: any namespace, host, or container whose name carries `prod` or `production` as a whole word or name segment",
-      "**Protected deployment namespaces / environments**: None configured — fall back to the Sensitive remote targets heuristic",
-      "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries `prod` or `production` as a whole word or name segment",
-      "### User-specific",
-      "**Primary use of Claude Code**: software development (Qt desktop app for video archiving/transcription)",
-      "**Trusted repo**: `/home/linroot/code/vidarh` and its remote `ssh://git.butakov.su:2222/nevalions/vidarh.git` (origin) only",
-      "**Org-specific CLIs**: `bd` (Beads issue tracker, per-repo, replaces Vikunja; 99× usage) — routine under this repo's `.beads/` prefix",
-      "and any \"routine under <user>/ prefix\" qualifiers: `uv` (155× usage — this repo's toolchain runner, routine)"
-    ]
-  },
   "enabledPlugins": {
     "beads@beads-marketplace": true,
     "clangd-lsp@claude-plugins-official": true,

@@ -25,3 +25,26 @@ nvim/.config/nvim/lsp-local.lua
 
 # CLAUDE.md is tracked for openclaude stow package
 !openclaude/.claude/CLAUDE.md
+
+# ~/.claude is a stow package, so everything Claude Code writes into it lands
+# in this repo -- and this repo is PUBLIC. settings.local.json is the local
+# layer that holds per-machine state: accumulated permission grants and the
+# autoMode environment block, which is auto-generated reconnaissance naming
+# internal hosts and describing where secrets live. It was untracked only by
+# luck; one `git add -A` would have published it. See ansible-1se2.
+openclaude/.claude/settings.local.json
+
+# Runtime state Claude Code writes into the same stowed directory. None of it
+# belongs in a public repo: credentials, conversation transcripts, prompt
+# history, caches.
+openclaude/.claude/.credentials.json
+openclaude/.claude/history.jsonl
+openclaude/.claude/projects/
+openclaude/.claude/shell-snapshots/
+openclaude/.claude/paste-cache/
+openclaude/.claude/file-history/
+openclaude/.claude/todos/
+openclaude/.claude/statsig/
+openclaude/.claude/telemetry/
+openclaude/.claude/cache/
+openclaude/.claude/backups/
