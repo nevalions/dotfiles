@@ -303,17 +303,30 @@ if [[ -o interactive ]]; then
   add-zsh-hook chpwd _git_cd_report
 fi
 if command -v atuin &> /dev/null; then
-  # Per-host init flags (--disable-ai on Ansible-managed servers) are written
-  # to ~/.config/atuin/init-flags by roles/atuin. This file is shared by every
-  # machine, so they cannot be hardcoded here. Blank lines are dropped so an
-  # empty flags file is harmless.
+  # /etc/atuin exists only where Ansible's roles/atuin has run the server
+  # profile, so its presence is the marker for "this host is managed" -- one
+  # .zshrc is shared by every machine and cannot branch on hostname.
+  #
+  # It must NOT be ~/.config/atuin: on any host with the dotfiles stowed, that
+  # path is a stow symlink back into this repo, so a config written there lands
+  # in git. Worse, the dotfiles role stows with `stow --adopt`, which pulls a
+  # real file at the target into the repo and symlinks it.
+  #
+  # roles/atuin writes both config.toml and init-flags there together, so a
+  # directory that exists always has a config in it.
+  if [[ -d /etc/atuin ]]; then
+    export ATUIN_CONFIG_DIR=/etc/atuin
+  fi
+  # Per-host init flags (--disable-ai on Ansible-managed servers). Blank lines
+  # are dropped so an empty flags file is harmless.
   atuin_flags=(--disable-up-arrow)
-  if [[ -r ~/.config/atuin/init-flags ]]; then
-    atuin_flags+=(${(f)"$(<~/.config/atuin/init-flags)"})
+  atuin_init_flags_file=${ATUIN_CONFIG_DIR:-~/.config/atuin}/init-flags
+  if [[ -r $atuin_init_flags_file ]]; then
+    atuin_flags+=(${(f)"$(<$atuin_init_flags_file)"})
   fi
   atuin_flags=(${atuin_flags:#})
   eval "$(atuin init zsh $atuin_flags)"
-  unset atuin_flags
+  unset atuin_flags atuin_init_flags_file
 fi
 
 export LC_ALL=en_US.UTF-8
