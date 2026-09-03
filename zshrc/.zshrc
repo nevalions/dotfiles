@@ -332,7 +332,9 @@ fi
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
 
-export PATH="$(ruby -e 'print Gem.user_dir')/bin:$PATH"
+if command -v ruby >/dev/null 2>&1; then
+  export PATH="$(ruby -e 'print Gem.user_dir')/bin:$PATH"
+fi
 
 
 # Load Angular CLI autocompletion.
