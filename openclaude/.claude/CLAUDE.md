@@ -10,6 +10,12 @@ Branches: feature/ bugfix/ hotfix/ refactor/ docs/ → atomic commits → squash
 
 Solo owner. Write actions only when requested. No settings/secrets changes unless stated. Plan before PRs/merges.
 
+## Scope of changes
+
+If, while working or testing, you find a pre-existing bug, a performance concern, or behavior the task doesn't mention, don't fix, optimize or extend it in this change unless the requested behavior cannot work without it; report it as a follow-up in your summary. Commit tests only where the task asks for them or the repo already keeps tests for this kind of change, sized like the neighboring test files; scratch checks need not be kept.
+
+When it will not affect the end result, surgically edit a file rather than rewrite the entire thing.
+
 ## Subagents — token economy
 
 - Pick the cheapest model that can do the job: **haiku** for search/scan/triage
@@ -33,9 +39,9 @@ Priority: official standards > official docs > community > blogs.
 
 ## Beads (bd)
 
-Per-repo issue tracker (`bd`), replaces Vikunja. Data lives in `.beads/`. Run `bd prime` for full workflow. If a repo has no `.beads/`, `bd init` first.
+Per-repo issue tracker (`bd`). Data lives in `.beads/`. Run `bd prime` for full workflow. If a repo has no `.beads/`, `bd init` first.
 
-Priority is INVERTED vs Vikunja: `-p 0..4`, **0 = highest**. 0=Urgent 1=High 2=Medium 3=Low 4=Trivial.
+Priority: `-p 0..4`, **0 = highest**. 0=Urgent 1=High 2=Medium 3=Low 4=Trivial.
 
 Descriptions/notes: plain text or markdown (no HTML). Use `bd remember` for persistent knowledge, not MEMORY.md.
 

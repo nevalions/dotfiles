@@ -15,35 +15,15 @@
     ],
     "defaultMode": "auto"
   },
-  "model": "claude-fable-5[1m]",
+  "model": "claude-fable-5-1[1m]",
   "hooks": {
     "PostToolUse": [
-      {
-        "matcher": "Bash|Edit|Write|MultiEdit|Agent|Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-context-monitor.js\"",
-            "timeout": 10
-          }
-        ]
-      },
       {
         "matcher": "Read",
         "hooks": [
           {
             "type": "command",
             "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-read-injection-scanner.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"/home/linroot/.claude/hooks/gsd-phase-boundary.sh\"",
             "timeout": 5
           }
         ]
@@ -92,26 +72,6 @@
         ]
       },
       {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-read-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-workflow-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -132,22 +92,6 @@
       }
     ],
     "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-check-update.js\""
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"/home/linroot/.claude/hooks/gsd-session-state.sh\""
-          }
-        ]
-      },
       {
         "hooks": [
           {
@@ -207,5 +151,33 @@
   "skipWorkflowUsageWarning": true,
   "theme": "dark",
   "agentPushNotifEnabled": true,
-  "skipAutoPermissionPrompt": true
+  "skipAutoPermissionPrompt": true,
+  "autoMode": {
+    "environment": [
+      "### Org-wide",
+      "**Organization**: None configured",
+      "**Cloud provider(s)**: None configured",
+      "**Repository visibility**: Not queryable via gh (remote host git.butakov.su is not github.com); assume private — self-hosted Forgejo remote, no public-visibility signal found",
+      "**Internal sharing / snippet hosting**: None configured — treat public paste/gist services as outside the trust boundary",
+      "**Secrets management**: OS keychain / environment variable / plaintext config.json fallback, resolved via src/vidarh/secrets.py (this repo only)",
+      "**Default / protected branches**: master (default branch, per repo facts) — protection status not queryable via gh for this host",
+      "**CI/CD deploy targets**: None configured",
+      "**Network posture**: None configured",
+      "**Source control**: The trusted repo (ssh://git.butakov.su:2222/nevalions/vidarh.git) and its remote only — self-hosted Forgejo at git.butakov.su, no additional orgs configured",
+      "**Trusted internal domains**: git.butakov.su (this repo's Forgejo remote host); llm.butakov.su (STT/LLM gateway host contacted in this project's transcripts)",
+      "**Trusted cloud buckets**: None configured",
+      "**Key internal services**: llm.butakov.su (LiteLLM/STT gateway, contacted 3× in this project's transcripts)",
+      "**Internal package registry**: None configured",
+      "**Sensitive data locations & audiences**: src/vidarh/secrets.py and tests/test_secrets.py (secrets-resolution code, not a data store); .beads-credential-key (gitignored credential key file) — share only with audiences cleared at the [named+specifics] bar",
+      "**Data retention / declassification**: None configured",
+      "**Sensitive remote targets**: any namespace, host, or container whose name carries prod or production as a whole word or name segment",
+      "**Protected deployment namespaces / environments**: None configured — fall back to the Sensitive remote targets heuristic",
+      "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries prod or production as a whole word or name segment",
+      "### User-specific",
+      "**Primary use of Claude Code**: software development (Qt desktop app for video archiving/transcription — this repo, vidarh)",
+      "**Trusted repo**: /home/linroot/code/vidarh (working directory) and its remote ssh://git.butakov.su:2222/nevalions/vidarh.git; visibility assumed private (self-hosted Forgejo, unverified) — confidential material fine here, but secrets/credentials are never cleared into it by visibility alone",
+      "**Org-specific CLIs**: bd (beads issue tracker, per-repo, used 268× in this project) — routine under this repo's .beads/ directory; uv (Python package/task runner, used 420× in this project)",
+      "routine under linroot/ (git author identity per ~/.claude/CLAUDE.md) for commits in this repo, non-interactive, feat/fix/refactor/docs/chore prefixes, git add <file> not -A"
+    ]
+  }
 }
