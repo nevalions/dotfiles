@@ -1,12 +1,12 @@
 ---
 name: scan-security
-description: "Run Semgrep mcp security scan and file results to bd/beads (plan only, no code changes)"
+description: "Run a Semgrep CLI security scan and file results to bd/beads (plan only, no code changes)"
 disable-model-invocation: true
 context: fork
 agent: Plan
 ---
 
-Run a security scan with semgrep mcp of this repository using Semgrep MCP.
+Run a security scan of this repository with the `semgrep` CLI. Prefer the repo's own entry point when it has one (`make security-scan`, `scripts/semgrep-scan.sh`, `scripts/pre-push-security.sh`); otherwise `semgrep scan --config auto --json --quiet .`.
 
 Requirements:
 - Use a standard Semgrep ruleset for the stack (FastAPI/Python and Angular/TS where present) with high-signal rules; skip style-only findings.
