@@ -74,6 +74,7 @@ git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-$
 | **Tmuxinator** | Project templating system | `tmuxinator/` |
 | **Herdr** | Terminal workspace manager for AI coding agents, with declarative project layouts | `herdr/` |
 | **Claude skills** | Agent skills stowed into `~/.claude/skills/` | `claude-skills/` |
+| **Git** | Global git ignore (`.claude/worktrees/`, `settings.local.json`) | `git/` |
 
 Most packages only need `stow`. Two configure tools that are **not** in the Arch
 repos, so the tool has to exist first or the config has nothing to drive:
@@ -81,7 +82,7 @@ repos, so the tool has to exist first or the config has nothing to drive:
 | Tool | Install | Notes |
 |------|---------|-------|
 | **Herdr** | `curl -fsSL https://herdr.dev/install.sh \| sh` | Single binary to `~/.local/bin`. Plugins are installed separately with `herdr plugin install` — see `herdr/.config/herdr/README.md` |
-| **Claude Code** | see [claude.com/claude-code](https://claude.com/claude-code) | `claude-skills/` and `openclaude/` are stowed into `~/.claude/`, which Claude Code creates |
+| **Claude Code** | see [claude.com/claude-code](https://claude.com/claude-code) | `stow -R openclaude claude-skills git` links config, skills and agents into `~/.claude/` (which Claude Code creates) and the git ignore into `~/.config/git/`. Never stow `~/.claude` wholesale: Claude Code writes runtime data there, so only per-entry folding is safe |
 
 ## Key Features
 

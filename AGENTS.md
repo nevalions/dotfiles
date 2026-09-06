@@ -6,7 +6,7 @@
 - `stow <directory>` - Apply symlinks for specific configuration
 - `stow -D <directory>` - Remove symlinks
 - `stow */` - Apply all dotfiles to home directory
-- `./sync-claude.sh` - Stow the Claude Code packages (`openclaude`, `claude-skills`) into `~/.claude`
+- `stow -R openclaude claude-skills git` - link the Claude Code packages into `~/.claude` and the git ignore into `~/.config/git` (plain stow, no wrapper script)
 - `bat cache --build` - Rebuild bat syntax highlighting themes
 
 Everything is stowed, never copied, so an edit under `~/.config` or `~/.claude`
