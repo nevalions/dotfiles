@@ -14,11 +14,6 @@ by a project-specific CLAUDE.md.
 
 ---
 
-## Research commands
+## Research
 
-Prefer these commands over ad-hoc questions:
-
-- **/search-plan** — Research topic, extract rules, propose safe plan
-- **/search-ecosystem** — Current state of a tool/framework (releases, breaking changes)
-- **/search-security** — Latest security guidance (standards, deprecations)
-- **/search** — General web-backed research
+Prefer `/search [plan|ecosystem|security] <topic>` (Perplexity-backed, fixed output shape) over ad-hoc web questions.
