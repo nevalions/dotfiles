@@ -5,15 +5,9 @@ by a project-specific CLAUDE.md.
 
 ---
 
-## vibe_check
-
-Call vibe_check before actions that are hard to reverse or that change the plan the user approved, passing the full user request and the current plan. Record resolved issues with vibe_learn when they would help a later session.
-
----
-
 ## Semgrep usage
 
-- Use Semgrep MCP for security scanning and code pattern detection
+- Use the `semgrep` CLI (or the repo's own scan script / make target) for security scanning and code pattern detection
 - Prefer Semgrep before manual security review
 - Do not auto-fix findings unless explicitly instructed
 - Create bd (beads) issues for medium/high severity findings

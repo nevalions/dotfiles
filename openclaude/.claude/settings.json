@@ -10,7 +10,6 @@
       "mcp__forgejo__*",
       "mcp__perplexity__*",
       "mcp__context7__*",
-      "mcp__vibe-check-mcp__*",
       "Grep"
     ],
     "defaultMode": "auto"
@@ -18,16 +17,6 @@
   "model": "claude-fable-5-1[1m]",
   "hooks": {
     "PostToolUse": [
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-read-injection-scanner.js\"",
-            "timeout": 5
-          }
-        ]
-      },
       {
         "matcher": "Bash",
         "hooks": [
@@ -61,26 +50,6 @@
       }
     ],
     "PreToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"/home/linroot/.nvm/versions/node/v22.16.0/bin/node\" \"/home/linroot/.claude/hooks/gsd-prompt-guard.js\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"/home/linroot/.claude/hooks/gsd-validate-commit.sh\"",
-            "timeout": 5
-          }
-        ]
-      },
       {
         "matcher": "Bash",
         "hooks": [
@@ -117,7 +86,7 @@
     "command": "bash ~/.claude/statusline-command.sh"
   },
   "enabledPlugins": {
-    "beads@beads-marketplace": true,
+    "beads@beads-marketplace": false,
     "clangd-lsp@claude-plugins-official": true,
     "claude-mem@thedotmack": true,
     "context-mode@context-mode": true,

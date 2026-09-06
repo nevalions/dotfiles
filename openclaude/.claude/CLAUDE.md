@@ -6,6 +6,12 @@ Author: linroot <nevalions@gmail.com>. No co-authored-by lines.
 Prefixes: feat, fix, refactor, docs, chore. Non-interactive only. `git add <file>` not `-A`.
 Branches: feature/ bugfix/ hotfix/ refactor/ docs/ → atomic commits → squash merge to master → tag → cleanup.
 
+## Worktrees
+
+Default: work in place on a feature branch. Use the native `EnterWorktree` tool (never raw `git worktree add`) only when another session or agent may write to the same repo (Herdr panes, claw, parallel write-capable subagents via `isolation: worktree`), or when the tree holds unrelated dirty work. Read-only agents (review, search, triage) never need one.
+
+A worktree is a fresh checkout: `.env` and installed deps are absent. Add a `.worktreeinclude` (gitignore syntax) for gitignored files to copy, run the repo's setup there, and keep `.claude/worktrees/` gitignored. `bd` finds the shared tracker on its own.
+
 ## Forgejo
 
 Solo owner. Write actions only when requested. No settings/secrets changes unless stated. Plan before PRs/merges.
