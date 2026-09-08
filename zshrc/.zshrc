@@ -1,3 +1,8 @@
+# export http_proxy="http://127.0.0.1:10808"
+# export https_proxy="http://127.0.0.1:10808"
+# export ftp_proxy="http://127.0.0.1:10808"
+# export no_proxy="localhost,127.0.0.1,.local"
+
 if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
@@ -138,26 +143,25 @@ alias lt2="eza --tree --level=2 --long --icons --git -a"
 alias lt3="eza --tree --level=3 --long --icons --git -a"
 alias ltree="eza --tree --level=2  --icons --git -a"
 
-
 ### FZF ###
 export FZF_DEFAULT_COMMAND="fd --type f --exclude .git --exclude $HOME/share --follow"
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
 find_with_exclusions() {
-    find "$1" -type "$2" \
-        -not -path '*/.git/*' \
-        -not -path './share/*' \
-        -not -path './.local/*' \
-        -not -path '*/yay/*' \
-        -not -path '*/.cache/*' \
-        -not -path '*/venv/*' \
-        -not -path '*/.mozilla/*' \
-        -not -path '*/.var/*' \
-        -not -path '*/.oh-my-zsh/*' \
-        -not -path '*__pycache__*' \
-        -not -path '*/.npm/*' \
-        -not -path "$HOME/share/*" \
-        -not -path "$HOME/.local/*"
+  find "$1" -type "$2" \
+    -not -path '*/.git/*' \
+    -not -path './share/*' \
+    -not -path './.local/*' \
+    -not -path '*/yay/*' \
+    -not -path '*/.cache/*' \
+    -not -path '*/venv/*' \
+    -not -path '*/.mozilla/*' \
+    -not -path '*/.var/*' \
+    -not -path '*/.oh-my-zsh/*' \
+    -not -path '*__pycache__*' \
+    -not -path '*/.npm/*' \
+    -not -path "$HOME/share/*" \
+    -not -path "$HOME/.local/*"
 }
 
 if_dir_lt() {
@@ -169,7 +173,7 @@ if_dir_lt() {
 
 # navigation
 cx() { cd "$@" && ls -l; }
-fhd() { 
+fhd() {
   local dir=$(find_with_exclusions "$HOME" "d" | fzf)
   if_dir_lt "$dir"
 }
@@ -177,14 +181,14 @@ fcd() {
   local dir=$(find_with_exclusions "." "d" | fzf)
   if_dir_lt "$dir"
 }
-f() { 
-  local selected_file=$(find_with_exclusions "$(pwd)" "f" | fzf) 
-  if [ -n "$selected_file" ]; then 
+f() {
+  local selected_file=$(find_with_exclusions "$(pwd)" "f" | fzf)
+  if [ -n "$selected_file" ]; then
     echo "$selected_file" | wl-copy
   fi
 }
-fv() { 
-  local selected_file=$(find_with_exclusions "." "f" | fzf) 
+fv() {
+  local selected_file=$(find_with_exclusions "." "f" | fzf)
   if [ -n "$selected_file" ]; then
     nvim "$selected_file"
   fi
@@ -196,7 +200,7 @@ ZSH_THEME="powerlevel10k/powerlevel10k"
 # ahead/behind without a manual fetch. Neither git nor p10k ever touches the
 # network on its own. Disable per repo with `git-auto-fetch` (toggles
 # .git/NO_AUTO_FETCH).
-GIT_AUTO_FETCH_INTERVAL=300  # seconds between fetches per repo (default 60)
+GIT_AUTO_FETCH_INTERVAL=300 # seconds between fetches per repo (default 60)
 
 plugins=(git git-auto-fetch zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlighting tmuxinator)
 
@@ -228,10 +232,13 @@ if [[ -o interactive ]]; then
     emulate -L zsh
     setopt local_options no_ksh_arrays extended_glob
 
-    (( GIT_CD_STATUS )) || return 0
+    ((GIT_CD_STATUS)) || return 0
 
     local gitdir
-    gitdir=$(command git rev-parse --git-dir 2>/dev/null) || { _gcr_last=''; return 0 }
+    gitdir=$(command git rev-parse --git-dir 2>/dev/null) || {
+      _gcr_last=''
+      return 0
+    }
     gitdir=${gitdir:A}
     # Report once per repo: moving between subdirs of the same repo stays quiet.
     [[ $gitdir == $_gcr_last ]] && return 0
@@ -239,14 +246,14 @@ if [[ -o interactive ]]; then
 
     # Refresh remote refs first, honouring the plugin's rate limit and opt-out.
     if [[ -w $gitdir && ! -f $gitdir/NO_AUTO_FETCH ]] &&
-       [[ ! -f $gitdir/FETCH_LOG || -w $gitdir/FETCH_LOG ]]; then
+      [[ ! -f $gitdir/FETCH_LOG || -w $gitdir/FETCH_LOG ]]; then
       local -i lastrun=$(zstat +mtime "$gitdir/FETCH_LOG" 2>/dev/null || echo 0)
-      if (( EPOCHSECONDS - lastrun >= ${GIT_AUTO_FETCH_INTERVAL:-60} )); then
-        date -R >! "$gitdir/FETCH_LOG"
+      if ((EPOCHSECONDS - lastrun >= ${GIT_AUTO_FETCH_INTERVAL:-60})); then
+        date -R >|"$gitdir/FETCH_LOG"
         GIT_SSH_COMMAND="command ssh -o BatchMode=yes -o ConnectTimeout=3" \
-        GIT_TERMINAL_PROMPT=0 \
+          GIT_TERMINAL_PROMPT=0 \
           command timeout $GIT_CD_FETCH_TIMEOUT \
-            git fetch --all --quiet >>"$gitdir/FETCH_LOG" 2>&1
+          git fetch --all --quiet >>"$gitdir/FETCH_LOG" 2>&1
       fi
     fi
 
@@ -255,17 +262,19 @@ if [[ -o interactive ]]; then
     local head='' upstream='' line xy
     while IFS= read -r line; do
       case $line in
-        '# branch.head '*)     head=${line#'# branch.head '} ;;
-        '# branch.upstream '*) upstream=${line#'# branch.upstream '} ;;
-        '# branch.ab '*)
-          local ab=(${=line#'# branch.ab '})
-          ahead=${ab[1]#+} behind=${ab[2]#-} ;;
-        [12]' '*)
-          xy=${${(s: :)line}[2]}
-          [[ $xy[1] != '.' ]] && (( staged++ ))
-          [[ $xy[2] != '.' ]] && (( unstaged++ )) ;;
-        'u '*) (( unmerged++ )) ;;
-        '? '*) (( untracked++ )) ;;
+      '# branch.head '*) head=${line#'# branch.head '} ;;
+      '# branch.upstream '*) upstream=${line#'# branch.upstream '} ;;
+      '# branch.ab '*)
+        local ab=(${=line#'# branch.ab '})
+        ahead=${ab[1]#+} behind=${ab[2]#-}
+        ;;
+      [12]' '*)
+        xy=${${(s: :)line}[2]}
+        [[ $xy[1] != '.' ]] && ((staged++))
+        [[ $xy[2] != '.' ]] && ((unstaged++))
+        ;;
+      'u '*) ((unmerged++)) ;;
+      '? '*) ((untracked++)) ;;
       esac
     done < <(command git --no-optional-locks status --porcelain=v2 --branch 2>/dev/null)
 
@@ -275,11 +284,16 @@ if [[ -o interactive ]]; then
 
     # In-progress operations, which porcelain=v2 does not report.
     local action=''
-    if [[ -d $gitdir/rebase-merge || -d $gitdir/rebase-apply ]]; then action=rebase
-    elif [[ -f $gitdir/MERGE_HEAD ]];        then action=merge
-    elif [[ -f $gitdir/CHERRY_PICK_HEAD ]];  then action=cherry-pick
-    elif [[ -f $gitdir/REVERT_HEAD ]];       then action=revert
-    elif [[ -f $gitdir/BISECT_LOG ]];        then action=bisect
+    if [[ -d $gitdir/rebase-merge || -d $gitdir/rebase-apply ]]; then
+      action=rebase
+    elif [[ -f $gitdir/MERGE_HEAD ]]; then
+      action=merge
+    elif [[ -f $gitdir/CHERRY_PICK_HEAD ]]; then
+      action=cherry-pick
+    elif [[ -f $gitdir/REVERT_HEAD ]]; then
+      action=revert
+    elif [[ -f $gitdir/BISECT_LOG ]]; then
+      action=bisect
     fi
 
     local out="%F{blue}${${gitdir:h}:t}%f"
@@ -287,22 +301,22 @@ if [[ -o interactive ]]; then
       out+=" %F{yellow}@$(command git rev-parse --short HEAD 2>/dev/null)%f" ||
       out+=" %F{76}$head%f"
     [[ -z $upstream ]] && out+=" %F{242}(no upstream)%f"
-    (( behind ))    && out+=" %F{cyan}⇣$behind%f"
-    (( ahead ))     && out+=" %F{cyan}⇡$ahead%f"
-    (( staged ))    && out+=" %F{green}+$staged%f"
-    (( unstaged ))  && out+=" %F{178}!$unstaged%f"
-    (( untracked )) && out+=" %F{76}?$untracked%f"
-    (( unmerged ))  && out+=" %F{red}~$unmerged%f"
-    (( stashes ))   && out+=" %F{242}*$stashes%f"
+    ((behind)) && out+=" %F{cyan}⇣$behind%f"
+    ((ahead)) && out+=" %F{cyan}⇡$ahead%f"
+    ((staged)) && out+=" %F{green}+$staged%f"
+    ((unstaged)) && out+=" %F{178}!$unstaged%f"
+    ((untracked)) && out+=" %F{76}?$untracked%f"
+    ((unmerged)) && out+=" %F{red}~$unmerged%f"
+    ((stashes)) && out+=" %F{242}*$stashes%f"
     [[ -n $action ]] && out+=" %F{red}$action%f"
-    (( staged + unstaged + untracked + unmerged == 0 )) && out+=" %F{green}✔%f"
+    ((staged + unstaged + untracked + unmerged == 0)) && out+=" %F{green}✔%f"
 
     print -P -- " $out"
   }
 
   add-zsh-hook chpwd _git_cd_report
 fi
-if command -v atuin &> /dev/null; then
+if command -v atuin &>/dev/null; then
   # /etc/atuin exists only where Ansible's roles/atuin has run the server
   # profile, so its presence is the marker for "this host is managed" -- one
   # .zshrc is shared by every machine and cannot branch on hostname.
@@ -336,15 +350,14 @@ if command -v ruby >/dev/null 2>&1; then
   export PATH="$(ruby -e 'print Gem.user_dir')/bin:$PATH"
 fi
 
-
 # Load Angular CLI autocompletion.
-if command -v ng &> /dev/null; then
-source <(ng completion script)
+if command -v ng &>/dev/null; then
+  source <(ng completion script)
 fi
 
 export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"                   # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion" # This loads nvm bash_completion
 
 export PATH=$PATH:$HOME/go/bin
 export PATH="$HOME/.local/bin:$PATH"
