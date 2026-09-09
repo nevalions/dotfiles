@@ -4,6 +4,9 @@
 
 Author: linroot <nevalions@gmail.com>. No co-authored-by lines.
 Prefixes: feat, fix, refactor, docs, chore. Non-interactive only. `git add <file>` not `-A`.
+Multi-line messages go in a file and commit with `-F`, never inline `-m`: the shell
+command-substitutes backticks and silently truncates the message. Read it back with
+`git log -1 --format=%B` afterwards.
 Branches: feature/ bugfix/ hotfix/ refactor/ docs/ → atomic commits → squash merge to master → tag → cleanup.
 
 ## Worktrees
@@ -31,6 +34,12 @@ When it will not affect the end result, surgically edit a file rather than rewri
 - Dispatch a **fresh** agent per task. Resume a long-lived agent only when its
   accumulated context covers the exact files of the new task — an inherited
   transcript outside that is dead-weight context re-read on every tool call.
+- **Carry findings, not transcripts.** Resuming compounds: the agent re-reads a
+  transcript that grew in the previous round, so a multi-round review costs far
+  more than the rounds suggest. Past the second resume, what matters is the list
+  of findings, not how they were reached — put that in a fresh agent's prompt and
+  let the old one go. Narrow final checks ("verify these two edits") go to a cheap
+  fresh agent regardless of who found the issue.
 - Batch small shell commands into one call (one `python3`/`git` invocation with
   several steps beats five one-liners). Per-file `git add` still applies.
 - Same rules for Workflow `agent()` calls: set `model`/`effort` down for
