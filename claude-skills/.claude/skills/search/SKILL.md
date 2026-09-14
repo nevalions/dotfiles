@@ -3,6 +3,7 @@ name: search
 description: "Web-backed research via Perplexity. Modes: /search <query>, /search plan <topic>, /search ecosystem <topic>, /search security <topic>"
 context: fork
 agent: Plan
+model: sonnet
 argument-hint: "[plan|ecosystem|security] <topic>"
 ---
 

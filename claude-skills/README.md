@@ -22,7 +22,7 @@ Written here rather than vendored, so there is no upstream to pin.
 | `shell-history` | Query the atuin shell-history database through the atuin MCP server: what was actually executed, on this machine and on every host that syncs, with exit codes and agent intent. | 2026-08-31 |
 | `work`, `create`, `commit-task` | bd (beads) issue workflow: start, file, commit-and-close. | 2026-09-03 |
 | `pr`, `merge`, `docs-commit` | Solo-owner git flow: prepare a feature branch, squash-merge to the default branch, update docs before committing. | 2026-09-03 |
-| `search`, `search-plan`, `search-security`, `search-ecosystem` | Perplexity-backed research, each with a fixed output shape. | 2026-09-03 |
+| `search` | Perplexity-backed research; `plan`, `security` and `ecosystem` modes, each with a fixed output shape. | 2026-09-03 |
 | `triage`, `scan-security`, `check-agents` | Read-only Forgejo triage, Semgrep scan filed to bd, instruction-file canary check. | 2026-09-03 |
 
 `renovate-triage` stays outside this repo on purpose: it names hosts and
@@ -30,8 +30,8 @@ internal paths.
 
 ## Agents
 
-`agents/` holds the global subagent definitions (`code-reviewer`, `debugger`,
-`Explore`, `security-auditor`, `test-writer`), stowed into `~/.claude/agents/`
+`agents/` holds the global subagent definitions (`code-reviewer`,
+`Explore`), stowed into `~/.claude/agents/`
 the same way. `Explore` overrides the built-in agent to keep code search on the
 cheapest model.
 

@@ -30,7 +30,8 @@ When it will not affect the end result, surgically edit a file rather than rewri
 - Pick the cheapest model that can do the job: **haiku** for search/scan/triage
   and mechanical lookups; **sonnet** for well-specified implementation (clear
   spec, few files, TDD steps spelled out); default (big) model only for design,
-  architecture, cross-cutting debugging, and reviews.
+  architecture and cross-cutting debugging. Diff review goes to the
+  `code-reviewer` agent, which is pinned to sonnet.
 - Dispatch a **fresh** agent per task. Resume a long-lived agent only when its
   accumulated context covers the exact files of the new task — an inherited
   transcript outside that is dead-weight context re-read on every tool call.

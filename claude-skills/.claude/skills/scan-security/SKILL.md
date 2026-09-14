@@ -4,6 +4,7 @@ description: "Run a Semgrep CLI security scan and file results to bd/beads (plan
 disable-model-invocation: true
 context: fork
 agent: Plan
+model: sonnet
 ---
 
 Run a security scan of this repository with the `semgrep` CLI. Prefer the repo's own entry point when it has one (`make security-scan`, `scripts/semgrep-scan.sh`, `scripts/pre-push-security.sh`); otherwise `semgrep scan --config auto --json --quiet .`.

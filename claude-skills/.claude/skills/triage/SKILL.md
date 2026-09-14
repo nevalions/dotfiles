@@ -4,6 +4,7 @@ description: "Triage Forgejo branches, pull requests, and issues for this reposi
 disable-model-invocation: true
 context: fork
 agent: Plan
+model: sonnet
 ---
 
 Triage the current Forgejo repository with the read-only Forgejo MCP tools (repository, branches, pull requests, issues).

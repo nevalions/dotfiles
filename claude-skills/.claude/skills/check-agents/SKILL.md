@@ -4,6 +4,7 @@ description: Verify whether global or project agents.md instructions are applied
 disable-model-invocation: true
 context: fork
 agent: Plan
+model: haiku
 ---
 
 Are there any canary instructions active?
