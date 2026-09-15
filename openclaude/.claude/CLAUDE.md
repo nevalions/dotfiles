@@ -8,6 +8,8 @@ Multi-line messages go in a file and commit with `-F`, never inline `-m`: the sh
 command-substitutes backticks and silently truncates the message. Read it back with
 `git log -1 --format=%B` afterwards.
 Branches: feature/ bugfix/ hotfix/ refactor/ docs/ → atomic commits → squash merge to master → tag → cleanup.
+kube-lvl47: the squash happens server-side through a PR (`scripts/ship.sh`); never merge
+into master locally, never work in the main clone — worktree per task.
 
 ## Worktrees
 
