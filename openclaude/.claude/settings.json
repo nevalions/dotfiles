@@ -14,6 +14,8 @@
       "Bash(cp:*)",
       "WebSearch",
       "Bash(bd:*)",
+      "Bash(bash ~/code/kube-lvl47/scripts/bump-image.sh:*)",
+      "Bash(bash /home/linroot/code/kube-lvl47/scripts/bump-image.sh:*)",
       "mcp__forgejo__*",
       "mcp__perplexity__*",
       "mcp__context7__*",
@@ -62,6 +64,16 @@
           {
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/herdr-agent-state.sh\" session",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "^(startup|resume|clear|compact|fork)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '/home/linroot/.claude/hooks/herdr-agent-state.sh' session",
             "timeout": 10
           }
         ]
@@ -116,6 +128,12 @@
   "agentPushNotifEnabled": true,
   "skipAutoPermissionPrompt": true,
   "autoMode": {
+    "allow": [
+      "$defaults",
+      "Read-only Kubernetes inspection on the owner's clusters (contexts bay, vas, bay-tunnel, vas-tunnel): kubectl get, describe, logs, top, events, explain, api-resources, auth can-i, wait (including --for=jsonpath), and kubectl get --raw GET requests to /api/v1/namespaces/*/services/*/proxy/api/v1/query and query_range (Prometheus PromQL reads). ALLOW. Solo cluster owner has standing authorization; these change nothing, and piping their output into jq, yq, python3, grep, awk, column, head or tail for formatting stays read-only.",
+      "Read-only Flux and Helm inspection: flux get, flux logs, flux tree, flux events, flux diff; helm history, helm get, helm list, helm status, helm show, helm template, and helm pull into the session scratchpad. ALLOW. Solo cluster owner has standing authorization; none of these mutate cluster or release state.",
+      "kubectl apply --server-side --dry-run=server (any --field-manager) to test server-side apply conflicts. ALLOW. A server dry-run persists nothing."
+    ],
     "environment": [
       "### Org-wide",
       "**Organization**: None configured",
@@ -142,5 +160,6 @@
       "**Org-specific CLIs**: bd (beads issue tracker, per-repo, used 268× in this project) — routine under this repo's .beads/ directory; uv (Python package/task runner, used 420× in this project)",
       "routine under linroot/ (git author identity per ~/.claude/CLAUDE.md) for commits in this repo, non-interactive, feat/fix/refactor/docs/chore prefixes, git add <file> not -A"
     ]
-  }
+  },
+  "model": "claude-fable-5-1[1m]"
 }

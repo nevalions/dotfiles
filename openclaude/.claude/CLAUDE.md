@@ -43,6 +43,13 @@ When it will not affect the end result, surgically edit a file rather than rewri
   of findings, not how they were reached — put that in a fresh agent's prompt and
   let the old one go. Narrow final checks ("verify these two edits") go to a cheap
   fresh agent regardless of who found the issue.
+- Batch only *small mechanical* tasks into one dispatch (a helper plus a schema,
+  a doc plus a status flip). Anything with its own tests across several files
+  gets its own agent: a long agent re-reads its whole transcript on every tool
+  call, so two short agents cost less than one long one.
+- Implementers run the *targeted* tests for what they touched, never the full
+  suite: it is minutes of output in their context, and pre-push runs it anyway.
+  The orchestrator runs the full suite once, on the merged result.
 - Batch small shell commands into one call (one `python3`/`git` invocation with
   several steps beats five one-liners). Per-file `git add` still applies.
 - Same rules for Workflow `agent()` calls: set `model`/`effort` down for

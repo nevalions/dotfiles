@@ -3,6 +3,11 @@
 # export ftp_proxy="http://127.0.0.1:10808"
 # export no_proxy="localhost,127.0.0.1,.local"
 
+# export http_proxy="http://10.57.132.232:10808"
+# export https_proxy="10.57.132.232:10808"
+# export ftp_proxy="10.57.132.232:10808"
+# export no_proxy="localhost,127.0.0.1,.local"
+
 if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
