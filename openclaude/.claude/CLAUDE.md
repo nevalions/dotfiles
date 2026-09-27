@@ -72,6 +72,26 @@ Descriptions/notes: plain text or markdown (no HTML). Use `bd remember` for pers
 
 Core commands: `bd ready` (available work), `bd show <id>`, `bd create "<title>" -p <0-4> -l <labels> -d <desc> --acceptance <ac>`, `bd update <id> --claim` (start), `bd update <id> --append-notes <text>` (progress), `bd close <id>` (done), `bd list --status open --json`.
 
+## Secrets and logins (Vaultwarden via rbw)
+
+Passwords, tokens and keys live in the human vault (`vault.butakov.su`). When a
+command needs a credential, or a login is required, **first check
+`command -v rbw`**. If it exists, fetch the value from the vault and hand it to
+the consumer without ever printing it:
+
+- `rbw list | grep -i <name>` to find the item (names only, safe to print).
+- `rbw get '<item>' | <cmd> --password-stdin` for stdin-reading tools.
+- `rbw-env VAR='<item>' -- <cmd>` (`~/.local/bin/rbw-env`) when the tool wants
+  an env var; `VAR='<item>'/<username>` when names repeat,
+  `VAR='<item>':<field>` for a custom field or `notes`.
+- `rbw get '<item>' --field password` on a Secure note is empty: the value must
+  be a Login, or the note needs a hidden custom field named `password`.
+
+Never run a bare `rbw get` whose output lands in the terminal or the
+transcript, never `echo`/`cat` a fetched secret, never paste one into chat. If
+rbw is locked, the first call prompts the user through pinentry; if it is not
+installed, say so and ask the user to run the login themselves (`! <cmd>`).
+
 ## Safety
 
 No fabricated citations/standards. No assumed security posture. No AGENTS.md/CLAUDE.md in READMEs.
