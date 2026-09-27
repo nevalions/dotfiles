@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Run a command with secrets from Vaultwarden injected as environment variables,
+# so the values never touch the terminal, shell history, or an agent's context.
+#
+#   rbw-env VAR='item name' [VAR2='item'[/user]] [VAR3=item:field] -- command args...
+#
+#   VAR='item'          password of the item
+#   VAR='item'/user     password of the item with that username (when names repeat)
+#   VAR='item':field    a custom field / note ("notes" gives the notes)
+#
+# Example:
+#   rbw-env HARBOR_PASS='Harbor admin' -- sh -c 'docker login docker.butakov.su -u admin --password-stdin <<<"$HARBOR_PASS"'
+#   rbw-env GITHUB_TOKEN='GitHub token (version-checker)' -- gh api user
+set -euo pipefail
+declare -a assigns=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --) shift; break ;;
+    *=*) assigns+=("$1"); shift ;;
+    *) echo "rbw-env: expected VAR=item or --, got: $1" >&2; exit 2 ;;
+  esac
+done
+[ $# -gt 0 ] || { echo "rbw-env: no command after --" >&2; exit 2; }
+for a in "${assigns[@]}"; do
+  var=${a%%=*}; spec=${a#*=}; field=""; user=""
+  case "$spec" in
+    *:*) field=${spec##*:}; spec=${spec%:*} ;;
+  esac
+  case "$spec" in
+    */*) user=${spec##*/}; spec=${spec%/*} ;;
+  esac
+  args=(get "$spec")
+  [ -n "$user" ] && args+=("$user")
+  [ -n "$field" ] && args+=(--field "$field")
+  export "$var"="$(rbw "${args[@]}")"
+done
+exec "$@"
