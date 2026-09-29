@@ -92,6 +92,22 @@ transcript, never `echo`/`cat` a fetched secret, never paste one into chat. If
 rbw is locked, the first call prompts the user through pinentry; if it is not
 installed, say so and ask the user to run the login themselves (`! <cmd>`).
 
+**Windows:** rbw does not run there; the vault is reached with `bw` (Bitwarden
+CLI, winget-pinned to 2026.6.x to match Vaultwarden — newer releases 404 during
+login and leave a vault that will not unlock). Same rules: names only, never
+print a value.
+
+- `bw status` reports `unlocked` only when `BW_SESSION` is set in this process.
+  Unlocking needs the master password, so if it is locked, ask the user to run
+  the command in their own terminal — not via `!`, and never paste `BW_SESSION`
+  into chat.
+- `bw list items --search <name> | jq -r '.[].name'` to find the item.
+- `bw get password '<item>' | <cmd> --password-stdin` for stdin-reading tools.
+- MCP keys (`FORGEJO_URL`, `FORGEJO_TOKEN`, `PERPLEXITY_API_KEY`) are user env
+  vars that `~/.claude.json` references as `${VAR}`, filled by
+  `C:\code\set-claude-secrets.ps1`. After re-running it, restart the terminal
+  app, not just Claude Code: new tabs inherit the terminal's stale environment.
+
 ## Safety
 
 No fabricated citations/standards. No assumed security posture. No AGENTS.md/CLAUDE.md in READMEs.
