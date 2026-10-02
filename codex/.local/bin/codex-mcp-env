@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import re
+import sys
+
+REQUIRED = {
+    "perplexity": ("PERPLEXITY_API_KEY",),
+    "forgejo": ("FORGEJO_URL", "FORGEJO_TOKEN"),
+}
+
+
+def main():
+    if len(sys.argv) < 3 or sys.argv[1] not in REQUIRED:
+        raise SystemExit("usage: codex-mcp-env <perplexity|forgejo> <command> [args...]")
+    server, command, *args = sys.argv[1:]
+    env = os.environ.copy()
+    keys = REQUIRED[server]
+    if any(not env.get(key) for key in keys):
+        try:
+            config = json.loads((Path.home() / ".claude.json").read_text())
+            fallback = config.get("mcpServers", {}).get(server, {}).get("env", {})
+        except (OSError, ValueError, AttributeError):
+            fallback = {}
+        for key in keys:
+            if env.get(key):
+                continue
+            value = fallback.get(key)
+            if isinstance(value, str):
+                value = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: env.get(m[1], ""), value)
+                if value:
+                    env[key] = value
+    missing = [key for key in keys if not env.get(key)]
+    if missing:
+        raise SystemExit("Missing MCP environment variables: " + ", ".join(missing))
+    try:
+        os.execvpe(command, [command, *args], env)
+    except OSError:
+        raise SystemExit("Cannot start MCP executable: " + command)
+
+
+if __name__ == "__main__":
+    main()

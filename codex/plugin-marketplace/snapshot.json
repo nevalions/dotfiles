@@ -1,0 +1,16 @@
+{
+  "superpowers": {
+    "source": "installed Claude official plugin cache",
+    "version": "5.1.0",
+    "snapshot_sha256": "2439b797c319a1af3bd648269cec81d5b1d73f975d74710c26918cdc5cb63de3",
+    "files": 51,
+    "source_snapshot_sha256": "2ac90c4b39764bdd47c85187510f74d076ea5734c18b8a32e3c89eb8b0e76ae5",
+    "modifications": "Trailing whitespace normalized in README.md and writing-skills/SKILL.md."
+  },
+  "frontend-design": {
+    "source": "installed Claude official plugin cache",
+    "version": "unknown; Codex manifest version 1.0.0",
+    "snapshot_sha256": "9a94fa80bbabbea0bc279bf9d20d911f9efb7048959a689cc8f785d0865f81ca",
+    "files": 3
+  }
+}

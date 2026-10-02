@@ -1,0 +1,10 @@
+{
+  "name": "frontend-design",
+  "version": "1.0.0",
+  "description": "Frontend design skill imported from the installed Claude plugin",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Frontend Design",
+    "shortDescription": "Design and build distinctive frontend interfaces"
+  }
+}

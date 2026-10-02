@@ -74,6 +74,8 @@ git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-$
 | **Tmuxinator** | Project templating system | `tmuxinator/` |
 | **Herdr** | Terminal workspace manager for AI coding agents, with declarative project layouts | `herdr/` |
 | **Claude skills** | Agent skills stowed into `~/.claude/skills/` | `claude-skills/` |
+| **Codex** | Codex instructions, agents and MCP defaults; [installation](codex/README.md) | `codex/` |
+| **Codex skills** | Adapted task workflows and skills at `~/.agents/skills/` | `codex-skills/` |
 | **Git** | Global git ignore (`.claude/worktrees/`, `settings.local.json`) | `git/` |
 
 Most packages only need `stow`. Two configure tools that are **not** in the Arch

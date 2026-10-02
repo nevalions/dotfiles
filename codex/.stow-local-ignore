@@ -1,0 +1,5 @@
+^/README\.md$
+^/config\.base\.toml$
+^/install\.py$
+^/__pycache__
+^/plugin-marketplace

@@ -1,0 +1,23 @@
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
+
+[mcp_servers.perplexity]
+command = "codex-mcp-env"
+args = ["perplexity", "npx", "-y", "@perplexity-ai/mcp-server"]
+env_vars = ["PERPLEXITY_API_KEY"]
+startup_timeout_sec = 60
+
+[mcp_servers.forgejo]
+command = "codex-mcp-env"
+args = ["forgejo", "npx", "-y", "@ric_/forgejo-mcp"]
+env_vars = ["FORGEJO_URL", "FORGEJO_TOKEN"]
+startup_timeout_sec = 60
+
+[mcp_servers.atuin]
+command = "atuin"
+args = ["mcp"]
+
+[mcp_servers.playwright]
+command = "npx"
+args = ["-y", "@playwright/mcp@latest"]
+startup_timeout_sec = 60

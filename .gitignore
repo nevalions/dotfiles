@@ -48,3 +48,9 @@ openclaude/.claude/statsig/
 openclaude/.claude/telemetry/
 openclaude/.claude/cache/
 openclaude/.claude/backups/
+
+# Generated per-machine Codex configuration and runtime state.
+codex/.codex/*
+!codex/.codex/AGENTS.md
+!codex/.codex/agents/
+**/__pycache__/
