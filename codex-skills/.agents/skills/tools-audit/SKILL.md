@@ -4,6 +4,11 @@ description: Audit installed Codex skills, agents, MCP servers, plugins and hook
   with observed tool usage from local session transcripts. Read-only.
 ---
 
+## Model selection
+
+Default: `gpt-6.1-sol / medium` (standard). Inventory/counts only: easy; security judgment: review. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
+
+
 Audit the Codex setup without modifying it. Run:
 
 ```sh

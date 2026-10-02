@@ -1,3 +1,10 @@
+[tui]
+notifications = false
+
+[agents.git-workflow]
+description = "Execute explicitly requested commit, push/PR preparation and merge workflows with Luna low."
+config_file = "agents/git-workflow.toml"
+
 [mcp_servers.context7]
 url = "https://mcp.context7.com/mcp"
 

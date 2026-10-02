@@ -6,6 +6,11 @@ description: Control Herdr, a terminal multiplexer for coding agents. Use only w
   benefit from a background terminal, delegation, or parallel work. Requires HERDR_ENV=1.
 ---
 
+## Model selection
+
+Default: `gpt-6-luna / low` (easy). Complex orchestration: standard. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
+
+
 
 # Herdr
 

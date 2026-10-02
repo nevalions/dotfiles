@@ -3,6 +3,15 @@ name: commit-task
 description: Commit changes and close a bd (beads) issue (e.g. $commit-task sb-5)
 ---
 
+## Model selection
+
+Default: `gpt-6-luna / low` (easy). Correctness review or failing-check analysis: standard/review. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
+
+## Delegation
+
+Delegate this requested workflow to one `git-workflow` agent using the persistent Git routing instructions. Pass the issue, checkout, authorized files/actions and applicable repository rules, then wait and verify its result. If you are already the delegated Git executor, perform the steps directly; do not delegate again. Respect explicit user model choices and report unavailable routing instead of claiming a model switch.
+
+
 
 Commit changes and update bd issue <arguments supplied by the user>.
 

@@ -3,6 +3,11 @@ name: create
 description: Create a new bd (beads) issue (e.g. $create Add feature X)
 ---
 
+## Model selection
+
+Default: `gpt-6-luna / low` (easy). Ambiguous requirements or design: standard. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
+
+
 
 Create a new bd (beads) issue for: <arguments supplied by the user>
 

@@ -3,6 +3,15 @@ name: merge
 description: Squash merge feature branch to the default branch and cleanup
 ---
 
+## Model selection
+
+Default: `gpt-6-luna / low` (easy). Conflicts or release consequences: standard/review. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
+
+## Delegation
+
+Delegate this requested workflow to one `git-workflow` agent using the persistent Git routing instructions. Pass the issue, checkout, authorized files/actions and applicable repository rules, then wait and verify its result. If you are already the delegated Git executor, perform the steps directly; do not delegate again. Respect explicit user model choices and report unavailable routing instead of claiming a model switch.
+
+
 
 Merge the current feature branch to the repository default branch:
 

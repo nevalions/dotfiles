@@ -3,6 +3,11 @@ name: triage
 description: Triage Forgejo branches, pull requests, and issues for this repository
 ---
 
+## Model selection
+
+Default: `gpt-6-luna / low` (easy). Root-cause or security judgment: standard/review. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
+
+
 
 Triage the current Forgejo repository with the read-only Forgejo MCP tools (repository, branches, pull requests, issues).
 

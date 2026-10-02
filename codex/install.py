@@ -46,6 +46,17 @@ def merge(defaults, current):
     return result
 
 
+def prune_empty_directories(path):
+    if path.is_symlink() or not path.is_dir():
+        return
+    for child in path.iterdir():
+        prune_empty_directories(child)
+    try:
+        path.rmdir()
+    except OSError:
+        pass
+
+
 def main():
     parser = argparse.ArgumentParser(description="Merge Codex defaults and stow the Codex packages.")
     parser.add_argument("--target", type=Path, default=Path.home())
@@ -63,7 +74,9 @@ def main():
     current = tomllib.loads(live.read_text()) if live.exists() else {}
     output = serialize(merge(defaults, current))
     tomllib.loads(output)
-    stow = ["stow", "--no-folding", "--dir", str(repo), "--target", str(target), "codex", "codex-skills"]
+    stow_base = ["stow", "--dir", str(repo), "--target", str(target)]
+    stow = [*stow_base, "--no-folding", "codex"]
+    skills_stow = [*stow_base, "codex-skills"]
     if live.is_symlink() and live.resolve() != source:
         parser.error("Existing config.toml is managed by a different symlink; resolve it before installing.")
     if source.exists() and (not live.is_symlink() or live.resolve() != source):
@@ -71,11 +84,13 @@ def main():
             parser.error("Generated config belongs to another target; use a separate dotfiles checkout.")
     if args.check:
         result = subprocess.run([*stow, "--simulate"], capture_output=True, text=True)
+        skills_result = subprocess.run([*skills_stow, "--simulate"], capture_output=True, text=True)
         print("TOML is valid. Existing settings will be preserved.")
         if result.returncode and live.is_file() and not live.is_symlink():
             print("Stow may report the expected config.toml conflict; inspect other conflicts below.")
         print(result.stdout + result.stderr, end="")
-        raise SystemExit(result.returncode)
+        print(skills_result.stdout + skills_result.stderr, end="")
+        raise SystemExit(result.returncode or skills_result.returncode)
     backup = None
     if live.is_file() and not live.is_symlink():
         directory = target / ".codex/backups"
@@ -93,7 +108,11 @@ def main():
         live.unlink()
     try:
         subprocess.run([*stow, "--simulate"], check=True)
+        subprocess.run([*skills_stow, "--simulate"], check=True)
         subprocess.run(stow, check=True)
+        subprocess.run([*stow_base, "--delete", "codex-skills"], check=True)
+        prune_empty_directories(target / ".agents/skills")
+        subprocess.run(skills_stow, check=True)
     except subprocess.CalledProcessError:
         if backup and not live.exists():
             shutil.copy2(backup, live)

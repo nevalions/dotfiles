@@ -3,6 +3,11 @@ name: docs-commit
 description: Check docs for refactoring needs after changes, then commit
 ---
 
+## Model selection
+
+Default: `gpt-6-luna / low` (easy). API semantics or substantial restructuring: standard. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
+
+
 
 Update documentation that the current changes make stale, then commit.
 

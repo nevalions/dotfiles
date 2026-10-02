@@ -4,6 +4,11 @@ description: 'Web-backed research via Perplexity. Modes: $search query, $search 
   topic, $search ecosystem topic, $search security topic'
 ---
 
+## Model selection
+
+Default: `gpt-6.1-sol / medium` (standard). Exact factual lookup: easy; security or conflicting evidence: review. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
+
+
 
 Research with `perplexity_search` (not `perplexity_research`, which runs for minutes and is reserved for deep multi-source investigation). Prefer official standards and docs over community posts and blogs; note disagreements and trade-offs.
 

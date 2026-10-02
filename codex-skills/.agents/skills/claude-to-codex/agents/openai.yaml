@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude to Codex"
+  short_description: "Adapt Claude repository setup for Codex"
+  default_prompt: "Use $claude-to-codex to adapt this repository’s Claude instructions, skills, and MCP setup for Codex while preserving Claude files."

@@ -27,7 +27,15 @@ When it will not affect the end result, surgically edit a file rather than rewri
 
 ## Subagents
 
-Delegate when the user or applicable project/skill instructions request it. Use the read-only `explorer` for searches and `code-reviewer` for reviews. Inherit the current model unless a suitable Codex model has been explicitly configured. Keep task prompts narrow, carry findings rather than transcripts, and run targeted checks before broader project checks.
+Delegate when the user or applicable project/skill instructions request it. Use the read-only `explorer` for searches and `code-reviewer` for reviews. Select the model and reasoning effort for the actual task using `~/.codex/model-policy.md`; respect explicit user choices and configured role defaults. Keep task prompts narrow, carry findings rather than transcripts, and run targeted checks before broader project checks.
+
+For explicitly requested Git actions, including plain-language requests without `$`, load the matching skill: `commit-task` for committing an issue, `pr` for branch push/preparation, and `merge` for integrating a branch. Delegate execution to one `git-workflow` agent, configured as Luna low, without asking the user to repeat a subagent instruction. Pass the repository/checkout, issue, exact authorized actions and files, existing check results, and applicable exceptions. If the custom role is unavailable, use a narrowly scoped general agent with explicit `model = "gpt-6-luna"`, `reasoning_effort = "low"`, fresh/minimal context and the Git executor instructions from `~/.codex/agents/git-workflow.toml`. If the user specifies another model/effort, use a general agent with that choice instead of the fixed Luna role; never silently substitute an unavailable requested model. If spawning or model overrides are unavailable, report the routing limitation before continuing on the current model.
+
+Wait for the Git worker before writing to the same repository. Run dependent commit/push/merge stages sequentially, and do only the stages requested. A delegated Git worker executes the matching skill directly and never delegates it again. Conflicts or failed checks return to the parent for Sol medium/high assessment. This rule authorizes delegation, not unrequested commits, pushes, merges, tags or releases.
+
+## Model selection
+
+Before substantial work, select the least costly adequate model and reasoning effort using `~/.codex/model-policy.md` (read once per session when needed). Routine lookups and mechanical work use Luna low; normal implementation uses Sol medium; complex review/debugging uses Sol high; reserve Astra for the hardest work. Apply supported runtime controls or configured agent defaults; skill prose does not switch the parent model. Reassess when the task changes, avoid unnecessary delegation and repeated model-change questions, and report a useful runtime mismatch once when no switching control is available.
 
 ## MCP sources
 

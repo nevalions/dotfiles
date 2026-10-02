@@ -9,6 +9,11 @@ description: Search what was actually executed on this machine and across the fl
   commit history — that is file reads, rg and git log.
 ---
 
+## Model selection
+
+Default: `gpt-6-luna / low` (easy). Incident reconstruction or causal analysis: standard/review. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
+
+
 
 # Shell history (atuin)
 

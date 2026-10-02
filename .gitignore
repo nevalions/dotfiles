@@ -53,4 +53,9 @@ openclaude/.claude/backups/
 codex/.codex/*
 !codex/.codex/AGENTS.md
 !codex/.codex/agents/
+!codex/.codex/model-policy.md
+!codex/.codex/easy.config.toml
+!codex/.codex/standard.config.toml
+!codex/.codex/review.config.toml
+!codex/.codex/deep.config.toml
 **/__pycache__/

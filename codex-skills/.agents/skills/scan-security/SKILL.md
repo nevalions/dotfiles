@@ -4,6 +4,11 @@ description: Run a Semgrep CLI security scan and file results to bd/beads (plan 
   no code changes)
 ---
 
+## Model selection
+
+Default: `gpt-6.1-sol / high` (review). Scanner execution/counts only: easy; hardest threat reasoning: deep. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
+
+
 
 Run a security scan of this repository with the `semgrep` CLI. Prefer the repo's own entry point when it has one (`make security-scan`, `scripts/semgrep-scan.sh`, `scripts/pre-push-security.sh`); otherwise `semgrep scan --config auto --json --quiet .`.
 

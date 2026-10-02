@@ -25,11 +25,44 @@ adopted over unrelated local files. Use `--check` for a Stow simulation.
 
 `codex/.codex/config.toml` is generated, private, and Git-ignored: Codex itself
 writes machine-specific state into it. Only `config.base.toml` is committed.
-Everything installed uses Stow with `--no-folding`, so auth files, databases,
-sessions, logs and managed plugins stay outside the repo. README and installer
-files are excluded from Stow. Do not stow the entire `~/.codex` directory.
+Codex config uses Stow with `--no-folding`, so auth files, databases, sessions,
+logs and managed plugins stay outside the repo. Skills use a folded
+`~/.agents/skills` directory link: Codex 0.160.0 skips individual symlinked
+skill files during discovery. The installer removes old managed skill links
+and empty directories before relinking them. README and installer files are
+excluded from Stow. Do not stow the entire `~/.codex` directory.
 Use a separate checkout per machine. Custom `CODEX_HOME` layouts need an adapted
 Stow package; the installer rejects a mismatched layout.
+
+## Model selection
+
+Each local skill includes a default model/effort and escalation criteria.
+`~/.codex/model-policy.md` covers generic tasks, plugin skills and delegation.
+Use native profiles with the installed CLI:
+
+```sh
+codex -p easy
+codex -p standard
+codex -p review
+codex -p deep
+```
+
+They select Luna low, Sol medium, Sol high and Astra high respectively.
+The base model remains your existing choice. An active session needs a supported
+runtime control or model picker; invoking a skill does not switch its model.
+Model and effort choices are workload recommendations, not benchmarked optima.
+`claude-to-codex` now inventories model intent and verifies target availability,
+reasoning effort and runtime support before translating each workflow.
+
+Requested commit, branch push/preparation and merge workflows delegate to one
+`git-workflow` agent using Luna low. Plain requests such as "commit issue X"
+and `$commit-task X` use the same route; no repeated subagent instruction is
+needed. The parent keeps its model and verifies the worker's result. When the
+client cannot spawn the custom role, it uses a general agent with explicit
+model/effort settings and the same Git instructions. Explicit user model
+choices take precedence. Conflicts and failed checks return to the parent for
+deeper analysis; dependent Git stages run sequentially and stay within the
+requested scope. Reload Codex after installing new agent configuration.
 
 ## Migration map
 
@@ -38,7 +71,7 @@ Stow package; the installer rejects a mismatched layout.
 | Global instructions | Native Codex global instructions, with adapted worktree and tool guidance |
 | 13 dotfiles skills | Adapted skills at `~/.agents/skills`; invoke `$work <id>`, `$create <title>`, `$commit-task <id>`, `$search <topic>`, etc. |
 | Explicit-only skills | `agents/openai.yaml`: `allow_implicit_invocation: false` |
-| Explore, code-reviewer | Read-only TOML custom agents, inheriting the selected Codex model |
+| Explore, code-reviewer | Read-only TOML custom agents: explorer uses Luna low, reviewer uses Sol high |
 | bd tasks | Same `.beads/` database; no duplicate task store or task migration |
 | Context7, Perplexity, Forgejo, Atuin MCP | Native Codex MCP config |
 | Enabled Playwright plugin | Playwright MCP connection |

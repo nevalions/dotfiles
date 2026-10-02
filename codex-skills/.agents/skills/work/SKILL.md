@@ -3,6 +3,11 @@ name: work
 description: Work on a bd (beads) issue (e.g. $work sb-5)
 ---
 
+## Model selection
+
+Default: `gpt-6.1-sol / medium` (standard). Fully specified mechanical work: easy; complex debugging: review; hardest architecture: deep. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
+
+
 
 Start working on bd issue <arguments supplied by the user>.
 
