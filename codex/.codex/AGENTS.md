@@ -37,6 +37,12 @@ Wait for the Git worker before writing to the same repository. Run dependent com
 
 Before substantial work, select the least costly adequate model and reasoning effort using `~/.codex/model-policy.md` (read once per session when needed). Routine lookups and mechanical work use Luna low; normal implementation uses Sol medium; complex review/debugging uses Sol high; reserve Astra for the hardest work. Apply supported runtime controls or configured agent defaults; skill prose does not switch the parent model. Reassess when the task changes, avoid unnecessary delegation and repeated model-change questions, and report a useful runtime mismatch once when no switching control is available.
 
+## Execution visibility
+
+At delegation and first use of a skill, give one concise commentary announcement with the task, owning agent, known model and effort, skill, and purpose. Combine related announcements when possible; omit absent fields and avoid repeating unchanged details. Example: `Configure footer · worker / gpt-6.1-sol · medium · verification-before-completion · check live config`.
+
+Report the model and effort supplied by runtime metadata or the accepted spawn configuration; label requested or unverified choices accordingly. If actual runtime details are unavailable, say so once rather than inventing them. Skills do not switch models, and tools execute in the agent that calls them. Announcements describe delegation and skill use, not instrumentation of every tool call. Keep the native CLI footer for session metrics; it does not display every worker's execution state.
+
 ## MCP sources
 
 1. Context7 — docs, APIs, patterns (primary)

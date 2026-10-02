@@ -34,6 +34,20 @@ excluded from Stow. Do not stow the entire `~/.codex` directory.
 Use a separate checkout per machine. Custom `CODEX_HOME` layouts need an adapted
 Stow package; the installer rejects a mismatched layout.
 
+## Execution visibility
+
+The native CLI footer shows the current directory, model and reasoning effort,
+context usage, used tokens, Git branch, and five-hour and weekly limits.
+Configure its items with `/statusline`; local choices take precedence over
+the tracked `tui.status_line` defaults when the installer runs. Restart the
+CLI after installing to load the footer settings.
+
+Delegation and first use of a skill get a concise announcement of the task,
+owning agent, known model and effort, skill, and purpose. Unknown runtime
+details are stated explicitly. Skills do not switch models, and each tool
+runs in its calling agent. The footer reports session metrics; announcements
+describe execution choices rather than every tool call.
+
 ## Model selection
 
 Each local skill includes a default model/effort and escalation criteria.

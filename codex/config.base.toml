@@ -1,5 +1,6 @@
 [tui]
 notifications = false
+status_line = ["current-dir", "model-with-reasoning", "context-used", "used-tokens", "git-branch", "five-hour-limit", "weekly-limit"]
 
 [agents.git-workflow]
 description = "Execute explicitly requested commit, push/PR preparation and merge workflows with Luna low."
