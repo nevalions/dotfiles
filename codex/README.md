@@ -63,6 +63,44 @@ details are stated explicitly. Skills do not switch models, and each tool
 runs in its calling agent. The footer reports session metrics; announcements
 describe execution choices rather than every tool call.
 
+## Feature isolation
+
+Global Codex instructions require a separate worktree and task branch before
+editing for each new feature or repository-changing task. A follow-up continues
+in that task's worktree; a different task gets a new one. Read-only investigations
+can use the current checkout. Workers receive the task's checkout, and the agent
+reports its worktree path and branch before editing.
+
+In Zsh, start a new chat with the usual command:
+
+```sh
+codex
+```
+
+The shell function creates a managed worktree automatically for new interactive
+chats inside a Git repository, including when a prompt or profile is supplied.
+It respects `-C`/`--cd` and existing explicit flags. Outside a Git repository it
+starts a local chat without a worktree. `codex resume` and `codex fork` keep their
+existing checkout; help, version, administration and explicit remote commands
+pass through unchanged. For a new feature later in the same chat, Codex follows
+the global worktree instructions before editing.
+
+The Zsh function also starts local interactive chats, including resume and fork,
+without the shared daemon. Each CLI runs its own server, so approval and question
+requests stay in its terminal and tools inherit that pane's Herdr context.
+The shared server captures the environment of the terminal
+that started it, which can route later sessions through an unrelated Herdr pane.
+The tracked `features.daemon_auto_start = false` also disables starting a shared
+server; that setting alone can still attach to an already running daemon.
+
+Reload Zsh with `source ~/.zshrc`, then exit and resume each existing Codex CLI
+when its current work is finished. Running sessions keep their existing server
+connection until restarted. In a shell that has not loaded the function, use
+`codex --no-daemon --worktree` explicitly for a new feature in a Git repository.
+Use `codex agents` or `codex --remote <address>` when intentionally accessing a
+shared server. `command codex` bypasses the shell function entirely.
+Claude's integration and Herdr's notification settings are unchanged.
+
 ## Model selection
 
 Each local skill includes a default model/effort and escalation criteria.

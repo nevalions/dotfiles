@@ -13,7 +13,9 @@ into master locally, never work in the main clone — worktree per task.
 
 ## Worktrees
 
-Default to a feature branch in the current checkout. Use an isolated Git worktree when other agents or sessions may write to the repo, or unrelated dirty work would interfere. Read-only agents need no worktree. Follow project setup instructions; ignored environment files and installed dependencies are absent in fresh checkouts. Never copy secrets into tracked files. `bd` discovers the shared tracker.
+Every new feature or repository-changing task must use its own isolated Git worktree and task branch before editing files. This is standing authorization to create the worktree without asking again. Never implement a new feature in the main checkout or reuse a worktree belonging to a different task. Continue in an existing worktree only when it belongs to the same task; follow-up fixes, verification and requested Git stages stay there. Read-only investigations need no worktree.
+
+Prefer native Codex worktree support (`--worktree` for a new session or `/worktree` in the current session), or Herdr's worktree command when running in Herdr. Fall back to `git worktree add` when native support is unavailable. Give the worktree and branch a task-specific name, announce their paths, and pass that same checkout to delegated workers. Run every edit and verification command with the worktree as its working directory. Leave the original checkout and unrelated changes intact. Follow project setup instructions; ignored environment files and installed dependencies are absent in fresh checkouts. Never copy secrets into tracked files. `bd` discovers the shared tracker.
 
 ## Forgejo
 

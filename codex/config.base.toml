@@ -2,6 +2,9 @@
 notifications = false
 status_line = ["current-dir", "model-with-reasoning", "context-used", "used-tokens", "git-branch", "five-hour-limit", "weekly-limit"]
 
+[features]
+daemon_auto_start = false
+
 [agents]
 default_subagent_model = "gpt-6.1-sol"
 default_subagent_reasoning_effort = "medium"

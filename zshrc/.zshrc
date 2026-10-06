@@ -23,6 +23,61 @@ export __GLX_VENDOR_LIBRARY_NAME=nvidia
 
 alias v="nvim"
 alias vs="sudo -E nvim"
+unalias codex 2>/dev/null
+
+codex() {
+  local -a task_args=("$@") launch_args=()
+  local task_arg task_cwd="$PWD" task_kind='new'
+  local -i task_index=1 has_position=0 has_daemon=0 has_worktree=0
+
+  while (( task_index <= ${#task_args} )); do
+    task_arg="${task_args[task_index]}"
+    case "$task_arg" in
+      --) break ;;
+      -h|--help|-V|--version|--remote|--remote=*)
+        command codex "$@"
+        return
+        ;;
+      --no-daemon) has_daemon=1 ;;
+      --worktree) has_worktree=1 ;;
+      -C|--cd)
+        (( task_index++ ))
+        task_cwd="${task_args[task_index]:-$PWD}"
+        ;;
+      --cd=*) task_cwd="${task_arg#--cd=}" ;;
+      -C?*) task_cwd="${${task_arg#-C}#=}" ;;
+      -i|--image)
+        while (( task_index < ${#task_args} )) && [[ "${task_args[task_index+1]}" != -* ]]; do
+          (( task_index++ ))
+        done
+        ;;
+      -c|--config|-m|--model|-p|--profile|-s|--sandbox|-a|--ask-for-approval|--enable|--disable|--local-provider|--add-dir|--remote-auth-token-env)
+        (( task_index++ ))
+        ;;
+      -*) ;;
+      *)
+        if (( ! has_position )); then
+          case "$task_arg" in
+            resume|fork) task_kind="$task_arg" ;;
+            agents|exec|e|review|login|logout|mcp|plugin|app-server|remote-control|completion|update|doctor|sandbox|debug|apply|a|queue|archive|delete|migrate-rollouts|unarchive|cloud|exec-server|features|help)
+              command codex "$@"
+              return
+              ;;
+          esac
+          has_position=1
+        fi
+        ;;
+    esac
+    (( task_index++ ))
+  done
+
+  (( has_daemon )) || launch_args+=(--no-daemon)
+  if [[ "$task_kind" = new ]] && (( ! has_worktree )) &&
+    [[ "$(git -C "$task_cwd" rev-parse --is-inside-work-tree 2>/dev/null)" = true ]]; then
+    launch_args+=(--worktree)
+  fi
+  command codex "${launch_args[@]}" "$@"
+}
 
 alias cl="clear"
 alias mux="tmuxinator"
