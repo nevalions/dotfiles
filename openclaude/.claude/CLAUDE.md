@@ -11,6 +11,14 @@ Branches: feature/ bugfix/ hotfix/ refactor/ docs/ → atomic commits → squash
 kube-lvl47: the squash happens server-side through a PR (`scripts/ship.sh`); never merge
 into master locally, never work in the main clone — worktree per task.
 
+## Merged task cleanup
+
+A merge request includes standing authorization to clean its merged task branch locally and remotely and remove its task worktrees after required CI passes on the exact merged default-branch commit. A commit or branch-push request alone does not authorize cleanup. Apply this separately in each repository (including separate frontend and backend repos); never infer one repo's merge or CI result from another.
+
+Record the task branch/source SHA, merge result SHA and CI run results. Fetch the default branch and verify the merge result is present there. For squash merges, use confirmed merged PR source/target SHAs or recorded local squash-and-push evidence; ancestry or `git branch --merged` alone is insufficient. Pending, failed, cancelled, skipped or unknown required checks block cleanup. If CI is intentionally absent, follow the repository's explicit validation policy; otherwise retain the task artifacts and report missing evidence.
+
+Clean only the confirmed merged task refs and worktrees, with no new commits since the recorded source SHA. Preserve default/protected branches, the main checkout, dirty/untracked work, valuable ignored files (including environment files), active/locked worktrees and unrelated or unmerged tasks. Release finished task sessions/processes and move cleanup execution to a retained checkout before removal; never remove the worktree still hosting an active agent. Use non-force worktree removal, exact-SHA guarded branch deletion and a remote deletion lease; tolerate already deleted refs. Do not bulk-delete by age or branch-name pattern, force-remove worktrees, reset or discard work. Verify the final local/remote refs and worktree list, and report anything retained with the reason.
+
 ## Worktrees
 
 Default: work in place on a feature branch. Use the native `EnterWorktree` tool (never raw `git worktree add`) only when another session or agent may write to the same repo (Herdr panes, claw, parallel write-capable subagents via `isolation: worktree`), or when the tree holds unrelated dirty work. Read-only agents (review, search, triage) never need one.

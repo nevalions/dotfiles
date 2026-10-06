@@ -25,4 +25,4 @@ For bd (beads) issue $ARGUMENTS:
   discards anything pushed from the other PC. -u sets upstream so later bare
   `git push` works.)
 
-Note: This is a solo-owner workflow. PRs are optional. The `merge` command will perform a squash merge to master.
+Note: PRs are optional unless repository instructions require them. A push/PR preparation keeps the task branch and worktree for review. The `merge` workflow targets the actual default branch and includes guarded local/remote branch and worktree cleanup after required CI passes on the exact merged commit.

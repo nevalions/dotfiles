@@ -11,6 +11,14 @@ Branches: feature/ bugfix/ hotfix/ refactor/ docs/ → atomic commits → squash
 kube-lvl47: the squash happens server-side through a PR (`scripts/ship.sh`); never merge
 into master locally, never work in the main clone — worktree per task.
 
+## Merged task cleanup
+
+A merge request includes standing authorization to clean its merged task branch locally and remotely and remove its task worktrees after required CI passes on the exact merged default-branch commit. A commit or branch-push request alone does not authorize cleanup. Apply this separately in each repository (including separate frontend and backend repos); never infer one repo's merge or CI result from another.
+
+Record the task branch/source SHA, merge result SHA and CI run results. Fetch the default branch and verify the merge result is present there. For squash merges, use confirmed merged PR source/target SHAs or recorded local squash-and-push evidence; ancestry or `git branch --merged` alone is insufficient. Pending, failed, cancelled, skipped or unknown required checks block cleanup. If CI is intentionally absent, follow the repository's explicit validation policy; otherwise retain the task artifacts and report missing evidence.
+
+Clean only the confirmed merged task refs and worktrees, with no new commits since the recorded source SHA. Preserve default/protected branches, the main checkout, dirty/untracked work, valuable ignored files (including environment files), active/locked worktrees and unrelated or unmerged tasks. Release finished task sessions/processes and move cleanup execution to a retained checkout before removal; never remove the worktree still hosting an active agent. Use non-force worktree removal, exact-SHA guarded branch deletion and a remote deletion lease; tolerate already deleted refs. Do not bulk-delete by age or branch-name pattern, force-remove worktrees, reset or discard work. Verify the final local/remote refs and worktree list, and report anything retained with the reason.
+
 ## Worktrees
 
 Every new feature or repository-changing task must use its own isolated Git worktree and task branch before editing files. This is standing authorization to create the worktree without asking again. Never implement a new feature in the main checkout or reuse a worktree belonging to a different task. Continue in an existing worktree only when it belongs to the same task; follow-up fixes, verification and requested Git stages stay there. Read-only investigations need no worktree.
@@ -49,7 +57,7 @@ Keep user updates within 60 seconds during ongoing work, tied to meaningful mile
 
 For explicitly requested Git actions, including plain-language requests without `$`, load the matching skill: `commit-task` for committing an issue, `pr` for branch push/preparation, and `merge` for integrating a branch. Delegate execution to one `git-workflow` agent when available with matching Luna low configuration; otherwise use the general-agent fallback below. Do not ask the user to repeat a subagent instruction. Pass the repository/checkout, issue, exact authorized actions and files, existing check results, and applicable exceptions. If the custom role is unavailable or its configuration does not match the selected model/effort, use a narrowly scoped general agent with explicit `model = "gpt-6-luna"`, `reasoning_effort = "low"`, fresh/minimal context and the Git executor instructions from `~/.codex/agents/git-workflow.toml`. If the user specifies another model/effort, use a general agent with that choice instead of the fixed Luna role; never silently substitute an unavailable requested model. If spawning or model overrides are unavailable, report the routing limitation once before continuing on the current model.
 
-Wait for the Git worker before writing to the same repository. Run dependent commit/push/merge stages sequentially, and do only the stages requested. A delegated Git worker executes the matching skill directly and never delegates it again. Conflicts or failed checks return to the parent for Sol medium/high assessment. This rule authorizes delegation, not unrequested commits, pushes, merges, tags or releases.
+Wait for the Git worker before writing to the same repository. Run dependent commit/push/merge stages sequentially, and do only the stages requested. A delegated Git worker executes the matching skill directly and never delegates it again. Conflicts or failed checks return to the parent for Sol medium/high assessment. This rule authorizes delegation, not unrequested commits, pushes, merges, tags or releases. Cleanup included in a requested merge follows Merged task cleanup above.
 
 ## Model selection
 
