@@ -57,6 +57,21 @@ def prune_empty_directories(path):
         pass
 
 
+def validate_agents_directory(path, source):
+    if path.is_symlink():
+        if path.resolve() != source.resolve():
+            raise ValueError("Existing agents directory is managed by a different symlink: " + str(path))
+        return
+    if not path.exists():
+        return
+    if not path.is_dir():
+        raise ValueError("Existing agents path is not a directory: " + str(path))
+    for child in path.iterdir():
+        expected = source / child.name
+        if not child.is_symlink() or not expected.is_file() or child.resolve() != expected.resolve():
+            raise ValueError("Resolve the local agent conflict before installing; preserved: " + str(child))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Merge Codex defaults and stow the Codex packages.")
     parser.add_argument("--target", type=Path, default=Path.home())
@@ -68,6 +83,11 @@ def main():
     target = args.target.expanduser().resolve()
     if os.environ.get("CODEX_HOME") and Path(os.environ["CODEX_HOME"]).resolve() != target / ".codex":
         parser.error("This Stow package uses ~/.codex; unset CODEX_HOME or select its parent with --target.")
+    agents = target / ".codex/agents"
+    try:
+        validate_agents_directory(agents, package / ".codex/agents")
+    except ValueError as error:
+        parser.error(str(error))
     live = target / ".codex/config.toml"
     source = package / ".codex/config.toml"
     defaults = tomllib.loads((package / "config.base.toml").read_text())
@@ -76,6 +96,7 @@ def main():
     tomllib.loads(output)
     stow_base = ["stow", "--dir", str(repo), "--target", str(target)]
     stow = [*stow_base, "--no-folding", "codex"]
+    agents_stow = [*stow_base, "--ignore", r"^(?!\.codex(?:$|/agents(?:$|/)))"]
     skills_stow = [*stow_base, "codex-skills"]
     if live.is_symlink() and live.resolve() != source:
         parser.error("Existing config.toml is managed by a different symlink; resolve it before installing.")
@@ -110,6 +131,9 @@ def main():
         subprocess.run([*stow, "--simulate"], check=True)
         subprocess.run([*skills_stow, "--simulate"], check=True)
         subprocess.run(stow, check=True)
+        subprocess.run([*agents_stow, "--delete", "codex"], check=True)
+        prune_empty_directories(agents)
+        subprocess.run([*agents_stow, "codex"], check=True)
         subprocess.run([*stow_base, "--delete", "codex-skills"], check=True)
         prune_empty_directories(target / ".agents/skills")
         subprocess.run(skills_stow, check=True)

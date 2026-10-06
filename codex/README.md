@@ -15,6 +15,17 @@ python3 codex/install.py
 codex mcp list
 ```
 
+On another machine, first make sure the symlink migration fix has been committed
+and pushed. Pull that commit into the machine's separate dotfiles checkout, then
+run the installer from the repository root:
+
+```sh
+python3 codex/install.py --skip-plugins
+```
+
+This applies the same Stow directory-link strategy there, without reinstalling
+plugins.
+
 The installer merges `config.base.toml` with your current Codex config, preserving
 existing settings, model choice, project trust, plugin settings and hook trust.
 It backs up an existing regular config to `~/.codex/backups/` before replacing
@@ -26,7 +37,11 @@ adopted over unrelated local files. Use `--check` for a Stow simulation.
 `codex/.codex/config.toml` is generated, private, and Git-ignored: Codex itself
 writes machine-specific state into it. Only `config.base.toml` is committed.
 Codex config uses Stow with `--no-folding`, so auth files, databases, sessions,
-logs and managed plugins stay outside the repo. Skills use a folded
+logs and managed plugins stay outside the repo. The installer folds only
+`~/.codex/agents` into a directory link: Codex 0.160.1 refuses individual
+symlinked agent files when spawning a role. It migrates matching managed links
+and stops before making changes if the agents directory contains local files,
+directories, or unrelated links. Skills use a folded
 `~/.agents/skills` directory link: Codex 0.160.0 skips individual symlinked
 skill files during discovery. The installer removes old managed skill links
 and empty directories before relinking them. README and installer files are
