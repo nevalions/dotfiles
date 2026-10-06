@@ -1,9 +1,6 @@
 ---
 name: herdr
-description: Control Herdr, a terminal multiplexer for coding agents. Use only when
-  the user explicitly mentions Herdr or asks to use Herdr to inspect or control panes,
-  tabs, workspaces, commands, or another agent. Do not use merely because a task could
-  benefit from a background terminal, delegation, or parallel work. Requires HERDR_ENV=1.
+description: Use when a task in a Herdr-managed session needs terminal panes, background commands, or coordination of pane-based agents and workspaces. Also use for explicit Herdr requests. Requires HERDR_ENV=1.
 ---
 
 ## Model selection
@@ -24,7 +21,9 @@ test "${HERDR_ENV:-}" = 1
 
 If the check fails, say that you are not running inside Herdr and stop. Do not inspect or control the focused Herdr session from outside Herdr.
 
-When the check passes, the `herdr` binary in `PATH` talks to the current session. Use it to inspect neighboring work, create terminal layout, start agents and commands, read output, and wait for state changes.
+When the check passes, the `herdr` binary in `PATH` talks to the current session. Select it from task context when terminal layout or persistent background processes are needed; native subagent tools remain appropriate for ordinary delegation.
+
+Skill selection does not authorize controlling another person’s pane or agent. Read task-relevant state and manage panes and processes created for the authorized task. Sending commands, prompts, keystrokes, interruptions, or focus changes to existing panes or agents owned by the user or other sessions requires the user’s explicit instruction. Preserve the current pane and unrelated work.
 
 ## Learn the current CLI
 

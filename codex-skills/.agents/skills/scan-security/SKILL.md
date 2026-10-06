@@ -1,8 +1,11 @@
 ---
 name: scan-security
-description: Run a Semgrep CLI security scan and file results to bd/beads (plan only,
-  no code changes)
+description: Use when a repository security scan or security review is requested or necessary for the task. Finding remediation and issue filing require authorization.
 ---
+
+## Authorization
+
+Automatic selection loads this workflow; it does not authorize mutations. Execute only the Git stages, remote writes, release actions, or issue filing covered by the user’s request and applicable repository instructions. Complete authorized read-only preparation before seeking any missing authorization.
 
 ## Model selection
 
@@ -18,6 +21,7 @@ Requirements:
 
 After scanning:
 1) Summarize findings (counts by severity and category).
+   Continue to issue filing only when the user has authorized recording the findings in bd; otherwise report findings and stop before steps 2–5.
 2) Confirm bd is initialized here (`bd ready` or a `.beads/` dir). If not, note it and skip filing.
 3) Create a bd (beads) parent issue in this repo and capture the returned id:
    `bd create "Security scan findings (Semgrep)" -l security -p 1`

@@ -1,7 +1,6 @@
 ---
 name: tools-audit
-description: Audit installed Codex skills, agents, MCP servers, plugins and hooks,
-  with observed tool usage from local session transcripts. Read-only.
+description: Use when auditing installed Codex skills, agents, MCP servers, plugins, hooks, or observed local tool usage. Read-only.
 ---
 
 ## Model selection

@@ -1,17 +1,17 @@
 # Model selection
 
-Choose the least costly available model and reasoning effort adequate for the actual task before substantial work or an authorized delegation. Respect an explicit user choice. Skill defaults are starting points, not proof of an optimal model or permission to delegate. Reassess when scope or difficulty changes.
+Choose the least costly available model and reasoning effort adequate for the actual task before executing a new user task and each delegated task or phase. Respect an explicit user choice. Skill defaults are starting points, not proof of an optimal model or permission to delegate. Reassess when scope or difficulty changes.
 
 ## Task routes
 
 | Route / CLI profile | Model | Effort | Use |
 | --- | --- | --- | --- |
-| easy | gpt-6-luna | low | Exact lookups, extraction, status, summaries, mechanical edits with clear checks |
-| standard | gpt-6.1-sol | medium | Implementation, integration, ordinary debugging, synthesis and planning |
+| easy | gpt-6-luna | low | Exact lookups, inventory, extraction, straightforward mechanical edits and test execution with clear checks |
+| standard | gpt-6.1-sol | medium | Implementation, integration, research synthesis, design, planning and ordinary debugging |
 | review | gpt-6.1-sol | high | Security interpretation, complex debugging, cross-file review and consequential tradeoffs |
-| deep | gpt-6-astra | high | Hard architecture, unresolved multi-system reasoning, or inadequate results from Sol |
+| deep | gpt-6-astra | high | Hardest architecture, unresolved multi-system reasoning, or demonstrated inadequate reasoning from Sol |
 
-These local defaults were checked against official guidance and the local model catalog on 2026-10-02. Luna's documented general starting point is high; low is our narrower choice for mechanical work. Increase its effort if checks show inadequate reasoning, or use Sol when the task needs broader judgment. Avoid max/ultra for routine work. Missing context or a failed tool needs better evidence or a corrected command, not automatically a larger model. Escalate after a substantive reasoning failure; return to a cheaper route for later routine steps.
+These local defaults were checked against official guidance and the local model catalog on 2026-10-02. Luna's documented general starting point is high; low is our narrower choice for mechanical work. Increase its effort if checks show inadequate reasoning, or use Sol when the task needs broader judgment. Avoid max/ultra for routine work. Fix missing data, tool errors and network failures with better evidence or corrected operations before considering a larger model. Escalate after a substantive reasoning failure; return to a cheaper route for later routine steps.
 
 ## Skill defaults and escalation
 
@@ -49,10 +49,18 @@ These local defaults were checked against official guidance and the local model 
 
 CLI: start with `codex -p easy`, `codex -p standard`, `codex -p review`, or `codex -p deep`. These are native `<name>.config.toml` profile files for the installed CLI. An existing session uses its model picker (`/model` in the CLI) or another supported runtime control. Skill Markdown and `agents/openai.yaml` do not automatically switch the parent model. If no switching control is exposed, report a useful mismatch once and continue authorized work; do not claim savings or stop repeatedly for a model change.
 
-When delegation is already authorized, use the role's configured model/effort or explicit supported spawn overrides. Model overrides here require a fresh or limited-history child rather than a full-history fork. Pass only the context the child needs and verify results. Avoid starting a child for a trivial operation solely to change models: duplicated context and orchestration can cost more. Configure explorer as easy and code-reviewer as review; override for the actual workload when supported.
+Delegated children execute the parent's assigned task directly without recursive delegation unless explicitly designated as coordinators. The automatic trigger applies to the parent receiving a new user task.
 
-Requested Git workflows use the persistent `git-workflow` delegation route: Luna low for routine execution, with conflicts or failed checks returned to the parent for Sol medium/high assessment. This user-configured route also applies to small Git tasks; it is an exception to avoiding delegation solely for model cost. Keep dependent repository writes sequential, prevent recursive delegation, and preserve explicit user model choices and action scope.
+For parent waiting, mailbox handling, user updates and stall investigation, follow the [global Subagents waiting rules](AGENTS.md#subagents).
 
-For new/unknown workloads, check scope, ambiguity, consequences of error, necessary context, modalities and tools, then choose a route. Check current catalog/client support before adding model IDs or reasoning levels. Do not refresh documentation for every routine task; reuse validated settings until availability or behavior changes. Do not silently substitute unavailable models or use Claude model names as Codex IDs.
+Standing global authorization: before executing any new user task requiring file inspection, tools, edits or external research, the parent selects a route and delegates task execution. This applies across code, research, documentation, debugging, review, operations, data and design, including routine inventory and exact file lookups. A few-command task still delegates; batch related small steps into one cohesive child. Direct responses are limited to conversational, existing-context or status answers that need no new domain work. The parent may make brief scoping/routing checks, then coordinates, communicates, integrates and verifies; scoping must not become direct task completion. Parallelize independent work only with exclusive write ownership and isolation when needed. Run dependent stages and shared-repository writes sequentially. Keep action authorization, permissions and skills' explicit-only invocation metadata intact.
+
+Choose the model and effort for the actual workload, using the tables as starting guidance. Apply supported explicit spawn arguments with fresh or limited history (`fork_turns = "none"` where supported); prose does not switch a model. Use a named role only when the runtime supports it and its configured model/effort match the chosen route. Explorer is suitable for easy read-only search; code-reviewer for review. Otherwise use a general agent with explicit model/effort and read-only research/review instructions or scoped mutation ownership. Pass compact context, paths, exact authorization, constraints and checks; verify returned results. Remember unsupported roles for the session instead of retrying them. If spawning or model overrides are unavailable, report once and continue authorized work without claiming a model switch. Never silently substitute an unavailable user-selected model.
+
+`agents.default_subagent_model = "gpt-6.1-sol"` and `agents.default_subagent_reasoning_effort = "medium"` provide the standard fallback for unclassified spawns. Explicit workload overrides take precedence; neither default changes the parent's model. Duplicated context and orchestration have overhead, so delegation is not a cost-saving guarantee and conversational responses needing no new domain work need no child.
+
+Requested Git workflows retain the persistent `git-workflow` route: Luna low for routine execution, with conflicts or failed checks returned to the parent for Sol medium/high assessment. Use the named role only when available with matching settings; otherwise use a general agent with explicit model/effort and the Git executor instructions. An explicit user model/effort overrides the fixed Luna role. This route also applies to small requested Git tasks. Keep dependent repository writes sequential, prevent recursive delegation, and execute only the authorized Git stages.
+
+For new/unknown workloads, check scope, ambiguity, consequences of error, necessary context, modalities and tools, then choose a route; unknown tasks default to standard. Check current catalog/client support before adding model IDs or reasoning levels. Do not refresh documentation for every routine task; reuse validated settings until availability or behavior changes. Do not silently substitute unavailable models or use Claude model names as Codex IDs.
 
 Sources: [models and effort guidance](https://learn.chatgpt.com/docs/models), [subagent model configuration](https://learn.chatgpt.com/docs/agent-configuration/subagents), and local `codex --help` / `~/.codex/models_cache.json`. Defaults are workload recommendations, not benchmarked cost or quality guarantees.

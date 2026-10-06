@@ -1,6 +1,6 @@
 ---
 name: work
-description: Work on a bd (beads) issue (e.g. $work sb-5)
+description: Use when the user asks to implement, investigate, or fix a specific bd (beads) issue.
 ---
 
 ## Model selection

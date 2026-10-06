@@ -1,6 +1,6 @@
 ---
 name: create
-description: Create a new bd (beads) issue (e.g. $create Add feature X)
+description: Use when the user requests creating or recording a bd (beads) issue for a task, bug, or feature.
 ---
 
 ## Model selection

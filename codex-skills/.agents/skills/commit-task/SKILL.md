@@ -1,7 +1,11 @@
 ---
 name: commit-task
-description: Commit changes and close a bd (beads) issue (e.g. $commit-task sb-5)
+description: Use when the user requests committing repository changes for a bd (beads) issue. A commit request does not authorize pushing or merging.
 ---
+
+## Authorization
+
+Automatic selection loads this workflow; it does not authorize mutations. Execute only the Git stages, remote writes, release actions, or issue filing covered by the user’s request and applicable repository instructions. Complete authorized read-only preparation before seeking any missing authorization.
 
 ## Model selection
 

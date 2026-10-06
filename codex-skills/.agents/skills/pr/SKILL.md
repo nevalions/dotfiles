@@ -1,7 +1,11 @@
 ---
 name: pr
-description: Prepare feature branch for merge (solo-owner workflow)
+description: Use when the user requests pushing a feature branch or preparing it for a pull request or merge.
 ---
+
+## Authorization
+
+Automatic selection loads this workflow; it does not authorize mutations. Execute only the Git stages, remote writes, release actions, or issue filing covered by the user’s request and applicable repository instructions. Complete authorized read-only preparation before seeking any missing authorization.
 
 ## Model selection
 

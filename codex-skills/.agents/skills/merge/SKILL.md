@@ -1,7 +1,11 @@
 ---
 name: merge
-description: Squash merge feature branch to the default branch and cleanup
+description: Use when the user requests integrating or squash-merging a feature branch into the repository default branch.
 ---
+
+## Authorization
+
+Automatic selection loads this workflow; it does not authorize mutations. Execute only the Git stages, remote writes, release actions, or issue filing covered by the user’s request and applicable repository instructions. Complete authorized read-only preparation before seeking any missing authorization.
 
 ## Model selection
 

@@ -1,6 +1,6 @@
 ---
 name: triage
-description: Triage Forgejo branches, pull requests, and issues for this repository
+description: Use when assessing Forgejo repository branches, pull requests, issues, CI blockers, or stale work. Read-only.
 ---
 
 ## Model selection

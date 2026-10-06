@@ -1,6 +1,6 @@
 ---
 name: check-agents
-description: Verify whether global or project agents.md instructions are applied
+description: Use when checking whether global or project agent instructions are active or resolving their scope.
 ---
 
 ## Model selection
