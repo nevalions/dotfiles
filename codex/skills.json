@@ -1,0 +1,12 @@
+[
+  "claude-skills/.claude/skills/create",
+  "claude-skills/.claude/skills/work",
+  "claude-skills/.claude/skills/commit-task",
+  "claude-skills/.claude/skills/docs-commit",
+  "claude-skills/.claude/skills/pr",
+  "claude-skills/.claude/skills/herdr",
+  "claude-skills/.claude/skills/scan-security",
+  "claude-skills/.claude/skills/triage",
+  "claude-skills/.claude/skills/search",
+  "claude-skills/.claude/skills/check-agents"
+]

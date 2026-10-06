@@ -39,6 +39,10 @@ gem install tmuxinator
 git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/themes/powerlevel10k
 ```
 
+## Codex on Windows
+
+See [Codex synchronization](codex/README.md) for shared preferences, global instructions, and selected repository skills. Preview with `./scripts/sync-windows.ps1` and deploy with `./scripts/sync-windows.ps1 -Apply`. Python 3.11+ and Windows Developer Mode are required. Deployment backs up replaced entries and preserves machine-specific configuration and runtime data.
+
 ## Configuration Structure
 
 ### Core Components
