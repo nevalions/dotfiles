@@ -1,3 +1,4 @@
 **/.claude/settings.local.json
 # Claude Code worktrees (claude --worktree / EnterWorktree)
 .claude/worktrees/
+*.gate.lock*
