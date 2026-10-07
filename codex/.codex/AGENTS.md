@@ -84,6 +84,10 @@ Priority: `-p 0..4`, **0 = highest**. 0=Urgent 1=High 2=Medium 3=Low 4=Trivial.
 
 Descriptions/notes: plain text or markdown (no HTML). Use `bd remember` for persistent knowledge, rather than a separate memory file.
 
+Before starting or resuming task work, ask the user whether to create a new Beads issue or update an existing one. If the user has already authorized or chosen an issue in this session, follow that direction without asking again. When agreed, create or update and claim the issue before work begins, then add progress notes as work continues.
+
+Close a tracked issue only after the authorized commit, push, or merge stages are complete and required CI passes on the exact final pushed or merged commit. Keep it open and report the status if required checks are pending, failed, cancelled, skipped, unknown, or absent.
+
 Core commands: `bd ready` (available work), `bd show <id>`, `bd create "<title>" -p <0-4> -l <labels> -d <desc> --acceptance <ac>`, `bd update <id> --claim` (start), `bd update <id> --append-notes <text>` (progress), `bd close <id>` (done), `bd list --status open --json`.
 
 ## Secrets and logins (Vaultwarden via rbw)
