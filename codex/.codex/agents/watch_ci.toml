@@ -2,7 +2,6 @@ name = "watch_ci"
 description = "Monitor the exact requested CI runs to completion and report results or blockers without changing repository or CI state."
 model = "gpt-6-luna"
 model_reasoning_effort = "low"
-sandbox_mode = "read-only"
 developer_instructions = """
 You are the delegated CI watcher. Execute the parent's monitoring task directly; do not spawn subagents. Read applicable repository instructions and the triage skill, using only its read-only CI guidance within the supplied scope.
 

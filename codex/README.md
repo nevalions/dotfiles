@@ -152,6 +152,14 @@ roles listed in a tool schema do not prove that a running client can spawn them.
 Verify actual named-role availability before using it; use the configured
 generic fallback when a role is unavailable. Reload Codex after role changes.
 
+All custom roles omit sandbox and approval overrides so they inherit the parent
+session's current permissions. Explorer, code-reviewer and watch_ci remain
+read-only by instruction; their sandbox matches the parent's so permitted
+commands do not acquire a separate role restriction. This grants no access
+beyond the parent's permissions. An isolated worktree can still need approval
+for Git metadata in the original repository outside the writable roots.
+See the official [subagent permission inheritance documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents#approvals-and-sandbox-controls).
+
 Requested commit, branch push/preparation and merge workflows retain the
 Luna-low Git executor route, including plain requests such as "commit issue X"
 and `$commit-task X`. The general-agent fallback uses the same Git instructions;
