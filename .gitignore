@@ -59,3 +59,7 @@ codex/.codex/*
 !codex/.codex/review.config.toml
 !codex/.codex/deep.config.toml
 **/__pycache__/
+
+# See openclaude/.stow-local-ignore: settings.json stays a real local file,
+# because Claude Code writes auto-generated host reconnaissance into it.
+openclaude/.claude/settings.json

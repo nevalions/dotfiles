@@ -84,7 +84,7 @@ repos, so the tool has to exist first or the config has nothing to drive:
 | Tool | Install | Notes |
 |------|---------|-------|
 | **Herdr** | `curl -fsSL https://herdr.dev/install.sh \| sh` | Single binary to `~/.local/bin`. Plugins are installed separately with `herdr plugin install` — see `herdr/.config/herdr/README.md` |
-| **Claude Code** | see [claude.com/claude-code](https://claude.com/claude-code) | `stow -R openclaude claude-skills git` links config, skills and agents into `~/.claude/` (which Claude Code creates) and the git ignore into `~/.config/git/`. Never stow `~/.claude` wholesale: Claude Code writes runtime data there, so only per-entry folding is safe |
+| **Claude Code** | see [claude.com/claude-code](https://claude.com/claude-code) | `stow -R openclaude claude-skills git` links config, skills and agents into `~/.claude/` (which Claude Code creates) and the git ignore into `~/.config/git/`. Never stow `~/.claude` wholesale: Claude Code writes runtime data there, so only per-entry folding is safe. `settings.json` is excluded by `openclaude/.stow-local-ignore` and stays a real local file — Claude Code rewrites it at runtime and `autoMode.environment` is auto-generated reconnaissance naming internal hosts, which must not land in this public repo. Carry portable hook/statusline changes into it by hand |
 
 ## Key Features
 

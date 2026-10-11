@@ -73,7 +73,7 @@ One read-only monitor owns polling; the Git worker owns mutations. Wait at most 
 
 ## Beads tracking
 
-Use `bd` for all task tracking/durable project memory, never markdown TODOs/ad hoc memory files. Read the `beads` skill at `.agents/skills/beads/SKILL.md` or `~/.agents/skills/beads/SKILL.md`. Per-repo data lives in `.beads/`; if absent, `bd init` before agreed tracking. Ask before starting/resuming whether to create a new issue or update an existing one, unless already chosen/authorized this session. When agreed, create/update and claim before work, then append progress notes.
+Use `bd` for all task tracking/durable project memory, never markdown TODOs/ad hoc memory files. Read the `beads` skill at `.agents/skills/beads/SKILL.md` or `~/.agents/skills/beads/SKILL.md`; a separately installed global skill may be at `~/.codex/skills/beads/SKILL.md`. Per-repo data lives in `.beads/`; if absent, `bd init` before agreed tracking. Ask before starting/resuming whether to create a new issue or update an existing one, unless already chosen/authorized this session. When agreed, create/update and claim before work, then append progress notes.
 
 Run `bd prime` when context is missing/stale. Native hooks may load it on Codex 0.129.0+; inspect/toggle with `/hooks`. Descriptions/notes are plain text/Markdown, no HTML. Persistent knowledge uses `bd remember`. Priorities `-p 0..4`: urgent, high, medium, low, trivial (0 highest).
 

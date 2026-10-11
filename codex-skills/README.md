@@ -1,6 +1,6 @@
 # Codex skills
 
-The 13 skills from `claude-skills` plus `claude-to-codex`, adapted for Codex and stowed to
+The 13 skills from `claude-skills` plus `claude-to-codex` and the upstream Beads skill, adapted for Codex and stowed to
 `~/.agents/skills`. Install with `python3 codex/install.py` from the repo root,
 or `stow codex-skills` for a fresh skills-only installation. Use the installer
 to migrate an existing installation made with `--no-folding`; Codex 0.160.0
@@ -8,7 +8,7 @@ requires regular skill files under the linked skills root for discovery.
 
 Use `$work`, `$create`, `$commit-task`, `$pr`, `$merge`, `$docs-commit`, `$search`,
 `$triage`, `$scan-security`, `$check-agents`, `$shell-history`, `$tools-audit`,
-and `$herdr`, or describe the matching task in plain language. The 14 local
+`$herdr`, and `$beads`, or describe the matching task in plain language. The 15 local
 skills also include `$claude-to-codex`. Supply the task
 id or topic in the prompt. The ten local workflow skills allow automatic
 selection in `agents/openai.yaml` with scoped descriptions. Claude-only Fork/Plan/model frontmatter is
@@ -46,3 +46,18 @@ owned by the user or other sessions still requires explicit instructions. Its
 upstream pin is in `claude-skills/README.md`.
 The Codex tools-audit scanner reads Codex JSONL sessions and prints inventory
 and tool counts without conversation content or credentials.
+
+## Beads
+
+The Codex-compatible Beads skill is vendored from
+[`gastownhall/beads` v1.3.1](https://github.com/gastownhall/beads/tree/c1c4b642ac1c08d8c828007a1c2f96e47e43ef7c/plugins/beads/skills/beads),
+commit `c1c4b642ac1c08d8c828007a1c2f96e47e43ef7c`, matching the client pinned in
+`beads/install.py`. Its complete upstream resources and MIT license are included.
+The upstream skill metadata still says 0.60.0; use the installed client's
+`bd prime` and `bd <command> --help` for current command guidance. The existing
+local workflow rules govern authorization, issue closure and Git stages.
+
+Run `python3 beads/install.py` to install the checksum-pinned client, then
+`python3 codex/install.py --skip-plugins` to deploy local skills. Installing this
+skill does not initialize a tracker, migrate a database, or install hooks.
+It will be available on the next Codex turn after installation.

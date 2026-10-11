@@ -1,0 +1,5 @@
+# settings.json is deliberately NOT stowed. Claude Code rewrites it at runtime
+# (autoMode.environment is auto-generated reconnaissance naming internal hosts),
+# and this repo is public. Keep ~/.claude/settings.json a real, untracked file;
+# only portable hooks are carried here by hand in README/AGENTS notes.
+^/\.claude/settings\.json$

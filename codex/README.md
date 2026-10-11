@@ -165,7 +165,7 @@ stages or external writes. Reload Codex after installing configuration changes.
 | Claude | Codex counterpart |
 |---|---|
 | Global instructions | Native Codex global instructions, with adapted worktree and tool guidance |
-| Local dotfiles workflows | 14 adapted skills at `~/.agents/skills`; invoke `$work <id>`, `$create <title>`, `$commit-task <id>`, `$search <topic>`, etc. |
+| Local dotfiles workflows | 14 adapted workflows plus the pinned upstream Beads skill at `~/.agents/skills`; invoke `$work <id>`, `$create <title>`, `$commit-task <id>`, `$search <topic>`, etc. |
 | Workflow skill selection | Scoped descriptions and `allow_implicit_invocation: true`; mutations still require authorization |
 | Explore, code-reviewer | Read-only TOML custom agents: explorer uses Luna low, reviewer uses Sol high |
 | bd tasks | Same `.beads/` database; no duplicate task store or task migration |
