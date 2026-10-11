@@ -3,7 +3,9 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
+from urllib.parse import urlparse
 
 REQUIRED = {
     "perplexity": ("PERPLEXITY_API_KEY",),
@@ -31,6 +33,41 @@ def main():
                 value = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: env.get(m[1], ""), value)
                 if value:
                     env[key] = value
+    if server == "forgejo" and not env.get("FORGEJO_TOKEN"):
+        try:
+            result = subprocess.run(
+                ["rbw", "get", "Forgejo token (claude-mcp)"],
+                capture_output=True,
+                text=True,
+                timeout=45,
+                check=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            raise SystemExit(
+                "Cannot load Forgejo MCP token from rbw; unlock rbw in your terminal"
+            )
+        token = result.stdout.strip()
+        if token:
+            env["FORGEJO_TOKEN"] = token
+    if server == "forgejo":
+        url = urlparse(env.get("FORGEJO_URL", ""))
+        if url.scheme not in ("http", "https") or not url.netloc:
+            try:
+                result = subprocess.run(
+                    ["rbw", "get", "Forgejo admin", "--raw"],
+                    capture_output=True,
+                    text=True,
+                    timeout=45,
+                    check=True,
+                )
+                uris = json.loads(result.stdout)["data"]["uris"]
+                env["FORGEJO_URL"] = next(
+                    item["uri"] for item in uris
+                    if urlparse(item["uri"]).scheme in ("http", "https")
+                    and urlparse(item["uri"]).netloc
+                )
+            except (OSError, subprocess.SubprocessError, ValueError, KeyError, StopIteration):
+                raise SystemExit("Cannot load Forgejo URL from rbw Forgejo admin URI")
     missing = [key for key in keys if not env.get(key)]
     if missing:
         raise SystemExit("Missing MCP environment variables: " + ", ".join(missing))

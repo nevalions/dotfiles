@@ -187,9 +187,18 @@ MCP credentials come from environment variables. For Perplexity and Forgejo,
 `codex-mcp-env` also reads missing values from the matching server's `env` in
 `~/.claude.json` at process startup. It supports `${VAR}` references, passes
 secrets directly to the child process, and never prints or writes their values.
-Environment values take precedence. On a machine without Claude, provide
-`PERPLEXITY_API_KEY`, `FORGEJO_URL`, and `FORGEJO_TOKEN` through your existing
-vault/environment setup. The public repo contains no tokens or private URLs.
+Environment values take precedence over Claude's configuration. For Forgejo,
+the launcher then loads a missing token from the rbw item
+`Forgejo token (claude-mcp)`. If the resulting URL is missing or is not an HTTP(S)
+URL with a host, it uses the first valid HTTP(S) URI on the `Forgejo admin` rbw
+item. This fallback requires rbw on PATH and an unlocked vault; unlock it in
+your own terminal if startup reports a vault error, then restart the MCP server
+or Codex session. The launcher keeps vault output in memory and passes the
+resolved values directly to the child process.
+
+On a machine without Claude or these rbw items, provide `PERPLEXITY_API_KEY`,
+`FORGEJO_URL`, and `FORGEJO_TOKEN` through your existing vault/environment setup.
+The public repo contains no tokens or private URLs.
 Atuin can query existing Claude history; recording new Codex commands needs an
 Atuin integration compatible with Codex, not `atuin hook claude-code`.
 
