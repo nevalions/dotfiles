@@ -1,3 +1,7 @@
+approval_policy = "on-request"
+approvals_reviewer = "auto_review"
+sandbox_mode = "workspace-write"
+
 [tui]
 notifications = false
 status_line = ["current-dir", "model-with-reasoning", "context-used", "used-tokens", "git-branch", "five-hour-limit", "weekly-limit"]
@@ -27,6 +31,7 @@ env_vars = ["PERPLEXITY_API_KEY"]
 startup_timeout_sec = 60
 
 [mcp_servers.forgejo]
+default_tools_approval_mode = "writes"
 command = "codex-mcp-env"
 args = ["forgejo", "npx", "-y", "@ric_/forgejo-mcp"]
 env_vars = ["FORGEJO_URL", "FORGEJO_TOKEN"]
