@@ -8,6 +8,8 @@ The parent may briefly scope/route, then owns coordination, communication, integ
 
 Use named roles only when supported and configured model/effort match the route: prefer read-only `explorer` for search and `code-reviewer` for review. Otherwise use a general agent with supported explicit model/effort and fresh/minimal context (`fork_turns = "none"` where supported). Handoffs include task, paths, authorized actions, ownership, constraints and checks. Research/review agents are read-only; mutating agents have scoped ownership and must preserve others' edits. Parallelize only independent work with exclusive write ownership/isolation; serialize dependent stages and shared-repo writes. Carry findings, not transcripts; verify results with targeted checks before broader ones.
 
+Before spawning a `gpt-6-astra` subagent, obtain explicit user permission and explain why the task needs Astra rather than a lower-cost adequate model. An explicit user request to use Astra counts as permission.
+
 Remember unavailable roles instead of retrying. If spawning/model controls are unavailable, report once and continue authorized work without claiming a switch. Skill prose does not switch models. Reassess routing when scope changes; avoid fragmentation and repeated model-change questions.
 
 ### Requested Git workflows
