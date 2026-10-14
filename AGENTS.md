@@ -7,6 +7,7 @@
 - `stow -D <directory>` - Remove symlinks
 - `stow */` - Apply all dotfiles to home directory
 - `stow -R openclaude claude-skills git` - link the Claude Code packages into `~/.claude` and the git ignore into `~/.config/git` (plain stow, no wrapper script)
+- Claude mods in `claude-mods/` are not stowed: `~/.claude/settings.json` names them in `env.CLAUDE_CODE_PLUGIN_DIRS`. Check one with `claude plugin validate claude-mods/<mod>` and `claude plugin test claude-mods/<mod>`
 - `python3 codex/install.py` - merge private Codex settings with tracked MCP defaults, then stow `codex` and `codex-skills` without folding runtime directories
 - `stow codex-skills` - link a fresh Codex skills installation into `~/.agents/skills`; use the installer to migrate old file-level links
 - `bat cache --build` - Rebuild bat syntax highlighting themes

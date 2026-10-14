@@ -119,3 +119,9 @@ print a value.
 ## Safety
 
 No fabricated citations/standards. No assumed security posture. No AGENTS.md/CLAUDE.md in READMEs.
+
+## This machine
+
+Per-host instructions, kept out of this public repo (absent elsewhere):
+
+@~/.claude/CLAUDE.local.md

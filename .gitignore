@@ -63,3 +63,7 @@ codex/.codex/*
 # See openclaude/.stow-local-ignore: settings.json stays a real local file,
 # because Claude Code writes auto-generated host reconnaissance into it.
 openclaude/.claude/settings.json
+
+# Anthropic skills Claude Code syncs per account into ~/.claude/skills (a stowed
+# folder): runtime data, not config.
+claude-skills/.claude/skills/synced/

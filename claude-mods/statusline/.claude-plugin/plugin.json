@@ -1,0 +1,9 @@
+{
+  "name": "statusline",
+  "version": "0.1.0",
+  "description": "Status line: dir, model, context bar, tokens spent (main/sub), Anthropic peak-hours countdown",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "linroot"
+  }
+}
