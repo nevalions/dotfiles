@@ -67,3 +67,12 @@ plugins answer `worktree.created`, and that absence is what keeps them apart.
 - Use semantic versioning for any versioned configs
 - Maintain backward compatibility when possible
 - Test changes locally before committing
+
+## Merging and cleanup
+
+This repo has no CI, intentionally: that is its validation policy for the
+merged-task cleanup rule. Validate locally (stow dry run, `claude plugin
+validate`/`test` for a mod), squash-merge the task branch into `main` and push.
+Once `origin/main` is fetched and holds the squash commit, delete the task
+branch (exact-SHA guarded, remote with a lease) at once; do not wait for CI.
+Branches that are not the task's merged branch stay.
