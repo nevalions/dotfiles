@@ -11,9 +11,13 @@ Branches: feature/ bugfix/ hotfix/ refactor/ docs/ → atomic commits → squash
 kube-lvl47: the squash happens server-side through a PR (`scripts/ship.sh`); never merge
 into master locally, never work in the main clone — worktree per task.
 
+## Requested Git workflows
+
+An unqualified `push` or `commit and push` means validate the task, squash-merge it locally into the actual default branch, and push the merged result. Use the `merge` workflow; for `commit and push`, commit the scoped task changes first. Do not create a PR unless explicitly requested or required by repository instructions. Explicit feature-branch-only pushes (for example, `push only this branch`) and PR requests use `pr` and retain the task branch/worktree. A commit-only request uses `commit-task` and does not authorize pushing or merging. Repository-specific integration rules take precedence, including kube-lvl47’s server-side PR merge through `scripts/ship.sh`.
+
 ## Merged task cleanup
 
-A merge request includes standing authorization to clean its merged task branch locally and remotely and remove its task worktrees after required CI passes on the exact merged default-branch commit. A commit or branch-push request alone does not authorize cleanup. Apply this separately in each repository (including separate frontend and backend repos); never infer one repo's merge or CI result from another.
+A merge request or unqualified push includes standing authorization to clean its merged task branch locally and remotely and remove its task worktrees after required CI passes on the exact merged default-branch commit. A commit-only or explicit branch-only push/PR request does not authorize cleanup. Apply this separately in each repository (including separate frontend and backend repos); never infer one repo's merge or CI result from another.
 
 Record the task branch/source SHA, merge result SHA and CI run results. Fetch the default branch and verify the merge result is present there. For squash merges, use confirmed merged PR source/target SHAs or recorded local squash-and-push evidence; ancestry or `git branch --merged` alone is insufficient. Pending, failed, cancelled, skipped or unknown required checks block cleanup. If CI is intentionally absent, follow the repository's explicit validation policy; otherwise retain the task artifacts and report missing evidence.
 

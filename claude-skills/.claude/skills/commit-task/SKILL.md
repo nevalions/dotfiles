@@ -5,6 +5,8 @@ disable-model-invocation: true
 argument-hint: "<bd-issue-id>"
 ---
 
+A commit-only request ends after the authorized commit and tracking steps. For `commit and push`, commit the scoped task changes here, then continue with `merge` to validate, locally squash-merge into the actual default branch, and push the result. Explicit branch-only push/PR requests use `pr`; repository-specific server-side integration rules take precedence. Do not close a tracked issue before all requested Git stages and required checks finish. Run bd steps only when issue tracking is authorized.
+
 Commit changes and update bd issue $ARGUMENTS.
 
 Steps:
@@ -27,7 +29,7 @@ Steps:
    - git add <file> ...
    - git commit -m "<conventional commit message>"
 5. Update the bd issue:
-   - If work is complete: `bd close $ARGUMENTS`
+   - If work and all requested Git stages/checks are complete: `bd close $ARGUMENTS`
    - If partial: `bd update $ARGUMENTS --append-notes "<progress>"` (leave open)
 6. Make the bd change leave this machine (a closure after the last commit is
    otherwise stranded behind a clean worktree, with no warning):

@@ -1,6 +1,6 @@
 ---
 name: commit-task
-description: Use when the user requests committing repository changes for a bd (beads) issue. A commit request does not authorize pushing or merging.
+description: Use when the user requests committing repository changes for a bd (beads) issue. A commit-only request does not authorize pushing or merging.
 ---
 
 ## Authorization
@@ -16,6 +16,8 @@ Default: `gpt-6-luna / low` (easy). Correctness review or failing-check analysis
 Delegate this requested workflow to one `git-workflow` agent using the persistent Git routing instructions. Pass the issue, checkout, authorized files/actions and applicable repository rules, then wait and verify its result. If you are already the delegated Git executor, perform the steps directly; do not delegate again. Respect explicit user model choices and report unavailable routing instead of claiming a model switch.
 
 
+
+A commit-only request ends after the authorized commit and tracking steps. For `commit and push`, commit the scoped task changes here, then continue with `merge` to validate, locally squash-merge into the actual default branch, and push the result. Explicit branch-only push/PR requests use `pr`; repository-specific server-side integration rules take precedence. Do not close a tracked issue before all requested Git stages and required checks finish. Run bd steps only when issue tracking is authorized.
 
 Commit changes and update bd issue <arguments supplied by the user>.
 
@@ -39,7 +41,7 @@ Steps:
    - git add <file> ...
    - git commit -F <message-file>
 5. Update the bd issue:
-   - If work is complete: `bd close <arguments supplied by the user>`
+   - If work and all requested Git stages/checks are complete: `bd close <arguments supplied by the user>`
    - If partial: `bd update <arguments supplied by the user> --append-notes "<progress>"` (leave open)
 6. Make the bd change leave this machine (a closure after the last commit is
    otherwise stranded behind a clean worktree, with no warning):

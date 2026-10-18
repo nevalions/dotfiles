@@ -70,6 +70,10 @@ plugins answer `worktree.created`, and that absence is what keeps them apart.
 
 ## Merging and cleanup
 
+An unqualified `push` or `commit and push` includes local squash integration
+into `main` and pushing that result. Explicit branch-only pushes and PR
+requests retain their requested scope.
+
 This repo has no CI, intentionally: that is its validation policy for the
 merged-task cleanup rule. Validate locally (stow dry run, `claude plugin
 validate`/`test` for a mod), squash-merge the task branch into `main` and push.

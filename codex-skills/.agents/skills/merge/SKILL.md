@@ -1,6 +1,6 @@
 ---
 name: merge
-description: Use when the user requests integrating or squash-merging a feature branch into the repository default branch.
+description: Use when the user requests push, commit and push, or integrating a task into the default branch; respect explicit branch-only push/PR requests.
 ---
 
 ## Authorization
@@ -15,17 +15,21 @@ Default: `gpt-6-luna / low` (easy). Conflicts or release consequences: standard/
 
 Delegate this requested workflow to one `git-workflow` agent using the persistent Git routing instructions. Pass the issue, checkout, authorized files/actions and applicable repository rules, then wait and verify its result. If you are already the delegated Git executor, perform the steps directly; do not delegate again. Respect explicit user model choices and report unavailable routing instead of claiming a model switch.
 
-Merge the task branch to the repository default branch, then clean up only after verified CI:
+An unqualified `push` or `commit and push` means validate the task, squash-merge it locally into the actual default branch, and push the merged result. Use the `merge` workflow; for `commit and push`, establish a proper isolated task branch before invoking `commit-task` where needed, then commit the scoped task changes. Do not create a PR unless explicitly requested or required by repository instructions. Explicit feature-branch-only pushes (for example, `push only this branch`) and PR requests use `pr` and retain the task branch/worktree. A commit-only request uses `commit-task` and does not authorize pushing or merging. Repository-specific integration rules take precedence, including kube-lvl47’s server-side PR merge through `scripts/ship.sh`.
+
+Merge the task branch to the repository default branch, then clean up after required CI or the repository’s explicit no-CI validation policy:
 
 1) Verify readiness and record evidence:
-   - Confirm the linked bd issue (`bd show <id>`), clean task checkout and required pre-merge checks.
-   - Resolve the actual default branch from `origin/HEAD`; record the task branch, exact source SHA, remote and owned worktree paths. Never assume `master`.
+   - Confirm the linked bd issue when tracking is authorized (`bd show <id>`), scoped task changes and required pre-merge checks. Resolve the actual default branch from `origin/HEAD` and refresh its remote state; record the exact source SHA, source branch or detached state, remote and owned worktree paths. Never assume `master`.
+   - Resolve source state before committing or squashing. If the source is the default branch or the task is already integrated, verify integration evidence and inspect every default-branch commit pending push against the authorized task scope. When no task diff remains to integrate, validate the scoped already-integrated result and normally push only the verified default-branch commits; do not squash the default branch into itself or create an empty commit. If no commits are pending push, report up to date. Never infer task ownership from branch position or push unrelated ahead commits; return unclear ownership or divergence to the parent.
+   - For a detached source with unintegrated task work, record its exact SHA and establish a named task branch and isolated task worktree at that SHA before edits or commits. Reuse only a verified branch/worktree for this same task; preserve the original checkout. Do not pass an unnamed detached source into the squash step.
+   - For uncommitted task changes, apply the existing task isolation rules and preserve unrelated changes. For `commit and push`, establish the proper task branch/worktree first where needed, then invoke `commit-task` for only the authorized task changes; its default-branch and detached-source guards remain in force. For `push` or `merge`, do not infer authorization to commit uncommitted changes. Require a clean task source before integration.
    - Follow repository-specific merge rules, including server-side PR merge for kube-lvl47. Preserve unrelated checkouts and changes.
 
-2) Squash merge using the authorized repository workflow:
-   - For a local merge, use a clean retained checkout where the default branch is available; update it with `git pull --ff-only origin <base>`, then `git merge --squash <task>` and `git commit -F <message-file>`. Read the message back, record the resulting merge SHA and push the default branch.
+2) Squash merge only when unintegrated task work remains, using the authorized repository workflow:
+   - For a local merge, use a clean retained checkout where the default branch is available; update it with `git pull --ff-only origin <base>`, then `git merge --squash <task>` and `git commit -F <message-file>`. Read the message back and record the resulting merge SHA. Run the required local validation on that merged result before pushing the default branch with a normal fast-forward push. Never rebase or force-push the default branch. Preserve dirty/unrelated checkouts; return conflicts, failed checks or an unavailable clean integration checkout to the parent.
    - For a server-side merge, confirm the PR is merged into the intended base and record its source SHA and merge result SHA.
-   - A requested merge includes the guarded cleanup below. A commit or branch push alone does not. Create/push a release tag only when authorized by the request or explicit repository policy.
+   - A requested merge or unqualified push includes the guarded cleanup below. A commit-only or explicit branch-only push/PR request does not. Create/push a release tag only when authorized by the request or explicit repository policy.
 
 3) Verify the merged result before cleanup:
    - Fetch the default branch; confirm the recorded merge result SHA is present on it and matches the merge evidence for the recorded source SHA.

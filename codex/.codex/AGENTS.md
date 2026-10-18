@@ -14,7 +14,9 @@ Remember unavailable roles instead of retrying. If spawning/model controls are u
 
 ### Requested Git workflows
 
-Plain-language requests trigger the same skills as explicit invocations: `commit-task` for issue commits, `pr` for branch push/preparation, `merge` for integration. Delegate to one `git-workflow` executor at `gpt-6-luna / low` when runtime configuration matches; otherwise a narrowly scoped general agent with that explicit configuration, minimal context and `~/.codex/agents/git-workflow.toml` instructions. A user-selected model/effort uses a general agent with that choice. Apply the unavailable-runtime fallback above.
+An unqualified `push` or `commit and push` means validate the task, squash-merge it locally into the actual default branch, and push the merged result. Use the `merge` workflow; for `commit and push`, commit the scoped task changes first. Do not create a PR unless explicitly requested or required by repository instructions. Explicit feature-branch-only pushes (for example, `push only this branch`) and PR requests use `pr` and retain the task branch/worktree. A commit-only request uses `commit-task` and does not authorize pushing or merging. Repository-specific integration rules take precedence, including kube-lvl47’s server-side PR merge through `scripts/ship.sh`.
+
+Plain-language requests trigger the matching skills just like explicit invocations. Delegate to one `git-workflow` executor at `gpt-6-luna / low` when runtime configuration matches; otherwise a narrowly scoped general agent with that explicit configuration, minimal context and `~/.codex/agents/git-workflow.toml` instructions. A user-selected model/effort uses a general agent with that choice. Apply the unavailable-runtime fallback above.
 
 Pass checkout, issue, exact actions/files, checks and exceptions. The executor runs the skill directly without recursive delegation. Wait for it before writing to the same repo; run only requested stages, sequentially. Conflicts/failed checks return to the parent for Sol medium/high assessment. This grants no unrequested commit, push, merge, tag or release. Merge cleanup follows **Merged task cleanup**.
 
@@ -41,7 +43,7 @@ Every new feature/repo-changing task needs its own isolated worktree and task br
 
 ### Merged task cleanup
 
-A merge request authorizes removal of its merged task branches locally/remotely and task worktrees only after required CI passes on the exact merged default-branch commit. Commit/push alone does not. Prove this separately per repo, including frontend/backend; never infer one repo's result from another.
+A merge request or unqualified push authorizes removal of its merged task branches locally/remotely and task worktrees only after required CI passes on the exact merged default-branch commit. Commit-only and explicit branch-only push/PR requests do not. Prove this separately per repo, including frontend/backend; never infer one repo's result from another.
 
 Record task branch/source SHA, merge-result SHA and CI evidence. Fetch default and verify the merge result is present. Squash proof requires confirmed merged PR source/target SHAs or recorded local squash-and-push evidence; ancestry/`git branch --merged` alone is insufficient. Pending, failed, cancelled, skipped, unknown or missing required checks block cleanup. If CI is deliberately absent, follow explicit repo validation policy; otherwise retain artifacts/report missing evidence.
 
