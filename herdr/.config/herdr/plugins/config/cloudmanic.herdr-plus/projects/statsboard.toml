@@ -39,7 +39,7 @@ name = "run"
 
 [[tabs.panes]]
 label = "back"
-command = "docker start statsboards-redis 2>/dev/null || docker run -d --name statsboards-redis -p 6379:6379 redis:7-alpine; cd statsboards-backend && . ./venv/bin/activate && python -m src.runserver"
+command = "docker start statsboards-redis 2>/dev/null || docker run -d --name statsboards-redis -p 6379:6379 redis:7-alpine; cd statsboards-backend && uv run python -m src.runserver"
 
 [[tabs.panes]]
 label = "front"
@@ -51,7 +51,7 @@ name = "cli"
 
 [[tabs.panes]]
 label = "back"
-command = "cd statsboards-backend && . ./venv/bin/activate"
+command = "cd statsboards-backend && . .venv/bin/activate"
 
 [[tabs.panes]]
 label = "front"
