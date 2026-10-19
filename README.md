@@ -220,6 +220,8 @@ This is a personal configuration repository. Feel free to:
 
 This repository intentionally has no CI. Validate affected configurations locally with a stow dry run and the relevant tool checks before merging. Across the home-cluster projects, keep unfinished changes in draft PRs; validate the latest ready PR revision, then the merged `main`/`master` commit. Historical commits do not each need a CI run.
 
+See the [CI/CD workflow guide](docs/ci-cd/README.md) for the shared validation and delivery process.
+
 ## License
 
 Personal use. Adapt as needed for your own workflow.
