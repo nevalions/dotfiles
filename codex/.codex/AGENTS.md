@@ -53,6 +53,8 @@ Remove only confirmed merged task refs/worktrees unchanged since the recorded so
 
 Solo owner. Writes only when requested; settings/secrets changes require explicit scope. Plan before PRs/merges.
 
+This is a personal home cluster: keep intermediate development commits local or on a draft PR. Validate the current ready PR head before merging, then run the normal default-branch pipeline once on the resulting merged `main`/`master` commit. Historical commits do not each need passing CI, and obsolete PR runs are not merge evidence. A new ready PR revision needs fresh checks; cancel superseded PR validation, while allowing default-branch publishing and deployments to finish. Do not trigger ordinary CI on feature-branch pushes or add duplicate tag-triggered checks; preserve explicit release-tag workflows and scheduled maintenance. Forgejo exports its configured work-in-progress title prefix as `pull_request.draft`: skip draft jobs and listen for `opened`, `synchronize`, `reopened` and `edited`. Removing the prefix makes the PR ready and triggers `edited`; other ready PR title/body edits can also revalidate the current head. Repositories with intentionally absent CI keep their documented local validation policy.
+
 Before monitoring, record repo, PR, exact source SHA and expected checks. Read all relevant `.forgejo/workflows/` and current branch protection; distinguish PR from post-merge push workflows. Do not assume default-branch-only CI or reuse a previous job count.
 
 Prefer authenticated Forgejo MCP reads. If commit status, protection or Actions reads are missing, use authenticated REST; admin runner-job tools are not substitutes. Inspect live `/swagger.v1.json` for routes/fields. Under `/api/v1/repos/{owner}/{repo}` use:
