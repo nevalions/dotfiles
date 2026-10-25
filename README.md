@@ -63,6 +63,11 @@ git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-$
 - **Theme**: Catppuccin color scheme throughout
 - **Location**: `hyprland/`
 
+For an installed Omarchy desktop using Lua configuration, use
+[`omarchy-hypr/`](omarchy-hypr/README.md) for the COSMIC-style keybindings and
+layout modules. The `hyprland/` package contains a separate legacy `.conf`
+setup; choose the package matching the desktop instead of applying both.
+
 ### Tool Configurations
 
 | Tool | Description | Location |
