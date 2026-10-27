@@ -34,6 +34,28 @@ changing the tracked defaults; it adds new defaults without overwriting local
 choices. Resolve existing skill or agent conflicts yourself; files are never
 adopted over unrelated local files. Use `--check` for a Stow simulation.
 
+If the live config has become a regular file and differs from the generated
+config, the installer stops rather than assuming that both belong to this
+target. For the same target, explicitly recover from the current live config:
+
+```sh
+python3 codex/install.py --recover-generated-config --check
+python3 codex/install.py --recover-generated-config --skip-plugins
+```
+
+The check writes nothing and may exit nonzero with the expected regular
+`config.toml` Stow conflict; inspect any other conflicts before installing.
+Recovery requires an existing regular live config and preserves its settings.
+Before regenerating, it backs up both configs privately under
+`~/.codex/backups/`: `config.toml.<timestamp>` for the live config and
+`config.generated.toml.<timestamp>` for the previous generated config. Backups
+stay outside the Stow package. Foreign config and agent symlinks still stop
+installation. Use a separate checkout for a different target.
+
+Run installation from the checkout used by the existing managed links, after
+integrating the desired tracked changes there. A feature worktree check does
+not activate its changes in the installed checkout.
+
 `codex/.codex/config.toml` is generated, private, and Git-ignored: Codex itself
 writes machine-specific state into it. Only `config.base.toml` is committed.
 Codex config uses Stow with `--no-folding`, so auth files, databases, sessions,
@@ -109,12 +131,17 @@ Use native profiles with the installed CLI:
 
 ```sh
 codex -p easy
+codex -p scoped
 codex -p standard
 codex -p review
 codex -p deep
 ```
 
-They select Luna low, Sol medium, Sol high and Astra high respectively.
+They select Luna low, Terra medium, Sol medium, Sol high and Astra high respectively.
+The scoped profile uses explicit medium effort for bounded code fixes with clear
+requirements/checks, prose from supplied material, screenshot/chart interpretation
+and defined browser workflows. Open-ended work retains the standard route.
+Spawning Astra requires explicit user permission.
 The base model remains your existing choice. An active session needs a supported
 runtime control or model picker; invoking a skill does not switch its model.
 Model and effort choices are workload recommendations, not benchmarked optima.
@@ -132,13 +159,16 @@ file lookups delegate too; related small steps are batched into one worker.
 Workers execute their assigned work without recursive delegation; independent tasks may run in parallel with exclusive ownership,
 while dependent stages and shared-repository writes stay sequential.
 
-Routing selects Luna low for exact lookups and mechanical work, Sol medium
-for implementation, synthesis and design, Sol high for complex debugging and
-review, and Astra high for the hardest reasoning. Unknown tasks and
+Routing selects Luna low for exact lookups and mechanical work, Terra medium
+for scoped phases, Sol medium for integration, synthesis and design, Sol high
+for complex debugging and review, and Astra high for the hardest reasoning. Unknown tasks and
 unclassified spawns default to Sol medium. Explicit user model choices
 and workload overrides take precedence. The parent keeps its model. Named
 roles are used only when supported and their settings match; otherwise a
 general agent receives explicit model/effort settings and compact context.
+Native role files can override spawn model arguments: explorer, git-workflow
+and watch_ci remain Luna low, and code-reviewer remains Sol high. Scoped work
+uses a general agent with explicit Terra medium and fresh or limited context.
 Unavailable roles are remembered for the session. If spawning or overrides
 are unavailable, the parent reports that once and continues authorized work.
 Context and coordination have overhead; these routes do not guarantee savings.

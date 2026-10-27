@@ -5,7 +5,7 @@ description: Use when the user asks to implement, investigate, or fix a specific
 
 ## Model selection
 
-Default: `gpt-6.1-sol / medium` (standard). Fully specified mechanical work: easy; complex debugging: review; hardest architecture: deep. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
+Default: `gpt-6.1-sol / medium` (standard). Mechanical work: easy; bounded fixes with clear requirements and checks: `gpt-6.1-terra / medium` (scoped); complex debugging: review; hardest architecture: deep. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
 
 
 

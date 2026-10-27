@@ -9,7 +9,7 @@ Automatic selection loads this workflow; it does not authorize mutations. Execut
 
 ## Model selection
 
-Default: `gpt-6-luna / low` (easy). API semantics or substantial restructuring: standard. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
+Default: `gpt-6-luna / low` (easy). Drafting or revising prose from supplied material: `gpt-6.1-terra / medium` (scoped); API semantics or substantial restructuring: standard. Reassess the documentation phase separately from the routine Git phase. Apply the task routes and runtime limits in `~/.codex/model-policy.md` when available; skill text does not switch the session model.
 
 
 

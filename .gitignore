@@ -55,6 +55,7 @@ codex/.codex/*
 !codex/.codex/agents/
 !codex/.codex/model-policy.md
 !codex/.codex/easy.config.toml
+!codex/.codex/scoped.config.toml
 !codex/.codex/standard.config.toml
 !codex/.codex/review.config.toml
 !codex/.codex/deep.config.toml

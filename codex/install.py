@@ -46,6 +46,16 @@ def merge(defaults, current):
     return result
 
 
+def backup_config(path, directory, name):
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    backup = directory / (name + "." + stamp)
+    with path.open("rb") as source:
+        with open(backup, "xb", opener=lambda path, flags: os.open(path, flags, 0o600)) as destination:
+            shutil.copyfileobj(source, destination)
+    return backup
+
+
 def prune_empty_directories(path):
     if path.is_symlink() or not path.is_dir():
         return
@@ -77,6 +87,7 @@ def main():
     parser.add_argument("--target", type=Path, default=Path.home())
     parser.add_argument("--check", action="store_true", help="Check config and Stow conflicts without applying.")
     parser.add_argument("--skip-plugins", action="store_true", help="Install config and skills without bundled plugins.")
+    parser.add_argument("--recover-generated-config", action="store_true", help="Back up a stale generated config and regenerate it from the target's existing regular config.")
     args = parser.parse_args()
     package = Path(__file__).resolve().parent
     repo = package.parent
@@ -100,9 +111,14 @@ def main():
     skills_stow = [*stow_base, "codex-skills"]
     if live.is_symlink() and live.resolve() != source:
         parser.error("Existing config.toml is managed by a different symlink; resolve it before installing.")
+    recover_generated = False
     if source.exists() and (not live.is_symlink() or live.resolve() != source):
         if source.read_text() != output:
-            parser.error("Generated config belongs to another target; use a separate dotfiles checkout.")
+            if not args.recover_generated_config:
+                parser.error("Generated config belongs to another target or is stale; use a separate dotfiles checkout for another target. For this target, use --recover-generated-config to back up the generated config and regenerate it from the existing regular live config.")
+            if not live.is_file() or live.is_symlink():
+                parser.error("--recover-generated-config requires an existing regular live config.toml; preserved the generated config.")
+            recover_generated = True
     if args.check:
         result = subprocess.run([*stow, "--simulate"], capture_output=True, text=True)
         skills_result = subprocess.run([*skills_stow, "--simulate"], capture_output=True, text=True)
@@ -113,13 +129,12 @@ def main():
         print(skills_result.stdout + skills_result.stderr, end="")
         raise SystemExit(result.returncode or skills_result.returncode)
     backup = None
+    generated_backup = None
+    directory = target / ".codex/backups"
+    if recover_generated:
+        generated_backup = backup_config(source, directory, "config.generated.toml")
     if live.is_file() and not live.is_symlink():
-        directory = target / ".codex/backups"
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        backup = directory / ("config.toml." + stamp)
-        shutil.copy2(live, backup)
-        backup.chmod(0o600)
+        backup = backup_config(live, directory, "config.toml")
     source.parent.mkdir(parents=True, exist_ok=True)
     temporary = source.with_suffix(".toml.tmp")
     with open(temporary, "w", opener=lambda path, flags: os.open(path, flags, 0o600)) as handle:
@@ -144,6 +159,8 @@ def main():
     print("Installed Codex config, agents and skills. Restart Codex to load MCP connections.")
     if backup:
         print("Previous config: " + str(backup))
+    if generated_backup:
+        print("Previous generated config: " + str(generated_backup))
     if not args.skip_plugins:
         codex = shutil.which("codex")
         if not codex:

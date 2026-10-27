@@ -24,9 +24,16 @@ conversational and status responses may stay direct when they need no new
 domain work. Routine inventory and file lookups also delegate; related small
 steps use one worker. Workers execute directly; the parent coordinates,
 integrates and verifies. Luna low handles routine
-mechanical work, Sol medium implementation and synthesis, Sol high complex
-review/debugging, and Astra high the hardest reasoning. Unknown tasks
-default to Sol medium; explicit user model choices take precedence.
+mechanical work, Terra medium scoped phases, Sol medium integration and synthesis,
+Sol high complex review/debugging, and Astra high the hardest reasoning. Unknown
+tasks and unclassified children default to Sol medium; explicit user model choices
+take precedence.
+Scoped phases include bounded fixes with clear requirements/checks, prose from
+supplied material, screenshot/chart interpretation and defined browser workflows.
+Use `codex -p scoped` for a new CLI session or explicit Terra medium on a general
+child with fresh or limited context. Named explorer/git-workflow/watch_ci roles
+stay Luna low and code-reviewer stays Sol high; their files can override spawn
+model settings. Spawning Astra requires explicit user permission.
 General agents with explicit model/effort settings provide the fallback when
 named roles are unavailable or their settings do not match the task.
 

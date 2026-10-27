@@ -7,11 +7,14 @@ Choose the least costly available model and reasoning effort adequate for the ac
 | Route / CLI profile | Model | Effort | Use |
 | --- | --- | --- | --- |
 | easy | gpt-6-luna | low | Exact lookups, inventory, extraction, straightforward mechanical edits and test execution with clear checks |
-| standard | gpt-6.1-sol | medium | Implementation, integration, research synthesis, design, planning and ordinary debugging |
+| scoped | gpt-6.1-terra | medium | Bounded code fixes with clear requirements and checks, prose from supplied material, screenshot/chart interpretation and defined browser workflows |
+| standard | gpt-6.1-sol | medium | Open-ended implementation, integration, research synthesis, design, planning and ordinary debugging |
 | review | gpt-6.1-sol | high | Security interpretation, complex debugging, cross-file review and consequential tradeoffs |
 | deep | gpt-6-astra | high | Hardest architecture, unresolved multi-system reasoning, or demonstrated inadequate reasoning from Sol |
 
-These local defaults were checked against official guidance and the local model catalog on 2026-10-02. Luna's documented general starting point is high; low is our narrower choice for mechanical work. Increase its effort if checks show inadequate reasoning, or use Sol when the task needs broader judgment. Avoid max/ultra for routine work. Fix missing data, tool errors and network failures with better evidence or corrected operations before considering a larger model. Escalate after a substantive reasoning failure; return to a cheaper route for later routine steps.
+The existing defaults were checked against official guidance and the local model catalog on 2026-10-02; the scoped Terra route was checked on 2026-10-27. Terra uses explicit medium effort here, independent of client or API defaults. Luna's documented general starting point is high; low is our narrower choice for mechanical work. Increase its effort if checks show inadequate reasoning, or use Sol when the task needs broader judgment. Avoid max/ultra for routine work. Fix missing data, tool errors and network failures with better evidence or corrected operations before considering a larger model. Escalate after a substantive reasoning failure; return to a cheaper route for later routine steps.
+
+Use scoped when the inputs, desired result and checks are clear. Use standard when requirements, diagnosis, integration or evidence synthesis need broader judgment; retain standard for unknown tasks. A screenshot or browser tool alone does not make an ambiguous task scoped. Before spawning Astra, obtain explicit user permission and explain why a lower-cost adequate model is insufficient; an explicit request for Astra grants permission.
 
 ## Skill defaults and escalation
 
@@ -21,7 +24,7 @@ These local defaults were checked against official guidance and the local model 
 | shell-history | easy | Reconstructing an incident or causality: standard/review |
 | create | easy | Requirements, risk or acceptance criteria need design: standard |
 | commit-task | easy | Diff correctness or failing checks need analysis: standard/review |
-| docs-commit | easy | API semantics or substantial restructuring: standard |
+| docs-commit | easy | Prose from supplied material: scoped; API semantics or substantial restructuring: standard |
 | pr | easy | Conflict resolution or correctness assessment: standard/review |
 | merge | easy | Conflicts or release consequences: standard/review |
 | triage | easy | Root-cause or security judgment: standard/review |
@@ -29,7 +32,7 @@ These local defaults were checked against official guidance and the local model 
 | tools-audit | standard | Collecting/counting inventory only: easy; security judgment: review |
 | search | standard | A factual lookup: easy; security or conflicting evidence: review |
 | scan-security | review | Running scanner/counting findings only: easy; hardest threat analysis: deep |
-| work | standard | Fully specified mechanical task: easy; complex bugs: review; architecture: deep |
+| work | standard | Mechanical task: easy; bounded fix with clear requirements/checks: scoped; complex bugs: review; architecture: deep |
 | claude-to-codex | standard | Inventory/unchanged sync only: easy; permission/model semantic conflicts: review |
 | frontend-design | standard | Mechanical styling: easy; novel architecture or complex interactions: review/deep |
 | brainstorming, writing-plans | standard | Hard architectural tradeoffs: review/deep |
@@ -45,9 +48,21 @@ These local defaults were checked against official guidance and the local model 
 | create-pet, update-pet | standard | Simple metadata: easy; complex animation repair: review |
 | pets | easy | Unexpected lifecycle behavior: standard |
 
+Skill defaults apply to the whole workflow only when its phases need the same judgment. Reassess each authorized phase:
+
+| Phase | Route | Move to standard/review when |
+| --- | --- | --- |
+| Exact extraction, inventory, mechanical edits, running defined checks | easy | Interpretation or diagnosis is needed |
+| Bounded implementation or code fix with clear requirements and checks | scoped | Scope, root cause or integration is uncertain |
+| Drafting or revising prose from supplied material | scoped | New research, conflicting evidence or substantial restructuring is needed |
+| Screenshot/chart interpretation or a defined browser workflow | scoped | Ambiguous goals, consequential decisions or complex visual reasoning require broader judgment |
+| Design, planning, integration, research synthesis, unknown task | standard | Complex debugging, security judgment or consequential tradeoffs require review |
+
+These phase recommendations also apply to plugin skills; they do not replace named role settings or authorize new actions.
+
 ## Apply the choice honestly
 
-CLI: start with `codex -p easy`, `codex -p standard`, `codex -p review`, or `codex -p deep`. These are native `<name>.config.toml` profile files for the installed CLI. An existing session uses its model picker (`/model` in the CLI) or another supported runtime control. Skill Markdown and `agents/openai.yaml` do not automatically switch the parent model. If no switching control is exposed, report a useful mismatch once and continue authorized work; do not claim savings or stop repeatedly for a model change.
+CLI: start with `codex -p easy`, `codex -p scoped`, `codex -p standard`, `codex -p review`, or `codex -p deep`. These are native `<name>.config.toml` profile files for the installed CLI. An existing session uses its model picker (`/model` in the CLI) or another supported runtime control. Skill Markdown and `agents/openai.yaml` do not automatically switch the parent model. If no switching control is exposed, report a useful mismatch once and continue authorized work; do not claim savings or stop repeatedly for a model change.
 
 Delegated children execute the parent's assigned task directly without recursive delegation unless explicitly designated as coordinators. The automatic trigger applies to the parent receiving a new user task.
 
@@ -55,7 +70,7 @@ For parent waiting, mailbox handling, user updates and stall investigation, foll
 
 Standing global authorization: before executing any new user task requiring file inspection, tools, edits or external research, the parent selects a route and delegates task execution. This applies across code, research, documentation, debugging, review, operations, data and design, including routine inventory and exact file lookups. A few-command task still delegates; batch related small steps into one cohesive child. Direct responses are limited to conversational, existing-context or status answers that need no new domain work. The parent may make brief scoping/routing checks, then coordinates, communicates, integrates and verifies; scoping must not become direct task completion. Parallelize independent work only with exclusive write ownership and isolation when needed. Run dependent stages and shared-repository writes sequentially. Keep action authorization, permissions and skills' explicit-only invocation metadata intact.
 
-Choose the model and effort for the actual workload, using the tables as starting guidance. Apply supported explicit spawn arguments with fresh or limited history (`fork_turns = "none"` where supported); prose does not switch a model. Use a named role only when the runtime supports it and its configured model/effort match the chosen route. Explorer is suitable for easy read-only search; code-reviewer for review. Otherwise use a general agent with explicit model/effort and read-only research/review instructions or scoped mutation ownership. Pass compact context, paths, exact authorization, constraints and checks; verify returned results. Remember unsupported roles for the session instead of retrying them. If spawning or model overrides are unavailable, report once and continue authorized work without claiming a model switch. Never silently substitute an unavailable user-selected model.
+Choose the model and effort for the actual workload, using the tables as starting guidance. Apply supported explicit spawn arguments with fresh or limited history (`fork_turns = "none"` where supported); prose does not switch a model. Use a named role only when the runtime supports it and its configured model/effort match the chosen route. Explorer is suitable for easy read-only search; code-reviewer for review. Named role files can override spawn model settings: explorer, git-workflow and watch_ci stay Luna low, and code-reviewer stays Sol high. Use a general agent with explicit `gpt-6.1-terra` / `medium` and fresh or limited context for scoped work, rather than trying to override a named role. Otherwise use a general agent with explicit model/effort and read-only research/review instructions or scoped mutation ownership. Pass compact context, paths, exact authorization, constraints and checks; verify returned results. Remember unsupported roles for the session instead of retrying them. If spawning or model overrides are unavailable, report once and continue authorized work without claiming a model switch. Never silently substitute an unavailable user-selected model.
 
 `agents.default_subagent_model = "gpt-6.1-sol"` and `agents.default_subagent_reasoning_effort = "medium"` provide the standard fallback for unclassified spawns. Explicit workload overrides take precedence; neither default changes the parent's model. Duplicated context and orchestration have overhead, so delegation is not a cost-saving guarantee and conversational responses needing no new domain work need no child.
 
@@ -63,4 +78,4 @@ Requested Git workflows use `merge` for unqualified `push` / `commit and push` (
 
 For new/unknown workloads, check scope, ambiguity, consequences of error, necessary context, modalities and tools, then choose a route; unknown tasks default to standard. Check current catalog/client support before adding model IDs or reasoning levels. Do not refresh documentation for every routine task; reuse validated settings until availability or behavior changes. Do not silently substitute unavailable models or use Claude model names as Codex IDs.
 
-Sources: [models and effort guidance](https://learn.chatgpt.com/docs/models), [subagent model configuration](https://learn.chatgpt.com/docs/agent-configuration/subagents), and local `codex --help` / `~/.codex/models_cache.json`. Defaults are workload recommendations, not benchmarked cost or quality guarantees.
+Sources: [model selection](https://developers.openai.com/api/docs/guides/model-selection), [Terra model documentation](https://developers.openai.com/api/docs/models/gpt-6.1-terra), [models and effort guidance](https://learn.chatgpt.com/docs/models), [subagent model configuration](https://learn.chatgpt.com/docs/agent-configuration/subagents), and local `codex --help` / `~/.codex/models_cache.json`. Defaults are workload recommendations, not benchmarked cost or quality guarantees.
