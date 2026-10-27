@@ -19,6 +19,7 @@ name = "catppuccin"
 # light_name = "catppuccin-latte"
 
 # Override individual palette tokens on top of the base theme.
+auto_switch = false
 [theme.custom]
 # Unfocused pane borders. In normal typing mode the border colour is the ONLY
 # focus cue: src/ui/panes.rs draws the focused pane's border and title in
