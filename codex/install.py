@@ -107,6 +107,9 @@ def main():
     tomllib.loads(output)
     stow_base = ["stow", "--dir", str(repo), "--target", str(target)]
     stow = [*stow_base, "--no-folding", "codex"]
+    agents_source = package / ".codex/agents"
+    managed_agents_link = agents.is_symlink() and agents.resolve() == agents_source.resolve()
+    stow_check = [*stow_base, "--no-folding", "--ignore", r"^\.codex/agents(?:/|$)", "codex"] if managed_agents_link else stow
     agents_stow = [*stow_base, "--ignore", r"^(?!\.codex(?:$|/agents(?:$|/)))"]
     skills_stow = [*stow_base, "codex-skills"]
     if live.is_symlink() and live.resolve() != source:
@@ -120,7 +123,7 @@ def main():
                 parser.error("--recover-generated-config requires an existing regular live config.toml; preserved the generated config.")
             recover_generated = True
     if args.check:
-        result = subprocess.run([*stow, "--simulate"], capture_output=True, text=True)
+        result = subprocess.run([*stow_check, "--simulate"], capture_output=True, text=True)
         skills_result = subprocess.run([*skills_stow, "--simulate"], capture_output=True, text=True)
         print("TOML is valid. Existing settings will be preserved.")
         if result.returncode and live.is_file() and not live.is_symlink():
@@ -143,8 +146,12 @@ def main():
     if backup:
         live.unlink()
     try:
-        subprocess.run([*stow, "--simulate"], check=True)
+        subprocess.run([*stow_check, "--simulate"], check=True)
         subprocess.run([*skills_stow, "--simulate"], check=True)
+        if managed_agents_link:
+            if not agents.is_symlink() or agents.resolve() != agents_source.resolve():
+                raise ValueError("Agents directory changed during installation; preserved: " + str(agents))
+            agents.unlink()
         subprocess.run(stow, check=True)
         subprocess.run([*agents_stow, "--delete", "codex"], check=True)
         prune_empty_directories(agents)
@@ -152,7 +159,7 @@ def main():
         subprocess.run([*stow_base, "--delete", "codex-skills"], check=True)
         prune_empty_directories(target / ".agents/skills")
         subprocess.run(skills_stow, check=True)
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, ValueError):
         if backup and not live.exists():
             shutil.copy2(backup, live)
         raise
