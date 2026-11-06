@@ -485,3 +485,6 @@ for f in "$HOME/.kube/config" "$HOME/.kube/vas-tunnel.conf"; do
 done
 [ -n "$kubeconfigs" ] && export KUBECONFIG="$kubeconfigs"
 unset kubeconfigs f
+
+# kimi-code
+export PATH="$HOME/.kimi-code/bin:$PATH"
