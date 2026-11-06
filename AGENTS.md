@@ -11,7 +11,7 @@
 - `python3 codex/install.py` - merge private Codex settings with tracked MCP defaults, then stow `codex` and `codex-skills` without folding runtime directories
 - `stow codex-skills` - link a fresh Codex skills installation into `~/.agents/skills`; use the installer to migrate old file-level links
 - `stow kimi` - link the Kimi Code package into `~/.kimi-code` (global AGENTS.md; `config.toml`, `mcp.json` and credentials stay local like Codex private config)
-- `python3 hermes/install.py` - apply tracked Hermes settings with `hermes config set` (local values win), link `~/.hermes/SOUL.md` after backing up a real file, and stow Hermes-only skills; `--check` is a dry run
+- `python3 hermes/install.py` - apply tracked Hermes settings with `hermes config set` (local values win), link `~/.hermes/SOUL.md` after backing up a real file, stow Hermes-only skills, and enable tracked local plugins; `--check` is a dry run
 - `bat cache --build` - Rebuild bat syntax highlighting themes
 
 Everything is stowed, never copied, so an edit under `~/.config` or `~/.claude`

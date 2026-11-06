@@ -35,6 +35,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_DIR = REPO_ROOT / PACKAGE
 SETTINGS_FILE = PACKAGE_DIR / "config.base.yaml"
 SOUL_FILE = PACKAGE_DIR / ".hermes" / "SOUL.md"
+PLUGINS_DIR = PACKAGE_DIR / ".hermes" / "plugins"
 
 KEY_RE = re.compile(r"^([^\s:#][^:]*?):(?:\s+(.*))?$")
 
@@ -239,6 +240,35 @@ def stow(home: Path, *, check: bool) -> None:
     run([exe, "-t", str(target), PACKAGE], cwd=REPO_ROOT)
 
 
+def enable_plugins(home: Path, *, check: bool) -> None:
+    """Enable every plugin tracked under hermes/.hermes/plugins/ (opt-in list)."""
+    if not PLUGINS_DIR.is_dir():
+        return
+    manifests = sorted(PLUGINS_DIR.glob("*/plugin.yaml"))
+    if not manifests:
+        return
+    exe = hermes_bin()
+    proc = subprocess.run(
+        [exe, "config", "get", "plugins.enabled"], env=cmd_env(home), text=True, capture_output=True
+    )
+    enabled = {
+        line.strip().lstrip("- ").strip()
+        for line in proc.stdout.splitlines()
+        if line.strip()
+    } if proc.returncode == 0 else set()
+    for manifest in manifests:
+        name = manifest.parent.name
+        if name in enabled:
+            print(f"  plugin {name}: already enabled")
+            continue
+        if check:
+            print(f"  would enable plugin {name}")
+            continue
+        result = run([exe, "plugins", "enable", name], env=cmd_env(home))
+        message = (result.stdout + result.stderr).strip().splitlines()
+        print(f"  plugin {name}: {message[0] if message else 'enabled'}")
+
+
 def canon(text: str) -> str:
     """Normalise a value for comparison: `config get` prints lists as "- item"."""
     stripped = text.strip()
@@ -279,6 +309,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="overwrite settings already present in the live config")
     parser.add_argument("--skip-settings", action="store_true", help="only stow files")
     parser.add_argument("--skip-stow", action="store_true", help="only apply settings")
+    parser.add_argument("--skip-plugins", action="store_true", help="do not enable tracked plugins")
     parser.add_argument("--home", help="HERMES_HOME to install into (default: $HERMES_HOME or ~/.hermes)")
     args = parser.parse_args(argv)
 
@@ -294,6 +325,9 @@ def main(argv: list[str] | None = None) -> int:
         print("files")
         link_soul(home, force=args.force, check=args.check)
         stow(home, check=args.check)
+    if not args.skip_plugins:
+        print("plugins")
+        enable_plugins(home, check=args.check)
 
     if args.check:
         print("dry run: nothing written")

@@ -2,8 +2,8 @@
 
 Hermes counterpart to `openclaude/`, `codex/` and `kimi/`. What is tracked here
 is the portable part of `~/.hermes`: the agent identity, the settings that are
-deliberate choices rather than machine defaults, the env template, and any
-Hermes-only skills.
+deliberate choices rather than machine defaults, the env template, any
+Hermes-only skills, and local plugins.
 
 Everything Hermes writes while running stays local: `config.yaml`, `.env`,
 `auth.json`, `state.db`, `sessions/`, `logs/`, `memories/`, `cache/`, `tools/`,
@@ -25,11 +25,12 @@ The installer does two things:
    win; pass `--force` to replace them. `config.yaml` is never edited directly
    or symlinked.
 2. **Files.** Backs up a real `~/.hermes/SOUL.md` to `~/.hermes/backups/` and
-   replaces it with a link to `hermes/.hermes/SOUL.md`, then stows the package
-   so custom skills link into the repo.
+   replaces it with a link to `hermes/.hermes/SOUL.md`, stows the package so
+   custom skills and plugins link into the repo, then enables each tracked
+   plugin (Hermes plugins are opt-in).
 
-Useful flags: `--skip-settings`, `--skip-stow`, `--home <path>` (a
-`HERMES_HOME` override; the directory must be named `.hermes`, matching the
+Useful flags: `--skip-settings`, `--skip-stow`, `--skip-plugins`, `--home <path>`
+(a `HERMES_HOME` override; the directory must be named `.hermes`, matching the
 package layout).
 
 ## Settings
@@ -68,6 +69,18 @@ Stow folds the deepest missing directory into a single link — normally the
 skill directory, or its category directory when the category is new — so files a
 skill adds later (`references/`, scripts) also land in the repo. Keep
 `~/.hermes/skills/` existing before stowing; the installer creates it.
+
+## Plugins
+
+Local plugins live in `hermes/.hermes/plugins/<name>/` (`plugin.yaml` + code),
+are stowed into `~/.hermes/plugins/`, and are enabled by the installer, because
+Hermes plugins are opt-in through `plugins.enabled`.
+
+- **`q-quit`** — `/q` exits the CLI, same as `/quit`, instead of queueing a
+  prompt. Aliases resolve from the built-in registry before plugin commands,
+  skills or `quick_commands`, so the plugin moves the alias at load time rather
+  than registering a command; see `hermes/.hermes/plugins/q-quit/README.md`.
+  `/queue` keeps its other spellings.
 
 ## Why config.yaml is not stowed
 

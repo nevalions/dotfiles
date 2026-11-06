@@ -1,0 +1,4 @@
+name: q-quit
+version: 1.0.0
+description: "Bind /q to /quit. Hermes ships /q as an alias of /queue, which no config setting can override."
+author: "linroot"
