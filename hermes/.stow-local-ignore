@@ -1,0 +1,19 @@
+# Everything in this package that is not meant to land in ~/.hermes.
+#
+# install.py, README.md, config.base.yaml and .env.example are tooling for the
+# stow package; stowing them at the package root would drop them into $HOME,
+# so they are excluded here (same pattern as codex/.stow-local-ignore).
+^/README\.md$
+^/install\.py$
+^/config\.base\.yaml$
+^/\.env\.example$
+^/__pycache__
+
+# ~/.hermes/skills holds Hermes' bundled skills and is managed by `hermes
+# update`. This file only documents where custom skills go; it is not part of
+# the installed tree.
+^/\.hermes/skills/README\.md$
+
+# SOUL.md is linked by install.py, not stow: the installer backs up a real
+# file first, so it must own the replace step.
+^/\.hermes/SOUL\.md$

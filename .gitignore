@@ -65,6 +65,18 @@ codex/.codex/*
 # because Claude Code writes auto-generated host reconnaissance into it.
 openclaude/.claude/settings.json
 
+# Generated per-machine Hermes configuration and runtime state. config.yaml is
+# written by Hermes (`config set`, migrations) and must never be a tracked or
+# linked file; portable defaults live in hermes/config.base.yaml.
+hermes/.hermes/config.yaml
+hermes/.hermes/.env
+hermes/.hermes/auth.json
+hermes/.hermes/state.db*
+hermes/.hermes/sessions/
+hermes/.hermes/logs/
+hermes/.hermes/memories/
+hermes/.hermes/backups/
+
 # Anthropic skills Claude Code syncs per account into ~/.claude/skills (a stowed
 # folder): runtime data, not config.
 claude-skills/.claude/skills/synced/

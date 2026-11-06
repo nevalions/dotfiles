@@ -83,6 +83,7 @@ setup; choose the package matching the desktop instead of applying both.
 | **Codex** | Codex instructions, agents and MCP defaults; [installation](codex/README.md) | `codex/` |
 | **Codex skills** | Adapted task workflows and skills at `~/.agents/skills/` | `codex-skills/` |
 | **Kimi Code** | Kimi Code CLI global instructions at `~/.kimi-code/AGENTS.md`; [installation](kimi/README.md) | `kimi/` |
+| **Hermes** | Hermes Agent identity, portable settings and skills at `~/.hermes`; [installation](hermes/README.md) | `hermes/` |
 | **Git** | Global git ignore (`.claude/worktrees/`, `settings.local.json`) | `git/` |
 
 Most packages only need `stow`. Two configure tools that are **not** in the Arch
@@ -126,6 +127,7 @@ dotfiles/
 ├── p10k/              # Powerlevel10k prompt config
 ├── tmuxinator/        # Project templates
 ├── herdr/             # AI agent workspace manager
+├── hermes/            # Hermes Agent identity, settings, skills
 ├── claude-skills/     # Claude Code agent skills
 ├── k9s/               # Kubernetes tool config
 ├── atuin/             # Shell history tool

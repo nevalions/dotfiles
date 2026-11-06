@@ -1,0 +1,25 @@
+# Portable Hermes settings.
+#
+# One `dotted.key: value` per line. `install.py` applies these with
+# `hermes config set`, which is the only supported way to write config.yaml;
+# the file is never edited or symlinked directly (Hermes rewrites it at
+# runtime and migrations rewrite its shape).
+#
+# Existing local values win: a key already present in the live config.yaml is
+# kept unless you pass --force. Values are passed to `hermes config set`
+# verbatim, so JSON works for lists: ["a", "b"].
+
+# Model and provider. The API key itself lives in ~/.hermes/.env
+# (DEEPSEEK_API_KEY), never here.
+model.default: deepseek-flash
+model.provider: deepseek
+model.base_url: https://api.deepseek.com
+
+# Agent behavior.
+agent.max_turns: 150
+agent.reasoning_effort: high
+
+# Share skills with Codex and Kimi Code. Both read ~/.agents/skills, which is
+# stowed from codex-skills/. External dirs are read-only; Hermes still creates
+# its own skills under ~/.hermes/skills.
+skills.external_dirs: ["~/.agents/skills"]
