@@ -82,6 +82,7 @@ setup; choose the package matching the desktop instead of applying both.
 | **Claude mods** | Claude Code mods (status line under the prompt: dir, model, context, 5h/7d usage, peak hours), loaded in place — not stowed | `claude-mods/` |
 | **Codex** | Codex instructions, agents and MCP defaults; [installation](codex/README.md) | `codex/` |
 | **Codex skills** | Adapted task workflows and skills at `~/.agents/skills/` | `codex-skills/` |
+| **Kimi Code** | Kimi Code CLI global instructions at `~/.kimi-code/AGENTS.md`; [installation](kimi/README.md) | `kimi/` |
 | **Git** | Global git ignore (`.claude/worktrees/`, `settings.local.json`) | `git/` |
 
 Most packages only need `stow`. Two configure tools that are **not** in the Arch

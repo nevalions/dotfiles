@@ -1,0 +1,104 @@
+# Global Instructions
+
+## Subagents
+
+For every new user task requiring inspection, tools, edits or external research, delegate execution to a sub-agent when it keeps the main context lean; batch related steps into one cohesive child. Explicit user model/effort choices take precedence; never silently substitute an unavailable choice. Conversational, existing-context and status answers needing no new domain work may be direct.
+
+The parent may briefly scope/route, then owns coordination, communication, integration and verification; scoping must not become execution. Children execute directly without further delegation (built-in sub-agents cannot dispatch further). Delegation preserves authorization, permission rules and skills' invocation limits; it grants no extra external writes or Git stages. Sub-agents inherit the main Agent's permission rules; the Agent tool is allowed by default.
+
+Use the built-in roles by task shape: read-only `explore` for search and codebase mapping, `plan` for read-only planning, `coder` for implementation and commands. Custom agents declared in Markdown under `~/.kimi-code/agents/` or `~/.agents/agents/` may be selected by name when present. Handoffs include task, paths, authorized actions, ownership, constraints and checks. Research/review work is read-only; mutating agents have scoped ownership and must preserve others' edits. Parallelize only independent work with exclusive write ownership/isolation (AgentSwarm only when the user has enabled swarm mode); serialize dependent stages and shared-repo writes. Carry findings, not transcripts; verify results with targeted checks before broader ones.
+
+Before spending the costliest routes (highest effort, wide swarms, paid external inference), confirm the task needs them rather than a lower adequate route. An explicit user request counts as permission.
+
+Remember unavailable roles instead of retrying. If spawning/model controls are unavailable, report once and continue authorized work without claiming a switch. Skill prose does not switch models or effort. Reassess routing when scope changes; avoid fragmentation and repeated model-change questions.
+
+### Requested Git workflows
+
+An unqualified `push` or `commit and push` means validate the task, squash-merge it locally into the actual default branch, and push the merged result. Use the `merge` skill; for `commit and push`, commit the scoped task changes first. Do not create a PR unless explicitly requested or required by repository instructions. Explicit feature-branch-only pushes (for example, `push only this branch`) and PR requests use the `pr` skill and retain the task branch/worktree. A commit-only request uses `commit-task` and does not authorize pushing or merging. Repository-specific integration rules take precedence, including kube-lvl47’s server-side PR merge through `scripts/ship.sh`.
+
+Plain-language requests trigger the matching skills just like explicit invocations. Run one `git-workflow` executor: the `merge`/`pr`/`commit-task` skill directly in the main agent, or a single `coder` sub-agent with minimal context for a scoped checkout. A user-selected model/effort uses an agent with that choice. Apply the unavailable-runtime fallback above.
+
+Pass checkout, issue, exact actions/files, checks and exceptions. The executor runs the skill directly without recursive delegation. Wait for it before writing to the same repo; run only requested stages, sequentially. Conflicts/failed checks return to the parent for a higher-effort assessment. This grants no unrequested commit, push, merge, tag or release. Merge cleanup follows **Merged task cleanup**.
+
+### Waiting and visibility
+
+- Wait with an explicit timeout (at most 90 seconds per `WaitFor` call) and respect background-task completion notifications; never block indefinitely. No empty polling. A timeout proves neither failure, completion nor that a worker is running: inspect actual state with `TaskOutput`/`TaskList` and files/output/logs before waiting again.
+- After two consecutive waits without new evidence, inspect actual task state and files/output/logs. Report evidence/uncertainty; investigate stalls without interrupting/restarting solely for a timeout. No empty pings or reassurance on each wait.
+- After an aborted turn/interrupted worker, inspect state first. `send_message`-style nudges do not resume idle or interrupted workers; resume the existing sub-agent by id for remaining authorized scope, or spawn a fresh one only when the id is lost.
+- Keep meaningful user updates within 60 seconds. At delegation and first skill use, announce task, owner, known model/effort, skill and purpose together when possible. Omit absent fields; distinguish runtime/accepted configuration from requested/unverified choices. State unavailable runtime details once.
+
+## Scope and evidence
+
+Edit surgically when the result allows. Do not fix/optimize/extend unrelated or pre-existing behavior unless needed for the requested behavior; report follow-ups. Commit tests only if requested or the repo already keeps this kind, sized like neighboring tests; scratch checks need not be committed.
+
+Never guess or claim success without verification. Separate evidence from hypotheses and test specific hypotheses. After two failed attempts at one issue or repeated no-progress actions, reassess assumptions/root cause; report failures/uncertainty before a materially different, evidence-backed step.
+
+## Git and worktrees
+
+Author: `linroot <nevalions@gmail.com>`; no co-authored-by lines. Prefixes: `feat`, `fix`, `refactor`, `docs`, `chore`. Non-interactive only. Stage explicit files with `git add <file>`, never `-A`. Put multi-line messages in a file and commit with `-F`, never inline `-m` (shell substitution can truncate backticks); verify with `git log -1 --format=%B`.
+
+Lifecycle: `feature/`, `bugfix/`, `hotfix/`, `refactor/`, `docs/` → atomic commits → squash merge to master → tag → cleanup. This is not authorization for unrequested stages. For `kube-lvl47`, worktree per task; never work in the main clone or merge into local master. Squash server-side through a PR using `scripts/ship.sh`.
+
+Every new feature/repo-changing task needs its own isolated worktree and task branch before edits; creation is already authorized. Reuse only the same task's worktree for follow-ups/checks/Git stages. Read-only investigations need none. Prefer Herdr support; otherwise `git worktree add`. Name task-specific branch/path, announce them, and pass the same checkout to workers. Run all edits/checks there; preserve original checkout/unrelated work. Follow project setup: fresh worktrees lack ignored env files/dependencies. Never copy secrets into tracked files. `bd` discovers the shared tracker.
+
+### Merged task cleanup
+
+A merge request or unqualified push authorizes removal of its merged task branches locally/remotely and task worktrees only after required CI passes on the exact merged default-branch commit. Commit-only and explicit branch-only push/PR requests do not. Prove this separately per repo, including frontend/backend; never infer one repo's result from another.
+
+Record task branch/source SHA, merge-result SHA and CI evidence. Fetch default and verify the merge result is present. Squash proof requires confirmed merged PR source/target SHAs or recorded local squash-and-push evidence; ancestry/`git branch --merged` alone is insufficient. Pending, failed, cancelled, skipped, unknown or missing required checks block cleanup. If CI is deliberately absent, follow explicit repo validation policy; otherwise retain artifacts/report missing evidence.
+
+Remove only confirmed merged task refs/worktrees unchanged since the recorded source SHA. Preserve default/protected branches, main checkout, dirty/untracked work, valuable ignored files (including env files), active/locked worktrees and unrelated/unmerged tasks. Release finished task processes/sessions; execute cleanup from a retained checkout, never the worktree hosting an active agent. Use non-force worktree removal, exact-SHA guarded local deletion and a remote deletion lease; tolerate absent refs. Never bulk-delete by age/name pattern, force-remove, reset or discard work. Verify final local/remote refs and worktree list; report retained artifacts/reasons.
+
+## Forgejo and CI
+
+Solo owner. Writes only when requested; settings/secrets changes require explicit scope. Plan before PRs/merges.
+
+This is a personal home cluster: keep intermediate development commits local or on a draft PR. Validate the current ready PR head before merging, then run the normal default-branch pipeline once on the resulting merged `main`/`master` commit. Historical commits do not each need passing CI, and obsolete PR runs are not merge evidence. A new ready PR revision needs fresh checks; cancel superseded PR validation, while allowing default-branch publishing and deployments to finish. Do not trigger ordinary CI on feature-branch pushes or add duplicate tag-triggered checks; preserve explicit release-tag workflows and scheduled maintenance. Forgejo exports its configured work-in-progress title prefix as `pull_request.draft`: skip draft jobs and listen for `opened`, `synchronize`, `reopened` and `edited`. Removing the prefix makes the PR ready and triggers `edited`; other ready PR title/body edits can also revalidate the current head. Repositories with intentionally absent CI keep their documented local validation policy.
+
+Before monitoring, record repo, PR, exact source SHA and expected checks. Read all relevant `.forgejo/workflows/` and current branch protection; distinguish PR from post-merge push workflows. Do not assume default-branch-only CI or reuse a previous job count.
+
+Prefer authenticated Forgejo MCP reads. If commit status, protection or Actions reads are missing, use authenticated REST; admin runner-job tools are not substitutes. Inspect live `/swagger.v1.json` for routes/fields. Under `/api/v1/repos/{owner}/{repo}` use:
+
+- `/commits/{sha}/status` and `/commits/{sha}/statuses`: combined `state`, `statuses[].status`.
+- `/branch_protections/{branch}`.
+- `/actions/runs?head_sha={sha}&limit=50&page=1`: `workflow_runs[]` fields `commit_sha`, `status`, `event`, `workflow_id`, `id`, `html_url`.
+
+Validate every returned `commit_sha` against the requested SHA; paginate as needed. Prefer existing authenticated API access to browser login/vault unlock. Windows process/User environments differ: consume existing User variables in memory without printing values. Never dump credential/config files, persist `BW_SESSION`, export pod tokens, create tokens or change settings to monitor CI.
+
+If terminal credentials are unavailable for `git.butakov.su`, the read-only fallback is context `bay`, namespace `forgejo`, deployment `forgejo-actions-exporter`. Verify it still exposes `/app/exporter.py`; keep credentials in the pod and use `exporter._api_get` only for allowlisted run/status/protection reads, returning only status/run evidence. Example (substitute a verified full SHA):
+
+```bash
+kubectl --context bay -n forgejo exec deploy/forgejo-actions-exporter -- python3 -c 'import sys,json; sys.path.insert(0,"/app"); import exporter; d=exporter._api_get("/repos/nevalions/kube-lvl47/commits/"+sys.argv[1]+"/status"); print(json.dumps({"state":d.get("state"),"statuses":[{k:s.get(k) for k in ("context","status","target_url")} for s in d.get("statuses",[])]}))' FULL_SHA
+```
+
+Runner health/logs (`bay`, namespace `forgejo-runners`) are supplementary, never CI pass proof. If access fails, report the exact endpoint/authentication path missing; do not treat CI as absent.
+
+A combined success is insufficient: verify every expected required context/workflow run for the source SHA. Immediately before an authorized server-side merge, re-read source SHA and use the merge API SHA guard. If Windows cannot run `scripts/ship.sh`, check a real Python executable (Store stubs are not runtimes), then use authenticated merge REST only after equivalent script gates pass. Never merge into local master. Record confirmed PR source/merge-result SHAs; verify all expected post-merge runs on that exact merged SHA before issue closure/cleanup. Non-passing/missing checks listed in **Merged task cleanup** block completion.
+
+One read-only monitor owns polling; the Git worker owns mutations. Wait at most 60 seconds, refresh evidence after each wait, and report meaningful changes/completion/blockers. Avoid duplicate monitors/unchanged updates. Handoff records checked SHA, context results, workflow events and run IDs/links; add to Beads notes when tracking is authorized.
+
+## Beads tracking
+
+Use `bd` for all task tracking/durable project memory, never markdown TODOs/ad hoc memory files. Read the `beads` skill at `~/.agents/skills/beads/SKILL.md`. Per-repo data lives in `.beads/`; if absent, `bd init` before agreed tracking. Ask before starting/resuming whether to create a new issue or update an existing one, unless already chosen/authorized this session. When agreed, create/update and claim before work, then append progress notes.
+
+Run `bd prime` when context is missing/stale (Kimi has no bd-prime hook; run it manually). Descriptions/notes are plain text/Markdown, no HTML. Persistent knowledge uses `bd remember`. Priorities `-p 0..4`: urgent, high, medium, low, trivial (0 highest).
+
+Commands: `bd ready`; `bd show <id>`; `bd create "<title>" -p <0-4> -l <labels> -d <desc> --acceptance <ac>`; `bd update <id> --claim`; `bd update <id> --append-notes <text>`; `bd list --status open --json`; `bd close <id>`.
+
+Close only after requested Git stages finish and required CI passes on the exact final pushed/merged commit. Keep open/report pending, failed, cancelled, skipped, unknown or absent required checks. Issues use local Dolt DB; sync is `refs/dolt/data`, `.beads/issues.jsonl` is passive export. See [Beads sync concepts](https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md).
+
+## Credentials
+
+Vault: `vault.butakov.su`. When credentials/login are needed, first check `command -v rbw` on supported systems. List names only (`rbw list | grep -i <name>`); pass values directly through stdin (`rbw get '<item>' | <cmd> --password-stdin`) or `~/.local/bin/rbw-env VAR='<item>' -- <cmd>`. Use `'<item>'/<username>` for duplicate names; `'<item>':<field>` for custom fields/notes. Secure-note `--field password` is empty: use a Login or hidden custom `password` field. Locked rbw prompts through pinentry; if absent, report it and ask the user to log in in their own terminal.
+
+Never print, echo/cat, expose bare credential-fetch output in terminal/transcript, or paste secrets into chat.
+
+Windows uses `bw`, not rbw, winget-pinned to 2026.6.x for Vaultwarden compatibility (newer releases 404 on login and cannot unlock). List names only: `bw list items --search <name> | jq -r '.[].name'`; pass `bw get password '<item>' | <cmd> --password-stdin`. `bw status` is unlocked only with `BW_SESSION` in the current process. If locked, ask the user to unlock in their own terminal; never request/paste the master password or `BW_SESSION` in chat.
+
+MCP User variables `FORGEJO_URL`, `FORGEJO_TOKEN`, `PERPLEXITY_API_KEY` are referenced as `${VAR}` in `~/.claude.json`, filled by `C:\code\set-claude-secrets.ps1`. After rerunning it, restart the terminal app; new tabs inherit its stale environment.
+
+## Research and safety
+
+Prefer Context7 for docs/APIs/patterns; Perplexity (`perplexity_search`, preferably `$search`) for security/ecosystem/comparisons as fallback. Source order: official standards → official docs → community → blogs. No fabricated citations/standards or assumed security posture. Do not put AGENTS.md/CLAUDE.md in READMEs.
+
+Run Semgrep CLI/project scan entry point before manual security review. Do not auto-fix without request; file medium/high findings in Beads only when authorized.
