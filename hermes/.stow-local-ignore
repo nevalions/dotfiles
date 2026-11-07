@@ -8,6 +8,7 @@
 ^/config\.base\.yaml$
 ^/\.env\.example$
 ^/__pycache__
+^/profiles(?:/|$)
 
 # ~/.hermes/skills holds Hermes' bundled skills and is managed by `hermes
 # update`. This file only documents where custom skills go; it is not part of

@@ -46,7 +46,10 @@ class InstallError(RuntimeError):
 
 def hermes_home(override: str | None) -> Path:
     raw = override or os.environ.get("HERMES_HOME") or "~/.hermes"
-    return Path(raw).expanduser().resolve()
+    path = Path(raw).expanduser()
+    if path.name != ".hermes" or path.is_symlink():
+        raise InstallError(f"HERMES_HOME must be a real directory named .hermes: {path}")
+    return path.resolve()
 
 
 def hermes_bin() -> str:
@@ -151,7 +154,7 @@ def apply_settings(home: Path, settings: list[tuple[str, str]], *, force: bool, 
     for key, value in settings:
         if key in present and not force:
             shown = present[key]
-            if not shown:
+            if not shown and not check:
                 proc = subprocess.run([exe, "config", "get", key], env=cmd_env(home), text=True, capture_output=True)
                 shown = " ".join(line.strip().lstrip("- ").strip() for line in proc.stdout.splitlines() if line.strip())
             print(f"  keep  {key} = {shown or '(empty)'}  (local value wins; --force to replace)")
@@ -247,6 +250,10 @@ def enable_plugins(home: Path, *, check: bool) -> None:
     manifests = sorted(PLUGINS_DIR.glob("*/plugin.yaml"))
     if not manifests:
         return
+    if check:
+        for manifest in manifests:
+            print(f"  would enable plugin {manifest.parent.name} if not already enabled")
+        return
     exe = hermes_bin()
     proc = subprocess.run(
         [exe, "config", "get", "plugins.enabled"], env=cmd_env(home), text=True, capture_output=True
@@ -314,7 +321,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     home = hermes_home(args.home)
+    if home.name != ".hermes":
+        raise InstallError(f"HERMES_HOME must be a directory named .hermes: {home}")
+    if home.exists() and not home.is_dir():
+        raise InstallError(f"HERMES_HOME is not a directory: {home}")
+    config = home / "config.yaml"
+    if config.is_symlink() or (config.exists() and not config.is_file()):
+        raise InstallError(f"config.yaml must be a regular local file: {config}")
     settings = read_settings(SETTINGS_FILE)
+    if not args.skip_stow:
+        exe = shutil.which("stow")
+        if not exe:
+            raise InstallError("GNU Stow is not installed.")
+        if home.parent.exists():
+            run([exe, "--simulate", "--no-folding", "-t", str(home.parent), PACKAGE], cwd=REPO_ROOT)
     prefix = "check:" if args.check else "install:"
     print(f"{prefix} HERMES_HOME={home}")
 

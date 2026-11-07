@@ -1,0 +1,3 @@
+model.default: kimi-for-coding
+model.provider: kimi-coding
+agent.reasoning_effort: medium
