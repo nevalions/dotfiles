@@ -3,7 +3,8 @@
 Hermes counterpart to `openclaude/`, `codex/` and `kimi/`. What is tracked here
 is the portable part of `~/.hermes`: the agent identity, the settings that are
 deliberate choices rather than machine defaults, the env template, any
-Hermes-only skills, and local plugins.
+Hermes-only skills, local plugins, named bot profiles, and the agent-hooks
+guard scripts.
 
 Everything Hermes writes while running stays local: `config.yaml`, `.env`,
 `auth.json`, `state.db`, `sessions/`, `logs/`, `memories/`, `cache/`, `tools/`,
@@ -60,7 +61,11 @@ Two sources, both intentional:
 
 - `~/.agents/skills` — stowed from `codex-skills/`, shared with Codex and Kimi
   Code, and now read by Hermes through `skills.external_dirs`. External dirs are
-  read-only and local skills win name collisions.
+  read-only and local skills win name collisions. Keep `beads` only in this
+  shared tree; a Hermes-local copy would shadow its ownership safeguards.
+  Claude links the same canonical skill, and Codex selects it through
+  `skills.config`. Use a unique session actor and atomic issue claims as
+  documented there.
 - `~/.hermes/skills` — Hermes' own tree. Bundled skills are managed by
   `hermes update` and are not tracked. Hermes-only skills go in this repo at
   `hermes/.hermes/skills/<category>/<name>/SKILL.md`, then `stow hermes`.
@@ -81,6 +86,38 @@ Hermes plugins are opt-in through `plugins.enabled`.
   skills or `quick_commands`, so the plugin moves the alias at load time rather
   than registering a command; see `hermes/.hermes/plugins/q-quit/README.md`.
   `/queue` keeps its other spellings.
+
+## Profiles
+
+Named bots live in `profiles/<name>/` with the same shape as the package
+root: `SOUL.md`, `config.base.yaml`, and optionally `skills/<skill>/`. Each
+file is symlinked from `~/.hermes/profiles/<name>/` (same convention as the
+package-root `SOUL.md`: the repo owns content, the profile home holds links;
+`config.yaml` stays a real, runtime-managed file and the tracked base is
+applied with `hermes config set` the same way as the root base). The
+installer does not touch profiles yet — linking is deliberate per profile.
+
+| Profile | Model | Skill |
+|---------|-------|-------|
+| `dotfiles-sync` | kimi-for-coding | dotfiles-sync |
+| `beads-coordinator` | gpt-6-luna (openai-codex) | beads-coordination |
+| `bot-creator` | gpt-6-astra (openai-codex) | create-hermes-bot |
+| `commiter` | deepseek-flash (deepseek) | — |
+| `feature-wiki` | gpt-6.1-sol (openai-codex) | feature-wiki |
+| `repo-scout` | kimi-for-coding (kimi-coding) | — |
+| `skill-creator` | gpt-6.1-sol (openai-codex) | — |
+| `wiki-skill` | gpt-6.1-sol (openai-codex) | — |
+
+`profile.yaml` (roster description, avatar metadata) is runtime-managed by
+the desktop app and is not tracked.
+
+## Agent hooks
+
+`agent-hooks/` holds the `pre_tool_call` guard scripts wired in live
+`config.yaml` (`hooks.pre_tool_call`, e.g. the Obsidian vault RO/ guard).
+They are stowed into `~/.hermes/agent-hooks/` like plugins. The hook list
+itself is not in `config.base.yaml`: the installer format only carries flat
+scalar keys, so hooks stay a live-config choice.
 
 ## Why config.yaml is not stowed
 

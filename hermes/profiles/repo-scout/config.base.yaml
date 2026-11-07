@@ -1,0 +1,5 @@
+model.default: kimi-for-coding
+model.provider: kimi-coding
+model.base_url: https://api.kimi.ai/coding/v1
+model.api_mode: chat_completions
+skills.external_dirs: ["~/.agents/skills"]

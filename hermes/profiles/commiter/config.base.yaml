@@ -1,0 +1,6 @@
+model.default: deepseek-flash
+model.provider: deepseek
+model.base_url: https://api.deepseek.com
+model.api_mode: chat_completions
+telemetry.shared_metrics.enabled: false
+telemetry.shared_metrics.send: false

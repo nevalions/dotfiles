@@ -1,0 +1,6 @@
+model.default: gpt-6-astra
+model.provider: openai-codex
+model.base_url: https://chatgpt.com/backend-api/codex
+model.api_mode: codex_responses
+telemetry.shared_metrics.enabled: false
+telemetry.shared_metrics.send: false

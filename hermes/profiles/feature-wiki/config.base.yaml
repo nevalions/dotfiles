@@ -1,0 +1,4 @@
+model.default: gpt-6.1-sol
+model.provider: openai-codex
+model.base_url: https://chatgpt.com/backend-api/codex
+model.api_mode: codex_responses
