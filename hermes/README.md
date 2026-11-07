@@ -104,6 +104,7 @@ installer does not touch profiles yet — linking is deliberate per profile.
 | `bot-creator` | gpt-6-astra (openai-codex) | create-hermes-bot |
 | `commiter` | deepseek-flash (deepseek) | — |
 | `feature-wiki` | gpt-6.1-sol (openai-codex) | feature-wiki |
+| `orchestrator` | gpt-6-astra (openai-codex) | orchestration |
 | `repo-scout` | kimi-for-coding (kimi-coding) | — |
 | `skill-creator` | gpt-6.1-sol (openai-codex) | — |
 | `wiki-skill` | gpt-6.1-sol (openai-codex) | — |

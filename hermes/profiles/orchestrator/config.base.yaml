@@ -1,0 +1,5 @@
+model.default: gpt-6-astra
+model.provider: openai-codex
+model.base_url: https://chatgpt.com/backend-api/codex
+model.api_mode: codex_responses
+agent.reasoning_effort: medium
