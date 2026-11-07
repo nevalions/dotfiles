@@ -16,6 +16,11 @@ Usage:
     python3 hermes/install.py --check     # dry run, writes nothing
     python3 hermes/install.py
     python3 hermes/install.py --force     # also overwrite live settings
+
+Profiles (named bots under profiles/) are installed after the root package:
+each profile's config.base.yaml is applied to ~/.hermes/profiles/<name>/
+(local values win, same as the root base) and SOUL.md / skill directories are
+linked into the profile home. Use --profiles a,b to select a subset.
 """
 
 from __future__ import annotations
@@ -36,8 +41,10 @@ PACKAGE_DIR = REPO_ROOT / PACKAGE
 SETTINGS_FILE = PACKAGE_DIR / "config.base.yaml"
 SOUL_FILE = PACKAGE_DIR / ".hermes" / "SOUL.md"
 PLUGINS_DIR = PACKAGE_DIR / ".hermes" / "plugins"
+PROFILES_DIR = PACKAGE_DIR / "profiles"
 
 KEY_RE = re.compile(r"^([^\s:#][^:]*?):(?:\s+(.*))?$")
+PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
 class InstallError(RuntimeError):
@@ -294,6 +301,99 @@ def canon(text: str) -> str:
     return ",".join(parts)
 
 
+def tracked_profile_files(profile: Path) -> list[tuple[Path, Path]]:
+    """(relative path under the profile home, tracked repo path) pairs."""
+    pairs: list[tuple[Path, Path]] = [(Path("SOUL.md"), profile / "SOUL.md")]
+    skills = profile / "skills"
+    if skills.is_dir():
+        for skill in sorted(skills.iterdir()):
+            if skill.is_dir():
+                pairs.append((Path("skills") / skill.name, skill))
+    return [(rel, tracked) for rel, tracked in pairs if tracked.exists()]
+
+
+def link_profile_path(
+    profile_home: Path, rel: Path, tracked: Path, *, force: bool, check: bool, backup_dir: Path
+) -> None:
+    """Link one tracked profile file/dir into the profile home.
+
+    Profiles are excluded from stow (.stow-local-ignore), so the installer owns
+    these links directly. Profile links are absolute, matching the existing
+    dotfiles-sync profile convention; they are not stow-managed.
+    """
+    dest = profile_home / rel
+    if dest.is_symlink() and dest.resolve() == tracked.resolve():
+        print(f"  link  {dest} already points at {tracked}")
+        return
+    if dest.is_symlink():
+        print(f"  unlink {dest} (points elsewhere)")
+        if not check:
+            dest.unlink()
+    elif dest.exists():
+        if dest.is_dir():
+            if not force:
+                raise InstallError(
+                    f"{dest} is a real directory that would be replaced; re-run with --force "
+                    "after checking its contents (it is backed up first)"
+                )
+        elif dest.read_bytes() != tracked.read_bytes() and not force:
+            print(f"  warn  {dest} differs from the tracked copy; it will be replaced")
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        dest_backup = backup_dir / f"{rel.name}.{time.strftime('%Y%m%d-%H%M%S')}"
+        while dest_backup.exists():
+            dest_backup = dest_backup.with_name(dest_backup.name + "x")
+        print(f"  backup {dest} -> {dest_backup}")
+        if not check:
+            shutil.move(str(dest), str(dest_backup))
+    print(f"  link  {dest} -> {tracked}")
+    if not check:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.symlink_to(tracked)
+
+
+def install_profiles(home: Path, *, only: set[str] | None, force: bool, check: bool) -> None:
+    if not PROFILES_DIR.is_dir():
+        return
+    profiles = sorted(p for p in PROFILES_DIR.iterdir() if p.is_dir())
+    if only is not None:
+        unknown = only - {p.name for p in profiles}
+        if unknown:
+            raise InstallError(
+                f"unknown profile(s): {', '.join(sorted(unknown))}; "
+                f"tracked: {', '.join(p.name for p in profiles)}"
+            )
+    for profile in profiles:
+        name = profile.name
+        if not PROFILE_NAME_RE.match(name):
+            raise InstallError(f"invalid tracked profile name: {name!r}")
+        if only is not None and name not in only:
+            continue
+        settings_file = profile / "config.base.yaml"
+        if not settings_file.is_file():
+            raise InstallError(f"{profile}: missing config.base.yaml")
+        settings = read_settings(settings_file)
+        profile_home = home / "profiles" / name
+        print(f"profile {name} -> {profile_home}")
+        apply_settings(profile_home, settings, force=force, check=check)
+        backup_dir = profile_home / "backups" / "dotfiles"
+        files = tracked_profile_files(profile)
+        for rel, tracked in files:
+            link_profile_path(profile_home, rel, tracked, force=force, check=check, backup_dir=backup_dir)
+        if check:
+            continue
+        exe = hermes_bin()
+        for rel, tracked in files:
+            dest = profile_home / rel
+            if not dest.is_symlink() or dest.resolve() != tracked.resolve():
+                raise InstallError(f"{dest} is not linked to {tracked}")
+        for key, _value in settings:
+            proc = subprocess.run(
+                [exe, "config", "get", key], env=cmd_env(profile_home), text=True, capture_output=True
+            )
+            if proc.returncode != 0 or not proc.stdout.strip():
+                raise InstallError(f"{name}: {key} does not resolve in {profile_home}/config.yaml")
+
+
 def verify(home: Path, settings: list[tuple[str, str]]) -> list[str]:
     problems: list[str] = []
     soul = home / "SOUL.md"
@@ -317,6 +417,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-settings", action="store_true", help="only stow files")
     parser.add_argument("--skip-stow", action="store_true", help="only apply settings")
     parser.add_argument("--skip-plugins", action="store_true", help="do not enable tracked plugins")
+    parser.add_argument(
+        "--profiles",
+        help="comma-separated profile names to install (default: every tracked profile under profiles/)",
+    )
+    parser.add_argument("--skip-profiles", action="store_true", help="do not install named bot profiles")
     parser.add_argument("--home", help="HERMES_HOME to install into (default: $HERMES_HOME or ~/.hermes)")
     args = parser.parse_args(argv)
 
@@ -348,6 +453,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_plugins:
         print("plugins")
         enable_plugins(home, check=args.check)
+
+    if not args.skip_profiles:
+        print("profiles")
+        only = set(args.profiles.split(",")) if args.profiles else None
+        install_profiles(home, only=only, force=args.force, check=args.check)
 
     if args.check:
         print("dry run: nothing written")

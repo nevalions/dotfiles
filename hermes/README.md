@@ -19,7 +19,7 @@ python3 hermes/install.py --check    # what would change, writes nothing
 python3 hermes/install.py
 ```
 
-The installer does two things:
+The installer does three things:
 
 1. **Settings.** Applies `config.base.yaml` with `hermes config set`. A key that
    is already present in the live `config.yaml` is kept as-is, so local choices
@@ -27,8 +27,13 @@ The installer does two things:
    or symlinked.
 2. **Files.** Backs up a real `~/.hermes/SOUL.md` to `~/.hermes/backups/` and
    replaces it with a link to `hermes/.hermes/SOUL.md`, stows the package so
-   custom skills and plugins link into the repo, then enables each tracked
+   custom skills and agent-hooks link into the repo, then enables each tracked
    plugin (Hermes plugins are opt-in).
+3. **Profiles.** For each tracked `profiles/<name>/`, applies its
+   `config.base.yaml` to `~/.hermes/profiles/<name>/config.yaml` (local values
+   win) and links `SOUL.md` and skill directories into the profile home,
+   backing up differing real files first. Select with `--profiles a,b` or skip
+   with `--skip-profiles`.
 
 Useful flags: `--skip-settings`, `--skip-stow`, `--skip-plugins`, `--home <path>`
 (a `HERMES_HOME` override; the directory must be named `.hermes`, matching the
@@ -94,8 +99,11 @@ root: `SOUL.md`, `config.base.yaml`, and optionally `skills/<skill>/`. Each
 file is symlinked from `~/.hermes/profiles/<name>/` (same convention as the
 package-root `SOUL.md`: the repo owns content, the profile home holds links;
 `config.yaml` stays a real, runtime-managed file and the tracked base is
-applied with `hermes config set` the same way as the root base). The
-installer does not touch profiles yet — linking is deliberate per profile.
+applied with `hermes config set`, local values win, exactly like the root
+base). The installer installs every tracked profile by default;
+`--profiles a,b` selects a subset and `--skip-profiles` opts out. A real
+file that differs is backed up to `<profile>/backups/dotfiles/` before the
+link replaces it; a real directory refuses replacement without `--force`.
 
 | Profile | Model | Skill |
 |---------|-------|-------|
