@@ -10,7 +10,7 @@ allowed-tools: "Read,Bash(bd:*)"
 version: "0.60.0"
 author: "Steve Yegge <steve.yegge@gmail.com>"
 license: "MIT"
-compatible-with: [claude-code, codex]
+compatible-with: [claude-code, codex, hermes]
 tags: [issue-tracking, task-management, multi-session, dependencies]
 ---
 
@@ -45,6 +45,36 @@ bd --version  # Requires v0.60.0+
 **Run `bd <command> --help`** for specific command usage.
 
 Essential commands: `bd ready`, `bd create`, `bd show`, `bd update`, `bd close`, `bd dolt push`
+
+## Shared Claude, Codex and Hermes workspace
+
+All three tools use this canonical skill and the same repository tracker. Before
+tracking work, ask whether to create a new issue or update an existing one unless
+the user already chose; a request to skip tracking means no issue writes.
+
+Before any tracker write, choose a unique actor for this agent session, such as
+`codex:<session-id>`, `claude:<session-id>` or `hermes:<profile>:<session-id>`.
+Generate a UUID once if no session ID exists. Reuse the exact actor throughout
+that session, including after compaction. Pass `--actor '<actor>'` on every bd
+invocation, or set `BEADS_ACTOR` on every invocation if terminal environments do
+not persist. Each concurrent worker needs its own actor; never inherit another
+worker's actor. The default Git username is shared across tools and is unsafe
+for ownership: a claim by the same actor is idempotent.
+
+Run `bd where --json` from the task checkout before writing. Linked Git
+worktrees normally discover the main repository's shared `.beads/` workspace.
+Do not initialize a second tracker, set a different `BEADS_DIR`, or copy/import
+issue data to make a worktree work. Diagnose discovery first; initialize only
+when the user authorized a new tracker and none exists.
+
+Read the explicit issue ID, then use `bd update <id> --claim` with your actor.
+Proceed only after a successful claim. If another actor owns it, stop work on
+that issue and coordinate with the user/owner. Do not use `--force`, overwrite
+its assignee/status, or release another actor's claim. Use `--append-notes` for
+progress rather than replacing notes. Mutate/close only your assigned issue,
+with explicit IDs; apply the user's requested Git/CI completion gates before
+closing. Issue-data pushes require the same user authorization as other writes
+to remotes; the session protocol below does not grant that authorization.
 
 ## Session Protocol
 

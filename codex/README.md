@@ -262,3 +262,35 @@ codex plugin marketplace remove dotfiles
 
 Restore a saved config from `~/.codex/backups/` if desired. Authentication and
 runtime data remain in place. Restart Codex after installing or removing MCPs.
+
+## Shared Beads skill
+
+Claude, Codex and Hermes use the canonical skill at `~/.agents/skills/beads`.
+The Codex installer defaults to ordered `skills.config` rules: disable the
+`beads` name, then enable the canonical absolute `SKILL.md` path. Existing local
+skill rules still take precedence. This selects one skill while leaving the
+Beads plugin enabled for its context hooks. Restart Codex after configuration
+changes; inspect the skill inventory to confirm one enabled Beads skill.
+The supported rule syntax is documented in the [official configuration
+reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+
+Follow the shared skill's unique session actor and atomic claim rules. Do not
+share an actor between simultaneous tool sessions or initialize per-worktree
+trackers. `bd where --json` verifies discovery from the actual task checkout.
+
+For an existing installation, the installer preserves a local `skills.config`
+array in full. Merge these rules after any local rules in `~/.codex/config.toml`
+(the last match wins), using your own absolute home path:
+
+```toml
+[[skills.config]]
+name = "beads"
+enabled = false
+
+[[skills.config]]
+path = "/home/linroot/.agents/skills/beads/SKILL.md"
+enabled = true
+```
+
+Keep the config symlink intact when it points to the ignored generated file;
+back up and edit its target. These rules preserve the plugin and its hooks.

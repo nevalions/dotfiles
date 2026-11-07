@@ -32,3 +32,24 @@ The package installs its guarded /usr/bin/bd and pinned /usr/lib/beads/1.3.1/bd.
 On other machines, run the installer locally, verify interactive, login, SSH, cron, systemd and CI invocation paths before accessing shared trackers, and stop any old-client jobs. This rollout does not operate on other machines. Preserve each database before a designated `bd migrate schema --force`, compare issue IDs and counts, sync without force-pushing, then verify a fresh clone independently. Do not reset, blanket-import or drop tracker data to resolve divergence.
 
 Local verification (2026-10-07): clean sh, zsh login and a transient user-systemd job execute 1.3.1. An actual SSH command through a temporary localhost-only sshd resolves /usr/local/bin/bd 1.3.1. A real scheduled cron job in an isolated BusyBox container executes the same host launcher and pinned binary through read-only mounts; no permanent cron or SSH service settings were changed. The initial restricted SSH PATH=/usr/bin check exposed the old package client. The package upgrade and repeated restricted-PATH SSH/cron checks pass: /usr/bin/bd is owned by beads 1.3.1-1, and both default and restricted paths report 1.3.1. A restricted-PATH transient user-systemd job also passed. Every bd executable on the inspected local PATH reports 1.3.1; the old package executable is preserved outside PATH under /usr/local/lib/beads/backups/bd-53ba32f152d882889e346bf73157f23ea938c46a7e69414f528df385dee3d932. Audited repository CI workflows do not invoke bd. Remote SSH hosts and CI runners require their own installation and verification.
+
+## Shared agent access
+
+The canonical skill lives in `codex-skills/.agents/skills/beads`, stowed to
+`~/.agents/skills/beads`. Claude's `claude-skills` package links that directory;
+Hermes reads it through `skills.external_dirs`; Codex's installer selects it
+with ordered `skills.config` rules while retaining plugin context hooks.
+Use `stow -R claude-skills` to expose it to Claude after installing the shared
+tree. Disable any separate Claude Beads plugin skill before enabling that copy
+if its inventory contains a duplicate. Do not delete plugin caches by hand.
+
+Each concurrent agent session must use a unique actor, an atomic `--claim`, and
+the task checkout's shared tracker. See the canonical skill before issue writes.
+
+Recheck executable versions after package upgrades. On 2026-11-07, the guarded
+user and `/usr/local` launchers still selected 1.3.1, but the Arch package had
+replaced `/usr/bin/bd` with 1.3.2 (dev). The October verification above is
+historical, not proof of the current system path. Restore the reviewed local
+package using the Arch procedure above before relying on a restricted PATH;
+preserve its displaced executable. Do not remove the guarded launchers merely
+to silence the CLI's multiple-binaries warning.

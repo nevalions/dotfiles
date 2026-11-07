@@ -102,6 +102,10 @@ def main():
     live = target / ".codex/config.toml"
     source = package / ".codex/config.toml"
     defaults = tomllib.loads((package / "config.base.toml").read_text())
+    defaults.setdefault("skills", {})["config"] = [
+        {"name": "beads", "enabled": False},
+        {"path": str(target / ".agents/skills/beads/SKILL.md"), "enabled": True},
+    ]
     current = tomllib.loads(live.read_text()) if live.exists() else {}
     output = serialize(merge(defaults, current))
     tomllib.loads(output)

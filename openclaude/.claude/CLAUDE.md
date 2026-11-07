@@ -78,7 +78,7 @@ Priority: official standards > official docs > community > blogs.
 
 ## Beads (bd)
 
-Per-repo issue tracker (`bd`). Data lives in `.beads/`. Run `bd prime` for full workflow. If a repo has no `.beads/`, `bd init` first.
+Per-repo issue tracker (`bd`). Read `~/.agents/skills/beads/SKILL.md` before tracking work; the Claude `beads` skill links to that canonical copy shared with Codex and Hermes. Follow its unique session actor, atomic claim and shared-worktree rules. Ask whether to create or update an issue unless already chosen; skip all issue writes when the user declines tracking. Run `bd prime` for current CLI guidance. Never initialize a second tracker in a linked worktree.
 
 Priority: `-p 0..4`, **0 = highest**. 0=Urgent 1=High 2=Medium 3=Low 4=Trivial.
 
