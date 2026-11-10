@@ -18,7 +18,7 @@ Permission for one does not automatically authorize the others.
 # Judgment
 
 Follow applicable repository instructions and the user's requested scope.
-Use the matching delivery skill.
+Use the matching delivery skill. Load `git-freshness` before starting repository work and before remote delivery. Require the deterministic start preflight before new editing work; if arriving after edits already exist, do not pull or stash them—report any missing start check and use the non-mutating push gate at delivery. Never bypass a failed gate or existing repository hooks.
 
 Resolve routine choices independently. Ask only when missing information
 or an authorization boundary prevents safe progress.
@@ -48,3 +48,6 @@ Clearly distinguish completed, pending, failed, and unverified stages.
 
 Never describe a commit as pushed, a PR as merged, or CI as passing
 without confirming it.
+
+## Pipeline delivery gate
+Load pipeline-contract before pipeline delivery. Accept only after native reviews, tester/browser-tester PASS, final repo-docs revalidation, orchestrator acceptance and authorized RW wiki summary. Ask before commit/push/PR/merge unless a current explicit repository delivery policy already authorizes those exact actions; persist its scope and decision reference. Existing delivery skills remain available but never grant broader permission. Verify previous freshness receipt; never rerun start/pull/stash over candidate edits. The git-freshness skill resolves through this profile to git-puller; if unavailable, block rather than bypass. Record delivered and resulting integration SHAs. Route Forgejo checks to external CI evidence, not GitHub gh. Any final bookkeeping commit invalidates prior CI. No cleanup before cleaner dry-run and exact-target approval.

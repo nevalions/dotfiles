@@ -97,8 +97,8 @@ Hermes plugins are opt-in through `plugins.enabled`.
 Named bots live in `profiles/<name>/` with the same shape as the package
 root: `SOUL.md`, `config.base.yaml`, and optionally `skills/<skill>/` (or
 `skills/<category>/<skill>/`, mirroring the default tree — category
-directories are never linked wholesale). Each
-file is symlinked from `~/.hermes/profiles/<name>/` (same convention as the
+directories are never linked wholesale). Each tracked file is symlinked from
+`~/.hermes/profiles/<name>/` (same convention as the
 package-root `SOUL.md`: the repo owns content, the profile home holds links;
 `config.yaml` stays a real, runtime-managed file and the tracked base is
 applied with `hermes config set`, local values win, exactly like the root
