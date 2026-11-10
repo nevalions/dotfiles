@@ -1,0 +1,19 @@
+model.default: gpt-6.1-sol
+model.provider: openai-codex
+model.base_url: https://chatgpt.com/backend-api/codex
+model.api_mode: codex_responses
+agent.reasoning_effort: high
+agent.disabled_toolsets: ["browser","delegation","memory","cronjob","code_execution"]
+agent.reasoning_overrides: {"k3.1-pro":"high","deepseek-v4-pro":"high"}
+platform_toolsets.cli: ["terminal","file","skills","code_execution","clarify","todo","web","session_search","no_mcp"]
+web.search_backend: exa
+web.extract_backend: exa
+hooks.pre_tool_call: [{"matcher":"terminal|execute_code|browser_exec|process_manage|write_file|patch|multi_edit|computer_use","command":"/home/linroot/.hermes/agent-hooks/rbw-guard.py","timeout":10,"fail_closed":true}]
+approvals.deny: ["kubectl *","helm *","git push*","git -* push*","gh pr create*","gh * pr create*","gh pr merge*","gh * pr merge*"]
+fallback_providers: [{"provider":"kimi-coding","model":"k3.1-pro"},{"provider":"deepseek","model":"deepseek-v4-pro"}]
+memory.provider: honcho
+
+# Kanban workers carry explicit task/parent history only, not the assignee's five
+# latest cross-task runs. Requires the local kanban.include_role_history patch
+# (default true); inert but harmless without it.
+kanban.include_role_history: false

@@ -1,0 +1,24 @@
+model.default: gpt-6.1-sol
+model.provider: openai-codex
+model.base_url: https://chatgpt.com/backend-api/codex
+model.api_mode: codex_responses
+agent.reasoning_effort: medium
+agent.reasoning_overrides: {"k3.1-pro":"high","deepseek-v4-pro":"high","kimi-for-coding":"high","deepseek-flash":"high"}
+platform_toolsets.cli: ["terminal","file","skills","clarify","todo","mcp-kubernetes"]
+terminal.cwd: /home/linroot
+mcp_servers.kubernetes.command: /home/linroot/.local/bin/kubernetes-mcp-server
+mcp_servers.kubernetes.args: ["--config","/home/linroot/.hermes/profiles/cluster-operator/kubernetes-mcp.toml"]
+mcp_servers.kubernetes.connect_timeout: 20
+mcp_servers.kubernetes.timeout: 30
+mcp_servers.kubernetes.tools.include: ["pods_list_in_namespace","pods_top","events_list"]
+mcp_servers.kubernetes.tools.resources: false
+mcp_servers.kubernetes.tools.prompts: false
+mcp_servers.kubernetes.sampling.enabled: false
+hooks.pre_tool_call: [{"matcher":"terminal|execute_code|browser_exec|process_manage|write_file|patch|multi_edit|computer_use","command":"/home/linroot/.hermes/agent-hooks/rbw-guard.py","timeout":10,"fail_closed":true}]
+fallback_providers: [{"provider":"kimi-coding","model":"kimi-for-coding"},{"provider":"deepseek","model":"deepseek-flash"}]
+memory.provider: honcho
+
+# Kanban workers carry explicit task/parent history only, not the assignee's five
+# latest cross-task runs. Requires the local kanban.include_role_history patch
+# (default true); inert but harmless without it.
+kanban.include_role_history: false

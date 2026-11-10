@@ -1,0 +1,11 @@
+model.default: deepseek-flash
+model.provider: deepseek
+agent.reasoning_effort: low
+skills.disabled: ["apple-notes","apple-reminders","architecture-diagram","arxiv","ascii-video","baoyu-infographic","blocked-page-recovery","claude-code","claude-design","codebase-inspection","codex","competitor-news-monitor","computer-use","document-to-action-items","dogfood","email-inbox-triage","findmy","github","google-workspace","grounded-citations","himalaya","humanizer","imessage","manim-video","maps","meeting-action-items","microsoft-office","obsidian","p5js","pdf","popular-web-designs","product-price-monitor","requesting-code-review","simplify-code","songwriting-and-ai-music","spike","systematic-debugging","teams-meeting-pipeline","test-driven-development","weekly-review-planning","xurl","youtube-content"]
+platform_toolsets.cli: ["clarify","file","skills","terminal"]
+hooks.pre_tool_call: [{"matcher":"terminal|execute_code|browser_exec|process_manage|write_file|patch|multi_edit|computer_use","command":"/home/linroot/.hermes/agent-hooks/rbw-guard.py","timeout":10,"fail_closed":true}]
+
+# Kanban workers carry explicit task/parent history only, not the assignee's five
+# latest cross-task runs. Requires the local kanban.include_role_history patch
+# (default true); inert but harmless without it.
+kanban.include_role_history: false
