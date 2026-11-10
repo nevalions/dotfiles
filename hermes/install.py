@@ -306,9 +306,19 @@ def tracked_profile_files(profile: Path) -> list[tuple[Path, Path]]:
     pairs: list[tuple[Path, Path]] = [(Path("SOUL.md"), profile / "SOUL.md")]
     skills = profile / "skills"
     if skills.is_dir():
-        for skill in sorted(skills.iterdir()):
-            if skill.is_dir():
-                pairs.append((Path("skills") / skill.name, skill))
+        for entry in sorted(skills.iterdir()):
+            if not entry.is_dir():
+                continue
+            if (entry / "SKILL.md").is_file():
+                # flat layout: skills/<skill>/
+                pairs.append((Path("skills") / entry.name, entry))
+            else:
+                # category layout: skills/<category>/<skill>/ (mirrors the
+                # default tree); link each skill, never the category dir,
+                # which also holds bundled skills at runtime.
+                for skill in sorted(entry.iterdir()):
+                    if skill.is_dir() and (skill / "SKILL.md").is_file():
+                        pairs.append((Path("skills") / entry.name / skill.name, skill))
     return [(rel, tracked) for rel, tracked in pairs if tracked.exists()]
 
 
