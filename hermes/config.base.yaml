@@ -23,3 +23,8 @@ agent.reasoning_effort: high
 # stowed from codex-skills/. External dirs are read-only; Hermes still creates
 # its own skills under ~/.hermes/skills.
 skills.external_dirs: ["~/.agents/skills"]
+
+# Kanban workers carry explicit task/parent history only, not the assignee's five
+# latest cross-task runs. Requires the local kanban.include_role_history patch
+# (default true); inert but harmless without it.
+kanban.include_role_history: false

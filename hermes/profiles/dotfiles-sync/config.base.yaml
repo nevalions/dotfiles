@@ -1,3 +1,8 @@
 model.default: kimi-for-coding
 model.provider: kimi-coding
 agent.reasoning_effort: medium
+
+# Kanban workers carry explicit task/parent history only, not the assignee's five
+# latest cross-task runs. Requires the local kanban.include_role_history patch
+# (default true); inert but harmless without it.
+kanban.include_role_history: false

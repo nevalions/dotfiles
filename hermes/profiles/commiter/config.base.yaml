@@ -4,3 +4,8 @@ model.base_url: https://api.deepseek.com
 model.api_mode: chat_completions
 telemetry.shared_metrics.enabled: false
 telemetry.shared_metrics.send: false
+
+# Kanban workers carry explicit task/parent history only, not the assignee's five
+# latest cross-task runs. Requires the local kanban.include_role_history patch
+# (default true); inert but harmless without it.
+kanban.include_role_history: false
