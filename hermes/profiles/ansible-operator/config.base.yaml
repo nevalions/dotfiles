@@ -1,0 +1,26 @@
+model.default: gpt-6.1-sol
+model.provider: openai-codex
+model.base_url: https://chatgpt.com/backend-api/codex
+model.api_mode: codex_responses
+agent.reasoning_effort: medium
+agent.reasoning_overrides.kimi-for-coding: high
+agent.reasoning_overrides.deepseek-flash: high
+fallback_providers: [{"provider":"kimi-coding","model":"kimi-for-coding"},{"provider":"deepseek","model":"deepseek-flash"}]
+platform_toolsets.cli: ["terminal","file","skills","no_mcp"]
+memory.memory_enabled: false
+memory.user_profile_enabled: false
+approvals.mode: smart
+approvals.single_query_mode: deny
+approvals.unattended_mode: deny
+approvals.cron_mode: deny
+skills.external_dirs: ["/home/linroot/.hermes/profiles/bot-creator/skills/pipeline-contract"]
+
+# Kanban workers carry explicit task/parent history only, not the assignee's five
+# latest cross-task runs. Requires the local kanban.include_role_history patch
+# (default true); inert but harmless without it.
+kanban.include_role_history: false
+
+# NOT TRACKED: approvals.smart_policy. It is multi-kilobyte guardian prose, and this
+# flat `dotted.key: value` format cannot carry it without escaping that a later edit
+# would break silently. The live copy in ~/.hermes/profiles/ansible-operator/config.yaml
+# is authoritative; copy it by hand when rebuilding this profile.

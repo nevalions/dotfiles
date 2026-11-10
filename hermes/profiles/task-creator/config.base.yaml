@@ -1,0 +1,12 @@
+model.default: deepseek-flash
+model.provider: deepseek
+agent.reasoning_effort: low
+fallback_providers: [{"provider":"kimi-coding","model":"kimi-for-coding"}]
+platform_toolsets.cli: ["terminal","skills","clarify","no_mcp"]
+memory.memory_enabled: false
+memory.user_profile_enabled: false
+
+# Kanban workers carry explicit task/parent history only, not the assignee's five
+# latest cross-task runs. Requires the local kanban.include_role_history patch
+# (default true); inert but harmless without it.
+kanban.include_role_history: false
