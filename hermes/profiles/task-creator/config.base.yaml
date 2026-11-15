@@ -1,5 +1,5 @@
-model.default: deepseek-flash
-model.provider: deepseek
+model.default: deepseek-v4.1-flash
+model.provider: opencode-go
 agent.reasoning_effort: low
 fallback_providers: [{"provider":"kimi-coding","model":"kimi-for-coding"}]
 platform_toolsets.cli: ["terminal","skills","clarify","no_mcp"]

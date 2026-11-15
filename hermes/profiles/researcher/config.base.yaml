@@ -15,7 +15,7 @@ memory.user_profile_enabled: false
 memory.provider: honcho
 hooks.pre_tool_call: [{"matcher":"write_file|patch|terminal|execute_code","command":"/home/linroot/.hermes/agent-hooks/vault-ro-guard.py","timeout":10,"fail_closed":true},{"matcher":"terminal|execute_code|browser_exec|process_manage|write_file|patch|multi_edit|computer_use","command":"/home/linroot/.hermes/agent-hooks/rbw-guard.py","timeout":10,"fail_closed":true}]
 skills.disabled: ["llm-wiki"]
-fallback_providers: [{"provider":"kimi-coding","model":"k3.1-pro"},{"provider":"deepseek","model":"deepseek-v4-pro"}]
+fallback_providers: [{"provider":"kimi-coding","model":"k3.1-pro"},{"provider":"opencode-go","model":"deepseek-v4-pro"}]
 
 # Kanban workers carry explicit task/parent history only, not the assignee's five
 # latest cross-task runs. Requires the local kanban.include_role_history patch

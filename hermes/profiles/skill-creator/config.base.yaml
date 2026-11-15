@@ -2,6 +2,8 @@ model.default: gpt-6.1-sol
 model.provider: openai-codex
 model.base_url: https://chatgpt.com/backend-api/codex
 model.api_mode: codex_responses
+fallback_providers: [{"provider":"kimi-coding","model":"kimi-for-coding"},{"provider":"opencode-go","model":"deepseek-v4.1-flash"}]
+agent.reasoning_overrides: {"k3.1-pro":"high","deepseek-v4-pro":"high","kimi-for-coding":"high","deepseek-flash":"high","deepseek-v4.1-flash":"high"}
 
 # Kanban workers carry explicit task/parent history only, not the assignee's five
 # latest cross-task runs. Requires the local kanban.include_role_history patch

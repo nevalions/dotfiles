@@ -15,6 +15,17 @@ model.default: deepseek-flash
 model.provider: deepseek
 model.base_url: https://api.deepseek.com
 
+# OpenCode Go (deepseek-v4 family). API key/base URL resolve from
+# ~/.hermes/.env (OPENCODE_GO_API_KEY / OPENCODE_GO_BASE_URL); see .env.example.
+# 2026-11-12 opencode-go rollout: replaced openrouter/deepseek references in
+# delegation, vision and MoA with the opencode-go provider.
+delegation.backends.model_map.options: [{"name":"fast","description":"Cheap and quick work","provider":"opencode-go","model":"deepseek-v4.1-flash","reasoning_effort":"medium","service_tier":"normal"}]
+auxiliary.vision.provider: opencode-go
+auxiliary.vision.model: deepseek-v4.1-flash
+auxiliary.vision.base_url: https://opencode.ai/zen/go/v1
+moa.presets.default.reference_models: [{"provider":"openai-codex","model":"gpt-6.1-sol","enabled":true},{"provider":"opencode-go","model":"deepseek-v4-pro","enabled":true}]
+moa.reference_models: [{"provider":"openai-codex","model":"gpt-6.1-sol","enabled":true},{"provider":"opencode-go","model":"deepseek-v4-pro","enabled":true}]
+
 # Agent behavior.
 agent.max_turns: 150
 agent.reasoning_effort: high

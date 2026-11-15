@@ -10,7 +10,7 @@ web.search_backend: exa
 web.extract_backend: exa
 hooks.pre_tool_call: [{"matcher":"terminal|execute_code|browser_exec|process_manage|write_file|patch|multi_edit|computer_use","command":"/home/linroot/.hermes/agent-hooks/rbw-guard.py","timeout":10,"fail_closed":true}]
 approvals.deny: ["kubectl *","helm *","git push*","git -* push*","gh pr create*","gh * pr create*","gh pr merge*","gh * pr merge*"]
-fallback_providers: [{"provider":"kimi-coding","model":"k3.1-pro"},{"provider":"deepseek","model":"deepseek-v4-pro"}]
+fallback_providers: [{"provider":"kimi-coding","model":"k3.1-pro"},{"provider":"opencode-go","model":"deepseek-v4-pro"}]
 memory.provider: honcho
 
 # Kanban workers carry explicit task/parent history only, not the assignee's five

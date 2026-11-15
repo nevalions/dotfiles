@@ -3,6 +3,10 @@ model.provider: openai-codex
 model.base_url: https://chatgpt.com/backend-api/codex
 model.api_mode: codex_responses
 telemetry.shared_metrics.enabled: false
+fallback_providers: [{"provider":"kimi-coding","model":"k3.1-pro"},{"provider":"opencode-go","model":"deepseek-v4-pro"}]
+# 2026-11-12 opencode-go rollout: compression moved deepseek/deepseek-flash -> opencode-go/deepseek-v4.1-flash.
+auxiliary.compression.provider: opencode-go
+auxiliary.compression.model: deepseek-v4.1-flash
 telemetry.shared_metrics.send: false
 
 # Kanban workers carry explicit task/parent history only, not the assignee's five

@@ -2,6 +2,15 @@ model.default: kimi-for-coding
 model.provider: kimi-coding
 agent.reasoning_effort: medium
 
+# Shared maintained skills owned by other profiles, referenced home-relative
+# (~ expansion is supported in skills.external_dirs). The skills themselves are
+# tracked under profiles/bot-creator/skills/pipeline-contract and
+# profiles/git-puller/skills/git-freshness and linked into the profile homes by
+# install.py, so no host/user-specific absolute paths are needed. Existing
+# disabled/visible skill settings and the shared ~/.agents/skills choice made in
+# the root config.base.yaml are preserved.
+skills.external_dirs: ["~/.hermes/profiles/bot-creator/skills/pipeline-contract", "~/.hermes/profiles/git-puller/skills/git-freshness"]
+
 # Kanban workers carry explicit task/parent history only, not the assignee's five
 # latest cross-task runs. Requires the local kanban.include_role_history patch
 # (default true); inert but harmless without it.

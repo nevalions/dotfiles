@@ -1,0 +1,16 @@
+# Explicit independent-review routing
+
+Before admission, verify the actual native reviewer binding selects the intended Reviewer and differs from the author. Instructions in the task body do not configure routing. An observed review_requested event with reviewer=null admitted the next review-state run under the author profile again; do not assume a null reviewer selects an independent default.
+
+After handoff, verify the actual review run profile/session. A new session of the author is not the required independent review. If misrouted, park against self-approval, verify exact worker idleness, preserve the completed candidate, and recover independent review through supported management without repeating implementation. Do not treat any self-review approval as satisfying independence.
+
+## Recover a preserved candidate without rerunning its author
+
+1. Inspect `hermes kanban --board <board> show <task> --json` and `runs <task>`; correlate the review-request event, configured reviewer, actual run profile and admitted owner session. A review-state claim is not proof of reviewer independence.
+2. Park a misrouted execution and verify its exact owner session idle; preserve the author run, immutable candidate digest, manifest and rejection history. Do not accept any same-author verdict as independent approval.
+3. Check the installed supported transition's accepted source states and preserved resume state. Distinguish triage recovery from a blocked native review: supported unblock can restore REVIEW for the latter. Read back the resulting state and dispatcher claim's source_status before labelling recovery native or ordinary. If a post-write assertion expected READY but finds REVIEW, inspect the successful transition rather than replaying admission. If native review cannot accept the parked state, do not use a transient READY bridge that may dispatch before the reviewer assignment is established, force a transition or edit the database.
+4. Where authorized, amend the parked card to an ordinary Reviewer-only assignment bound to the preserved candidate and author run, explicitly `native=false`. Define ordinary evidence-backed completion or block, no implementation edits, no request_review recursion and no native-approval claim. Assign the intended independent Reviewer while still parked. If the card's lifecycle cannot represent this safely, use one substantive ordinary review card and explicit dependency/provenance binding instead of rebuilding the implementation.
+5. Read back assignment, candidate binding, allowed test writes, finite remaining review budget and wake subscription before release. Do not silently replenish exhausted budgets. Then use supported admission and verify the actual run profile and owner session, not merely READY.
+6. Preserve the ordinary verdict and its provenance separately from native review state. Route an actionable finding within existing correction authority; keep external execution and original application acceptance gated.
+
+Repairing already-authorized reviewer routing is coordinator work, not a new user permission decision. Report recovery only after the intended reviewer run is observed. Ordinary review admission is a verified recovery method, not proof of candidate safety or incident resolution. No Hermes runtime modification or global restart is authorized by this repair.

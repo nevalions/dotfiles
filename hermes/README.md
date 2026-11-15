@@ -104,20 +104,45 @@ package-root `SOUL.md`: the repo owns content, the profile home holds links;
 applied with `hermes config set`, local values win, exactly like the root
 base). The installer installs every tracked profile by default;
 `--profiles a,b` selects a subset and `--skip-profiles` opts out. A real
-file that differs is backed up to `<profile>/backups/dotfiles/` before the
-link replaces it; a real directory refuses replacement without `--force`.
+file that differs from the tracked copy is **preserved**: an unforced
+install fails closed with an error naming the path, and `--force` is the
+deliberate, separately selected replacement — the differing file is backed
+up to `<profile>/backups/dotfiles/` before the link replaces it. The same
+applies to a symlink that already exists at a tracked path but points
+elsewhere: unforced installs keep the link (and its target) untouched and
+fail closed, while `--force` replaces the link after backing up the symlink
+itself (never its target) to `backups/dotfiles/`. A real
+directory refuses replacement without `--force`. `--check` (dry run) writes
+nothing and only reports where an unforced install would fail closed.
 
 | Profile | Model | Skill |
 |---------|-------|-------|
-| `dotfiles-sync` | kimi-for-coding | dotfiles-sync |
+| `dotfiles-sync` | kimi-for-coding | dotfiles-sync (+ shared-skill references via `skills.external_dirs`) |
 | `beads-coordinator` | gpt-6-luna (openai-codex) | beads-coordination |
 | `bot-creator` | gpt-6-astra (openai-codex) | create-hermes-bot |
-| `commiter` | deepseek-flash (deepseek) | — |
+| `cluster-operator` | gpt-6.1-sol (openai-codex) | cluster-operations |
+| `commiter` | deepseek-v4.1-flash (opencode-go) | — |
 | `feature-wiki` | gpt-6.1-sol (openai-codex) | feature-wiki |
+| `git-puller` | deepseek-v4.1-flash (opencode-go) | — |
 | `orchestrator` | gpt-6-astra (openai-codex) | orchestration |
 | `repo-scout` | kimi-for-coding (kimi-coding) | — |
 | `skill-creator` | gpt-6.1-sol (openai-codex) | — |
 | `wiki-skill` | gpt-6.1-sol (openai-codex) | — |
+
+`dotfiles-sync`'s `config.base.yaml` references shared skills owned by other
+profiles through `skills.external_dirs` (home-relative paths; `~` expansion
+is supported): `pipeline-contract` (maintained by `bot-creator`) and
+`git-freshness` (maintained by `git-puller`). The skill trees are tracked in
+this package under their owner profiles (`profiles/bot-creator/skills/
+pipeline-contract/`, `profiles/git-puller/skills/git-freshness/`) and
+`install.py` links them into the owner profile homes, so a full deployment
+resolves the references. Do not copy them into consumer profiles.
+
+Existing profiles do **not** automatically pick up new tracked defaults:
+`config.base.yaml` is applied only for keys the live `config.yaml` does not
+already have (local values win). After adding or changing a tracked key,
+update the live profile with `hermes -p <profile> config set <key> <value>`
+(--force applies everything but overwrites local choices).
 
 `profile.yaml` (roster description, avatar metadata) is runtime-managed by
 the desktop app and is not tracked.

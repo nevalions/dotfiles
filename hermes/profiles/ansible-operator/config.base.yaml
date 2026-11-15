@@ -3,9 +3,8 @@ model.provider: openai-codex
 model.base_url: https://chatgpt.com/backend-api/codex
 model.api_mode: codex_responses
 agent.reasoning_effort: medium
-agent.reasoning_overrides.kimi-for-coding: high
-agent.reasoning_overrides.deepseek-flash: high
-fallback_providers: [{"provider":"kimi-coding","model":"kimi-for-coding"},{"provider":"deepseek","model":"deepseek-flash"}]
+agent.reasoning_overrides: {"kimi-for-coding":"high","deepseek-flash":"high","deepseek-v4.1-flash":"high"}
+fallback_providers: [{"provider":"kimi-coding","model":"kimi-for-coding"},{"provider":"opencode-go","model":"deepseek-v4.1-flash"}]
 platform_toolsets.cli: ["terminal","file","skills","no_mcp"]
 memory.memory_enabled: false
 memory.user_profile_enabled: false

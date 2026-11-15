@@ -304,6 +304,9 @@ def canon(text: str) -> str:
 def tracked_profile_files(profile: Path) -> list[tuple[Path, Path]]:
     """(relative path under the profile home, tracked repo path) pairs."""
     pairs: list[tuple[Path, Path]] = [(Path("SOUL.md"), profile / "SOUL.md")]
+    agents = profile / "AGENTS.md"
+    if agents.is_file():
+        pairs.append((Path("AGENTS.md"), agents))
     skills = profile / "skills"
     if skills.is_dir():
         for entry in sorted(skills.iterdir()):
@@ -336,9 +339,29 @@ def link_profile_path(
         print(f"  link  {dest} already points at {tracked}")
         return
     if dest.is_symlink():
-        print(f"  unlink {dest} (points elsewhere)")
+        old_target = os.readlink(dest)
+        if not force:
+            if check:
+                print(
+                    f"  warn  {dest} is a symlink pointing elsewhere ({old_target}); "
+                    "an unforced install would fail closed here (use --force to replace it)"
+                )
+            else:
+                raise InstallError(
+                    f"{dest} is a symlink pointing elsewhere ({old_target}); "
+                    "not replacing it without --force (local profile overrides win)"
+                )
+        # --force: back up the symlink itself (the link, never its target) so
+        # the previous link identity is preserved under backups/dotfiles.
         if not check:
-            dest.unlink()
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            dest_backup = backup_dir / f"{rel.name}.link.{time.strftime('%Y%m%d-%H%M%S')}"
+            while dest_backup.exists():
+                dest_backup = dest_backup.with_name(dest_backup.name + "x")
+            print(f"  backup {dest} -> {dest_backup} (symlink itself, target untouched)")
+            shutil.move(str(dest), str(dest_backup))
+            if not dest_backup.is_symlink() or os.readlink(dest_backup) != old_target:
+                raise InstallError(f"backup verification failed: {dest_backup}")
     elif dest.exists():
         if dest.is_dir():
             if not force:
@@ -347,13 +370,22 @@ def link_profile_path(
                     "after checking its contents (it is backed up first)"
                 )
         elif dest.read_bytes() != tracked.read_bytes() and not force:
-            print(f"  warn  {dest} differs from the tracked copy; it will be replaced")
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        dest_backup = backup_dir / f"{rel.name}.{time.strftime('%Y%m%d-%H%M%S')}"
-        while dest_backup.exists():
-            dest_backup = dest_backup.with_name(dest_backup.name + "x")
-        print(f"  backup {dest} -> {dest_backup}")
+            if check:
+                print(
+                    f"  warn  {dest} differs from the tracked copy; an unforced "
+                    "install would fail closed here (use --force to replace it)"
+                )
+            else:
+                raise InstallError(
+                    f"{dest} is a local file that differs from the tracked copy; "
+                    "not replacing it without --force (local profile overrides win)"
+                )
         if not check:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            dest_backup = backup_dir / f"{rel.name}.{time.strftime('%Y%m%d-%H%M%S')}"
+            while dest_backup.exists():
+                dest_backup = dest_backup.with_name(dest_backup.name + "x")
+            print(f"  backup {dest} -> {dest_backup}")
             shutil.move(str(dest), str(dest_backup))
     print(f"  link  {dest} -> {tracked}")
     if not check:
@@ -384,11 +416,18 @@ def install_profiles(home: Path, *, only: set[str] | None, force: bool, check: b
         settings = read_settings(settings_file)
         profile_home = home / "profiles" / name
         print(f"profile {name} -> {profile_home}")
-        apply_settings(profile_home, settings, force=force, check=check)
+        # Provision the named profile home before `hermes config set` needs it:
+        # on a genuinely fresh install the profiles/ directory does not exist yet.
+        if not check:
+            profile_home.mkdir(parents=True, exist_ok=True)
+        # Link tracked files before applying settings: `hermes config set`
+        # bootstraps a default SOUL.md on a fresh profile home, which would
+        # otherwise look like a user override and fail the unforced install.
         backup_dir = profile_home / "backups" / "dotfiles"
         files = tracked_profile_files(profile)
         for rel, tracked in files:
             link_profile_path(profile_home, rel, tracked, force=force, check=check, backup_dir=backup_dir)
+        apply_settings(profile_home, settings, force=force, check=check)
         if check:
             continue
         exe = hermes_bin()
