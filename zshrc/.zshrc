@@ -488,3 +488,7 @@ unset kubeconfigs f
 
 # kimi-code
 export PATH="$HOME/.kimi-code/bin:$PATH"
+
+
+# Added by Antigravity CLI installer
+export PATH="/home/linroot/.local/bin:$PATH"
