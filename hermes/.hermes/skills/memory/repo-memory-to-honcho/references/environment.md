@@ -43,3 +43,13 @@ This is a template, not a self-contained command: supply only verified non-secre
 The materialization pitfall was supplied by the operator's validated kube-lvl47 workflow. Local inspection confirmed the installed SDK constructor and `peer` API, and the plugin's observer-scoped creation and card-writing paths. Other plugin versions may fix target creation; explicit get-or-create remains a safe prerequisite within authorized ingestion.
 
 The plugin's `list_conclusions` uses a default limit of twenty and resolves conclusions through an observer's `conclusions_of(target)`. For complete readback, inspect the installed SDK and plugin before selecting pagination or observer scope; never assume a global target-only collection.
+
+Working full readback (validated 2026-11-10 on `yt-downloader`, SDK 2.8.0, 24 conclusions):
+
+```python
+obs = client.peer('<current-ai-peer>')   # e.g. 'hermes-main'
+page = obs.conclusions_of('<repo>').list(page=1, size=100)
+items = list(page.items)                 # page.total gives the server count
+```
+
+The plugin can redact numeric literals in stored text (submitting `ACCESS_TOKEN_EXPIRE_MINUTES = 60*24*7` stores `ACCESS_TOKEN_EXPIRE_MINUTES=***`), but redaction is pattern-dependent - assignment-like expressions have been redacted while plain prose numbers in comparable conclusions survived untouched. Verify against stored content and match submitted-vs-stored one-to-one by similarity ratio, not equality, so either case passes.

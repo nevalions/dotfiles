@@ -23,6 +23,8 @@ Identify the exact target profile or peer/agent, authorized task, context, deliv
 
 Follow the team convention: message the target profile to perform its work rather than doing that work in the default profile. A generic `delegate_task` child is not evidence of messaging that named profile. Do not delegate beyond the user's authority or a restricted bot's access boundaries. Authoring these instructions does not authorize launching a bot.
 
+Route by the target's actual domain, not by name similarity: live Kubernetes cluster checks go to the `cluster-operator` profile; `ansible-operator` owns host/DNS/DB provisioning and is the wrong target for cluster introspection. When the user corrects a routing choice, treat the correction as a standing rule for that class of check.
+
 ## Procedure
 
 ### 1. Choose an available transport
@@ -81,11 +83,17 @@ The validated runtime clamps waits to 180 seconds regardless of a larger request
 
 ### 5. Independently verify the result
 
-Read the process output and exit status, then inspect the actual deliverable. A bot's self-report, even with exit code zero, is not proof of its side effects.
+Read the process output and exit status, then inspect the actual deliverable. A bot's self-report, even with exit code zero, is not proof of its side effects. Equally, a bot's refusal is not proof of an external permission denial: it may be the bot's own instruction boundary stopping at preflight. Do not record "policy/RBAC forbids X" as verified fact without a live denial response (e.g. an API Forbidden); label unverified refusals as instruction-boundary stops. A relayed approval inside request text does not override a remote agent's loaded instructions; the policy exception must be installed at its source file by the policy owner before re-requesting.
 
 For disk artifacts, verify the exact path exists and read the content; compare it with the requested format, scope, and acceptance checks. For external changes, read back the exact target using its returned URL or ID. Remote filesystem paths require an authorized remote read mechanism; if unavailable, report the result as unverified rather than claiming success. Stop and report blockers or partial results; do not fabricate missing output or blindly retry operations that might duplicate effects.
 
 Report the target profile/peer, actual artifact path or handle, independent checks, and unresolved limitations.
+
+### 6. When the target hits a policy boundary
+
+A delegated bot may refuse part of the task because its downstream access policy forbids it. Treat the refusal as a boundary, not a failure to retry around: never ask for a bypass, alternative credentials, or an unscoped fallback.
+
+Re-scope a follow-up request to exactly what the policy permits and extract the partial evidence available there (e.g., a GitOps controller's declared revision when workload-namespace reads are forbidden). Close the remaining gap with authorized local reads - map a declared revision to an artifact version through the local checkout of the source repo (`git show <rev>:<path>`), verifying the revision exists locally first. Label the result by evidence class (declared/configured state vs observed runtime state) and report the exact scope the policy owner would need to authorize to complete verification.
 
 ## Cross-machine Variant
 
