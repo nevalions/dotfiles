@@ -77,11 +77,22 @@ A combined success is insufficient: verify every expected required context/workf
 
 One read-only monitor owns polling; the Git worker owns mutations. Wait at most 60 seconds, refresh evidence after each wait, and report meaningful changes/completion/blockers. Avoid duplicate monitors/unchanged updates. Handoff records checked SHA, context results, workflow events and run IDs/links; add to Beads notes when tracking is authorized.
 
+## Memory and knowledge routing
+
+- **Honcho:** cross-session user context and recalled repository context. Query relevant peers only; prefer targeted context reads or search before reasoned chat. Use recalled claims for orientation and verify freshness against current evidence.
+- **Beads:** authoritative task state, dependencies, blockers, handoffs and durable task lessons. Remembered completion never substitutes for issue state or completion evidence.
+- **LLM wiki:** reviewed, source-cited knowledge, explanations and synthesis at `/home/linroot/vault/linroot-wiki-code`. Read its `AGENTS.md` and `SCHEMA.md`, then `RW/index.md` and relevant pages. Ingest or maintain it only when requested.
+- **Versioned skills and instructions:** repeatable procedures and standing policy.
+
+Avoid copying the same material into every store; link to its authoritative source. Current instructions and verified evidence outrank recalled summaries. Never store secrets in memory or the wiki.
+
+Honcho defaults to recall only unless the user authorizes recording. For authorized recording, follow the server instructions, reuse stable peer IDs and keep each coherent conversation in one session. Memory tools alone do not guarantee automatic capture or synchronization.
+
 ## Beads tracking
 
-Use `bd` for all task tracking/durable project memory, never markdown TODOs/ad hoc memory files. Claude, Codex and Hermes share the canonical `~/.agents/skills/beads/SKILL.md`; follow its unique session actor, atomic claim and shared-worktree rules. A user request to skip tracking means no issue writes. Read the `beads` skill at `.agents/skills/beads/SKILL.md` or `~/.agents/skills/beads/SKILL.md`; a separately installed global skill may be at `~/.codex/skills/beads/SKILL.md`. Per-repo data lives in `.beads/`; if absent, `bd init` before agreed tracking. Ask before starting/resuming whether to create a new issue or update an existing one, unless already chosen/authorized this session. When agreed, create/update and claim before work, then append progress notes.
+Use `bd` for task tracking, task handoffs and durable task lessons, never markdown TODOs or ad hoc files for task tracking. Claude, Codex and Hermes share the canonical `~/.agents/skills/beads/SKILL.md`; follow its unique session actor, atomic claim and shared-worktree rules. A user request to skip tracking means no issue writes. Read the `beads` skill at `.agents/skills/beads/SKILL.md` or `~/.agents/skills/beads/SKILL.md`; a separately installed global skill may be at `~/.codex/skills/beads/SKILL.md`. Per-repo data lives in `.beads/`; if absent, `bd init` before agreed tracking. Ask before starting/resuming whether to create a new issue or update an existing one, unless already chosen/authorized this session. When agreed, create/update and claim before work, then append progress notes.
 
-Run `bd prime` when context is missing/stale. Native hooks may load it on Codex 0.129.0+; inspect/toggle with `/hooks`. Descriptions/notes are plain text/Markdown, no HTML. Persistent knowledge uses `bd remember`. Priorities `-p 0..4`: urgent, high, medium, low, trivial (0 highest).
+Run `bd prime` when context is missing/stale. Native hooks may load it on Codex 0.129.0+; inspect/toggle with `/hooks`. Descriptions/notes are plain text/Markdown, no HTML. Persistent task lessons use `bd remember`. Priorities `-p 0..4`: urgent, high, medium, low, trivial (0 highest).
 
 Commands: `bd ready`; `bd show <id>`; `bd create "<title>" -p <0-4> -l <labels> -d <desc> --acceptance <ac>`; `bd update <id> --claim`; `bd update <id> --append-notes <text>`; `bd list --status open --json`; `bd close <id>`.
 
