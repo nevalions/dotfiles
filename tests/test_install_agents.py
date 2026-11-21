@@ -127,6 +127,23 @@ class UnifiedTests(unittest.TestCase):
         self.assertFalse((target / '.codex').is_symlink())
         self.assertFalse(self.home.exists())
 
+    def test_pi_links_only_instructions_without_folding(self):
+        self.copy_package('pi')
+        agent = self.home / '.pi/agent'
+        args = ['--tools', 'pi']
+        result = self.run_install(*args, '--check')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.home.exists())
+        for _ in range(2):
+            result = self.run_install(*args)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        instructions = agent / 'AGENTS.md'
+        self.assertTrue(instructions.is_symlink())
+        self.assertEqual(instructions.resolve(), self.repo / 'pi/.pi/agent/AGENTS.md')
+        self.assertFalse(agent.is_symlink())
+        self.assertFalse(agent.parent.is_symlink())
+        self.assertEqual(list(agent.iterdir()), [instructions])
+
     def test_named_settings_native_cli_after_conflicts_and_no_check_writes(self):
         self.copy_package('hermes')
         (self.profile / 'config.base.yaml').write_text('model.default: reviewed\nagent.reasoning_effort: medium\n')

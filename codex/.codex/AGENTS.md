@@ -79,9 +79,9 @@ One read-only monitor owns polling; the Git worker owns mutations. Wait at most 
 
 ## Memory and knowledge routing
 
-- **Honcho:** cross-session user context and recalled repository context. Query relevant peers only; prefer targeted context reads or search before reasoned chat. Use recalled claims for orientation and verify freshness against current evidence.
+- **Honcho:** For cross-session context, explicitly query `linroot` for user preferences or the named repository peer (e.g. `kube-lvl47`) for repo context. Recall is not automatically injected. Prefer targeted context reads or search before reasoned chat. Verify remembered claims against current docs, issue state, or live evidence.
 - **Beads:** authoritative task state, dependencies, blockers, handoffs and durable task lessons. Remembered completion never substitutes for issue state or completion evidence.
-- **LLM wiki:** reviewed, source-cited knowledge, explanations and synthesis at `/home/linroot/vault/linroot-wiki-code`. Read its `AGENTS.md` and `SCHEMA.md`, then `RW/index.md` and relevant pages. Ingest or maintain it only when requested.
+- **LLM wiki:** For prior research, decisions, or documented procedures, use `wiki-skill` at `/home/linroot/vault/linroot-wiki-code`. Read `AGENTS.md`, `SCHEMA.md`, and `RW/index.md` before opening relevant pages. Lookups are read-only; ingest or edit only when requested. Never write to `RO/`.
 - **Versioned skills and instructions:** repeatable procedures and standing policy.
 
 Avoid copying the same material into every store; link to its authoritative source. Current instructions and verified evidence outrank recalled summaries. Never store secrets in memory or the wiki.

@@ -19,8 +19,9 @@ def deploy_defaults(tools, target, *, check, skip_plugins):
     env = dict(os.environ, HOME=str(target), CODEX_HOME=str(target / '.codex'),
                HERMES_HOME=str(target / '.hermes'))
     for tool in tools:
-        if tool == 'claude':
-            cmd = ['stow', '--dir', str(REPO), '--target', str(target), 'openclaude', 'claude-skills']
+        if tool in ('claude', 'pi'):
+            cmd = ['stow', '--dir', str(REPO), '--target', str(target)]
+            cmd += ['openclaude', 'claude-skills'] if tool == 'claude' else ['--no-folding', 'pi']
             if check:
                 cmd.append('--simulate')
         else:
@@ -35,7 +36,7 @@ def deploy_defaults(tools, target, *, check, skip_plugins):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--tools', nargs='+', choices=('claude', 'codex', 'hermes'), required=True)
+    parser.add_argument('--tools', nargs='+', choices=('claude', 'codex', 'hermes', 'pi'), required=True)
     parser.add_argument('--profiles', nargs='+', default=[])
     parser.add_argument('--target', type=Path, default=Path.home())
     parser.add_argument('--check', action='store_true')

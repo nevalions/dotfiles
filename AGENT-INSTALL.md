@@ -7,8 +7,8 @@ downloaded by the installer itself; plugin commands may access the network.
 
 ```sh
 # Select tools explicitly; there is no implicit "install everything" mode.
-python3 install-agents.py --tools claude codex hermes --check
-python3 install-agents.py --tools claude codex hermes --skip-plugins
+python3 install-agents.py --tools claude codex hermes pi --check
+python3 install-agents.py --tools claude codex hermes pi --skip-plugins
 
 # Named Hermes packages instead of the default Hermes package:
 python3 install-agents.py --tools hermes --profiles dotfiles-sync --check
@@ -39,6 +39,8 @@ authoritative. Named profile settings commands set `HERMES_HOME` to exactly
   It now rejects unsupported home layouts before settings/SOUL writes and
   preflights Stow conflicts before applying settings. Named packages are
   excluded from the default Stow package.
+
+- **Pi:** links only `~/.pi/agent/AGENTS.md`, without folding `.pi` or `.pi/agent` into symlinks. MCP config, OAuth and provider credentials, settings, skills, extensions, and sessions remain local. If a real `AGENTS.md` already exists, compare it against `pi/.pi/agent/AGENTS.md` and move it to a backup before installing. Reload Pi afterward.
 
 `--skip-plugins` forwards to Codex and default Hermes. It suppresses plugin
 activation, not linking of tracked plugin files. Named profiles do not deploy
