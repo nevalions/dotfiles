@@ -1,4 +1,5 @@
 import contextlib
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -7,6 +8,7 @@ import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 import unittest
+from unittest.mock import patch
 
 GATEWAY = Path(__file__).resolve().parents[1] / "pi/.pi/agent/honcho-cli/gateway.py"
 SCOPE = dict(workspace_id="pi-test", peer_id="pi-test-observer",
@@ -82,6 +84,53 @@ def fixture():
 
 
 class PublisherTest(unittest.TestCase):
+    def test_tailnet_http_is_exact_opt_in(self):
+        spec = importlib.util.spec_from_file_location("pi_honcho_gateway", GATEWAY)
+        gateway = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gateway)
+        with fixture() as (grant, writes):
+            data = json.loads(grant.read_text())
+            with patch.object(gateway, "require_tailnet_route") as route:
+                for url, options in (
+                    (gateway.TAILNET_URL, {}),
+                    (gateway.TAILNET_URL, {"allow_tailnet_http": "true"}),
+                    ("http://100.64.0.17:18080/mcp", {"allow_tailnet_http": True}),
+                    (gateway.TAILNET_URL + "?x=1", {"allow_tailnet_http": True}),
+                ):
+                    with self.subTest(url=url, options=options):
+                        grant.write_text(json.dumps({**data, "url": url, **options}))
+                        with self.assertRaises(ValueError):
+                            gateway.load_grant(str(grant))
+                route.assert_not_called()
+                grant.write_text(json.dumps({**data, "url": gateway.TAILNET_URL,
+                                            "allow_tailnet_http": True}))
+                _, upstream = gateway.load_grant(str(grant))
+                route.assert_called_once()
+                route.side_effect = gateway.Denied("route changed")
+                with patch.object(upstream.opener, "open") as send:
+                    with self.assertRaises(gateway.Denied):
+                        upstream.rpc("initialize", {})
+                    send.assert_not_called()
+            self.assertEqual(writes, [])
+
+    def test_tailnet_route_fails_closed(self):
+        spec = importlib.util.spec_from_file_location("pi_honcho_gateway", GATEWAY)
+        gateway = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gateway)
+        with patch.object(gateway.subprocess, "run") as run:
+            for response in (b'[{"dev":"eth0"}]', b'[]', b'not json', b'[null]'):
+                run.return_value.stdout = response
+                with self.assertRaises(gateway.Denied):
+                    gateway.require_tailnet_route()
+            run.side_effect = OSError("missing ip")
+            with self.assertRaises(gateway.Denied):
+                gateway.require_tailnet_route()
+            run.side_effect = None
+            run.return_value.stdout = b'[{"dev":"tailscale0"}]'
+            gateway.require_tailnet_route()
+            run.assert_called_with(["/usr/bin/ip", "-j", "route", "get", gateway.TAILNET_HOST],
+                                   capture_output=True, check=True, timeout=2)
+
     def test_gateway_roundtrip(self):
         with fixture() as (grant, writes), subprocess.Popen(
             [sys.executable, GATEWAY, grant], text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,

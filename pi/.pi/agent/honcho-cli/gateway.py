@@ -3,12 +3,15 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 SCOPE = ("workspace_id", "peer_id", "target_peer_id", "session_id", "task")
+TAILNET_HOST = "100.64.0.16"
+TAILNET_URL = f"http://{TAILNET_HOST}:18080/mcp"
 LIMIT = 1024 * 1024
 ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}")
 PROTOCOLS = {"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}
@@ -32,22 +35,43 @@ def private_text(path):
         return data
 
 
+def require_tailnet_route():
+    try:
+        result = subprocess.run(
+            ["/usr/bin/ip", "-j", "route", "get", TAILNET_HOST],
+            capture_output=True, check=True, timeout=2,
+        )
+        routes = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        routes = None
+    if (not isinstance(routes, list) or len(routes) != 1
+            or not isinstance(routes[0], dict)
+            or routes[0].get("dev") != "tailscale0"):
+        raise Denied("Honcho tailnet HTTP requires an active route through tailscale0.")
+
+
 def load_grant(path):
     data = json.loads(private_text(path))
-    if set(data) != {"url", "token_file", "scope"}:
+    required = {"url", "token_file", "scope"}
+    if not isinstance(data, dict) or not required <= data.keys() <= required | {"allow_tailnet_http"}:
         raise ValueError("invalid grant")
+    tailnet = data.get("allow_tailnet_http", False)
+    if not isinstance(tailnet, bool) or (tailnet and data["url"] != TAILNET_URL):
+        raise ValueError("invalid tailnet HTTP opt-in")
     scope = data["scope"]
     if set(scope) != set(SCOPE) or not all(isinstance(v, str) and ID.fullmatch(v) for v in scope.values()):
         raise ValueError("invalid scope")
     url = urlsplit(data["url"])
     if (not url.hostname or url.username or url.password or url.fragment or url.query
             or not (url.scheme == "https" or
-                    (url.scheme == "http" and url.hostname in {"127.0.0.1", "::1"}))):
-        raise ValueError("Honcho needs HTTPS or an explicit numeric loopback endpoint")
+                    (url.scheme == "http" and url.hostname in {"127.0.0.1", "::1"}) or tailnet)):
+        raise ValueError("Honcho needs HTTPS, loopback HTTP, or explicit tailnet HTTP opt-in")
+    if tailnet:
+        require_tailnet_route()
     token = private_text(data["token_file"]).strip()
     if not re.fullmatch(r"[!-~]{1,4096}", token):
         raise ValueError("invalid bearer token")
-    return scope, Honcho(data["url"], token, scope["workspace_id"])
+    return scope, Honcho(data["url"], token, scope["workspace_id"], tailnet=tailnet)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -56,8 +80,9 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 class Honcho:
-    def __init__(self, url, token, workspace):
+    def __init__(self, url, token, workspace, *, tailnet=False):
         self.url = url
+        self.tailnet = tailnet
         self.headers = {
             "Authorization": f"Bearer {token}",
             "X-Honcho-Workspace-ID": workspace,
@@ -69,6 +94,8 @@ class Honcho:
         self.ready = False
 
     def rpc(self, method, params, notification=False):
+        if self.tailnet:
+            require_tailnet_route()
         message = {"jsonrpc": "2.0", "method": method, "params": params}
         if not notification:
             self.sequence += 1
@@ -190,6 +217,8 @@ def dispatch(request, scope, upstream):
 def main():
     try:
         scope, upstream = load_grant(sys.argv[1])
+    except Denied as exc:
+        sys.exit(f"Honcho publisher: {exc}")
     except (IndexError, OSError, ValueError, TypeError):
         sys.exit("Honcho publisher: invalid or unreadable private grant.")
     while line := sys.stdin.buffer.readline(LIMIT + 1):

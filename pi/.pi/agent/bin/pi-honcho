@@ -9,6 +9,9 @@ case "${1-}" in
   /*) PI_HONCHO_PUBLISH_GRANT=$1; shift ;;
   *) printf '%s\n' 'pi-honcho: supply an absolute grant path.' >&2; exit 2 ;;
 esac
-test -r "$PI_HONCHO_PUBLISH_GRANT"
+if [ ! -r "$PI_HONCHO_PUBLISH_GRANT" ]; then
+  printf '%s\n' 'pi-honcho: grant file is missing or unreadable.' >&2
+  exit 1
+fi
 export PI_HONCHO_PUBLISH_GRANT
 exec "$agent/bin/$launcher" --extension "$agent/honcho-cli/publisher.ts" "$@"
