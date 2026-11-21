@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+agent_dir=$HOME/.pi/agent
+if ! IFS= read -r version < "$agent_dir/install/current-version"; then
+  printf '%s\n' 'pi-team: could not read the managed Pi version.' >&2
+  exit 1
+fi
+case "$version" in
+  ''|.|..|*[!0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz._+-]*)
+    printf '%s\n' 'pi-team: invalid managed Pi version.' >&2
+    exit 1 ;;
+esac
+examples=$agent_dir/install/releases/$version/node_modules/@earendil-works/pi-coding-agent/examples/extensions
+subagent=$examples/subagent/index.ts
+todo=$examples/todo.ts
+policy=$agent_dir/team/workflow.md
+if [ ! -r "$subagent" ] || [ ! -r "$todo" ] || [ ! -r "$policy" ] || [ ! -d "$agent_dir/agents" ]; then
+  printf '%s\n' 'pi-team: missing bundled subagent or todo example, workflow policy, or role definitions.' >&2
+  exit 1
+fi
+exec "$agent_dir/bin/pi" --extension "$subagent" --extension "$todo" --append-system-prompt "$policy" "$@"

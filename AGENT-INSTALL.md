@@ -40,9 +40,11 @@ authoritative. Named profile settings commands set `HERMES_HOME` to exactly
   preflights Stow conflicts before applying settings. Named packages are
   excluded from the default Stow package.
 
-- **Pi:** links `~/.pi/agent/AGENTS.md` and the managed `extensions/provider-usage.ts` without folding directories into symlinks. MCP config, OAuth and provider credentials, settings, skills, other extensions, and sessions remain local. Compare any existing real files with the package and move them to a backup before installing. Reload Pi afterward.
+- **Pi:** links `~/.pi/agent/AGENTS.md`, the managed `extensions/provider-usage.ts`, and the opt-in `pi-team` launcher, role files, and workflow docs without folding directories into symlinks. MCP config, OAuth and provider credentials, settings, skills, other extensions, and sessions remain local. Compare any existing real files with the package and move them to a backup before installing. Reload Pi afterward.
 
 The Pi usage extension keeps the native session usage display for all providers. With `openai-codex` selected, it adds any available 5-hour and weekly quota windows from the authenticated **Codex CLI account**, which can differ from Pi’s login. It refreshes on startup, model selection, and after agent turns (at most once per minute), or on demand with `/usage-quota`. Other providers and unavailable windows are omitted. It does not read credential files or make model requests.
+
+Run `pi-team --model jev/auto` for delegated coding with a session checklist and no routine plan-approval pauses. The wrapper alone loads the subagent and todo extensions; plain `pi` and applications that launch it are unaffected. Repository implementation requires `bd`, an existing issue, and the repo's documented sync procedure. Verify extension discovery with `/todos` in `pi-team` and tracker discovery with `bd where --json` from the task checkout. Tracker writes still require authorization. See the [Pi team runbook](pi/.pi/agent/team/README.md) and the [unattended factory plan](pi/.pi/agent/team/factory-plan.md). This installs an interactive team, not a dispatcher.
 
 `--skip-plugins` forwards to Codex and default Hermes. It suppresses plugin
 activation, not linking of tracked plugin files. Named profiles do not deploy
