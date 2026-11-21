@@ -127,7 +127,7 @@ class UnifiedTests(unittest.TestCase):
         self.assertFalse((target / '.codex').is_symlink())
         self.assertFalse(self.home.exists())
 
-    def test_pi_links_only_instructions_without_folding(self):
+    def test_pi_links_managed_files_without_folding(self):
         self.copy_package('pi')
         agent = self.home / '.pi/agent'
         args = ['--tools', 'pi']
@@ -142,7 +142,12 @@ class UnifiedTests(unittest.TestCase):
         self.assertEqual(instructions.resolve(), self.repo / 'pi/.pi/agent/AGENTS.md')
         self.assertFalse(agent.is_symlink())
         self.assertFalse(agent.parent.is_symlink())
-        self.assertEqual(list(agent.iterdir()), [instructions])
+        extensions = agent / 'extensions'
+        usage = extensions / 'provider-usage.ts'
+        self.assertFalse(extensions.is_symlink())
+        self.assertTrue(usage.is_symlink())
+        self.assertEqual(usage.resolve(), self.repo / 'pi/.pi/agent/extensions/provider-usage.ts')
+        self.assertEqual(set(agent.iterdir()), {instructions, extensions})
 
     def test_named_settings_native_cli_after_conflicts_and_no_check_writes(self):
         self.copy_package('hermes')

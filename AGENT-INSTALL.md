@@ -40,7 +40,9 @@ authoritative. Named profile settings commands set `HERMES_HOME` to exactly
   preflights Stow conflicts before applying settings. Named packages are
   excluded from the default Stow package.
 
-- **Pi:** links only `~/.pi/agent/AGENTS.md`, without folding `.pi` or `.pi/agent` into symlinks. MCP config, OAuth and provider credentials, settings, skills, extensions, and sessions remain local. If a real `AGENTS.md` already exists, compare it against `pi/.pi/agent/AGENTS.md` and move it to a backup before installing. Reload Pi afterward.
+- **Pi:** links `~/.pi/agent/AGENTS.md` and the managed `extensions/provider-usage.ts` without folding directories into symlinks. MCP config, OAuth and provider credentials, settings, skills, other extensions, and sessions remain local. Compare any existing real files with the package and move them to a backup before installing. Reload Pi afterward.
+
+The Pi usage extension keeps the native session usage display for all providers. With `openai-codex` selected, it adds any available 5-hour and weekly quota windows from the authenticated **Codex CLI account**, which can differ from Pi’s login. It refreshes on startup, model selection, and after agent turns (at most once per minute), or on demand with `/usage-quota`. Other providers and unavailable windows are omitted. It does not read credential files or make model requests.
 
 `--skip-plugins` forwards to Codex and default Hermes. It suppresses plugin
 activation, not linking of tracked plugin files. Named profiles do not deploy
