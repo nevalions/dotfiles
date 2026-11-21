@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+agent=$HOME/.pi/agent
+case "${1-}" in
+  pi|pi-team) launcher=$1; shift ;;
+  *) printf '%s\n' 'Usage: pi-honcho {pi|pi-team} /absolute/path/to/grant.json [Pi args...]' >&2; exit 2 ;;
+esac
+case "${1-}" in
+  /*) PI_HONCHO_PUBLISH_GRANT=$1; shift ;;
+  *) printf '%s\n' 'pi-honcho: supply an absolute grant path.' >&2; exit 2 ;;
+esac
+test -r "$PI_HONCHO_PUBLISH_GRANT"
+export PI_HONCHO_PUBLISH_GRANT
+exec "$agent/bin/$launcher" --extension "$agent/honcho-cli/publisher.ts" "$@"

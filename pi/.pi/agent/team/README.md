@@ -10,7 +10,7 @@ Only the wrapper loads the extensions. Do not add them to Pi's discovered extens
 
 Repository implementation tasks need a Beads issue and an authorized claim. Beads owns task state; `/todos` only reflects the current session. Follow the repo's existing sync procedure and don't close an issue until its definition of done is verified. Tracker changes and remote publication still require authorization.
 
-A worktree separates changes, not OS privileges: the worker has shell access and runs with the host user's permissions. Do not run this setup as an unattended service. There is no durable dispatcher, enforced sandbox, automatic recovery, or delivery bot. See the [unattended factory plan](factory-plan.md) for the implementation and pilot gates. Honcho remains recall-only; no automated wiki update is configured.
+A worktree separates changes, not OS privileges: the worker has shell access and runs with the host user's permissions. Do not run this setup as an unattended service. There is no durable dispatcher, enforced sandbox, automatic recovery, or delivery bot. See the [unattended factory plan](factory-plan.md) for the implementation and pilot gates. Honcho is recall-only by default; see the [operator opt-in](../honcho-cli/README.md) for verified publishing from the coordinator. No automated wiki update is configured.
 
 ## Roles
 

@@ -148,16 +148,19 @@ class UnifiedTests(unittest.TestCase):
         self.assertTrue(usage.is_symlink())
         self.assertEqual(usage.resolve(), self.repo / 'pi/.pi/agent/extensions/provider-usage.ts')
         self.assertEqual(set(extensions.iterdir()), {usage})
-        for rel in ('bin/pi-team', 'agents/scout.md', 'agents/planner.md',
+        for rel in ('bin/pi-team', 'bin/pi-honcho', 'agents/scout.md', 'agents/planner.md',
                     'agents/worker.md', 'agents/reviewer.md', 'team/README.md',
-                    'team/workflow.md', 'team/factory-plan.md'):
+                    'team/workflow.md', 'team/factory-plan.md', 'honcho-cli/publisher.ts',
+                    'honcho-cli/gateway.py', 'honcho-cli/README.md'):
             link = agent / rel
             self.assertFalse(link.parent.is_symlink())
             self.assertTrue(link.is_symlink())
             self.assertEqual(link.resolve(), self.repo / 'pi/.pi/agent' / rel)
-        self.assertTrue(os.access(agent / 'bin/pi-team', os.X_OK))
+        for launcher in ('pi-team', 'pi-honcho'):
+            self.assertTrue(os.access(agent / 'bin' / launcher, os.X_OK))
         self.assertEqual(set(agent.iterdir()), {
             instructions, extensions, agent / 'bin', agent / 'agents', agent / 'team',
+            agent / 'honcho-cli',
         })
 
     def test_named_settings_native_cli_after_conflicts_and_no_check_writes(self):
