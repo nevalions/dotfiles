@@ -1,0 +1,15 @@
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import sys
+
+
+revision = "010d9f202122d168dcc598c492317a9d8c8c3945"
+shim = Path.home() / ".local/lib/alacritty-egl-wayland" / revision / "lib/libalacritty-egl-preload.so"
+environment = os.environ.copy()
+if environment.get("WAYLAND_DISPLAY") and environment.get("WINIT_UNIX_BACKEND") != "x11" and shim.is_file():
+    previous = environment.get("LD_PRELOAD", "")
+    environment["_ALACRITTY_EGL_PRELOAD_WAS_SET"] = "1" if "LD_PRELOAD" in environment else "0"
+    environment["_ALACRITTY_EGL_RESTORE_PRELOAD"] = previous
+    environment["LD_PRELOAD"] = str(shim) + (":" + previous if previous else "")
+os.execve("/usr/bin/alacritty", ["alacritty", *sys.argv[1:]], environment)
