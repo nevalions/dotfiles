@@ -10,7 +10,7 @@
 
 ## Boundaries and Guarantees
 
-- **Interactive continuation**: the coordinator starts `monitor` immediately after publishing and continues authorized work on success. `monitor` queries Forgejo and records a successful PR CI checkpoint when attached to a run. The separate journal watcher still only emits reminders; neither command merges, deploys, or starts a coordinator after exit. Use only sanitized locators and reminders: never include tokens, raw logs, or private transcripts in command arguments, state, or journal notices.
+- **Interactive continuation**: the coordinator starts `monitor` immediately after publishing and continues authorized work on success. `monitor` queries Forgejo and records a successful PR CI checkpoint when attached to a run. Add `--queue` to the same command to register a durable PR wait on git.butakov.su and return immediately. The enabled systemd user watcher polls that wait independently of Pi and records success against its exact generation and SHA. Neither command merges, deploys, or starts a coordinator after exit. Post-merge monitoring remains interactive. Use only sanitized locators and reminders: never include tokens, raw logs, or private transcripts in command arguments, state, or journal notices.
 - **Local private XDG state**: State is stored in `${XDG_STATE_HOME:-~/.local/state}/pi-team-run/state.db` (`0700` directory, `0600` database file), gated by `PRAGMA user_version = 1`. Unknown schema versions are rejected.
 - **One active run per repository**: Enforced transactionally via SQLite (`BEGIN IMMEDIATE` + partial unique index on `repo_key` for `active`/`waiting` runs). Terminal runs (`completed`, `cancelled`) free the repository key.
 - **No remote state sync or cross-host takeover**: State belongs strictly to the local host and XDG user state directory. There is no automatic authority transfer or distributed lock.
@@ -93,10 +93,11 @@ The ledger works without a model or systemd. Outside systemd, run `~/.pi/agent/b
 
 ## Opt-in Systemd Watch Timer
 
-The `pi` stow package provides user units at `~/.config/systemd/user/pi-team-watch.{service,timer}` running `pi-team-run watch` every 5 minutes. They remain disabled until explicitly enabled:
+The `pi` stow package provides user units at `~/.config/systemd/user/pi-team-watch.{service,timer}` running `pi-team-run watch` every 30 seconds. They remain disabled until explicitly enabled:
 
 ```bash
 systemctl --user daemon-reload
 systemctl --user enable --now pi-team-watch.timer
+systemctl --user restart pi-team-watch.timer
 journalctl --user -u pi-team-watch.service -f
 ```

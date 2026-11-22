@@ -682,7 +682,14 @@ def check_required(statuses: list, required: list[str]) -> tuple[list[str], list
     return waiting, failed
 
 
+WATCH_PREFIX = 'forgejo-ci-v1:'
+
+
 def cmd_monitor(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    queue = getattr(args, 'queue', False)
+    once = getattr(args, 'once', False)
+    if queue and (not args.run_id or args.pr is None or args.host != 'git.butakov.su'):
+        raise CliError('--queue requires --run-id, --pr and the configured git.butakov.su host')
     rev = validate_full_rev(args.rev)
     host = urlsplit(f'https://{args.host}')
     if host.netloc != args.host or not re.fullmatch(r'[A-Za-z0-9.-]+(?::[0-9]+)?', args.host):
@@ -696,10 +703,13 @@ def cmd_monitor(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     if not 1 <= args.interval <= 120 or not 1 <= args.timeout <= 7200:
         raise CliError('interval must be 1–120 seconds and timeout 1–7200 seconds')
     required = sorted(set(args.require))
-    if any(not name.strip() or len(name) > 256 or not name.isprintable() for name in required):
+    if not required or any(not name.strip() or len(name) > 256 or not name.isprintable() for name in required):
         raise CliError('invalid required check context')
     scope = sha256(json.dumps([args.host, args.repo, args.pr, required]).encode()).hexdigest()
     reason = f'Forgejo {args.repo} PR {args.pr} monitor:{scope}'
+    queued_reason = WATCH_PREFIX + json.dumps([args.repo, args.pr, required], separators=(',', ':'))
+    if queue:
+        reason = queued_reason
     deadline = utc_now() + timedelta(seconds=args.timeout)
     generation = None
     if args.run_id:
@@ -709,6 +719,9 @@ def cmd_monitor(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
             run = fetch_run(conn, args.run_id)
             require_writable_stage(run, 'ci')
             existing = fetch_active_wait(conn, args.run_id)
+        watch_generation = getattr(args, 'watch_generation', None)
+        if watch_generation is not None and (existing is None or existing['generation'] != watch_generation):
+            raise CliError('queued CI wait was superseded')
         if existing is None:
             cmd_wait(argparse.Namespace(run_id=args.run_id, stage='ci', target='ci', rev=rev,
                                       deadline=format_utc(deadline), reason=reason,
@@ -716,10 +729,14 @@ def cmd_monitor(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
             with open_read_only(db_path) as conn:
                 existing = fetch_active_wait(conn, args.run_id)
         if (existing is None or existing['target'] != 'ci' or existing['expected_rev'] != rev
-                or existing['reason'] != reason):
+                or (existing['reason'] != reason and not (
+                    not queue and args.host == 'git.butakov.su' and existing['reason'] == queued_reason
+                ))):
             raise CliError('active CI wait does not match this revision, PR and required check set')
         generation = existing['generation']
         deadline = min(deadline, parse_iso_utc(existing['deadline_at']))
+    if queue:
+        return 0, {'status': 'queued', 'revision': rev, 'checks': required, 'run_id': args.run_id}
 
     def check_head():
         if args.pr is None:
@@ -753,6 +770,8 @@ def cmd_monitor(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
             pass
         except (ValueError, TypeError, KeyError):
             raise CliError('invalid Forgejo response; required CI is unverified') from None
+        if once:
+            return 0, {'status': 'pending'}
         time.sleep(max(0, min(args.interval, (deadline - utc_now()).total_seconds())))
     raise CliError('CI monitoring deadline reached; required checks remain unverified')
 
@@ -788,13 +807,41 @@ def cmd_cancel(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     return 0, payload
 
 
+def poll_queued_ci(db_path: Path) -> tuple[list[dict], dict[int, str]]:
+    with open_read_only(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM waits WHERE target = 'ci' AND resolved_at IS NULL AND reason LIKE ? ORDER BY id",
+            (WATCH_PREFIX + '%',),
+        ).fetchall()
+    results = []
+    failures = {}
+    for row in rows:
+        if parse_iso_utc(row['deadline_at']) <= utc_now():
+            continue
+        try:
+            repo, pr, required = json.loads(row['reason'][len(WATCH_PREFIX):])
+            _, result = cmd_monitor(argparse.Namespace(
+                rev=row['expected_rev'], host='git.butakov.su', repo=repo, pr=pr, require=required,
+                run_id=row['run_id'], interval=1, timeout=30, once=True, queue=False,
+                watch_generation=row['generation'],
+            ), db_path)
+            if result['status'] == 'success':
+                results.append({'reason': 'ci_passed', 'run_id': row['run_id'], 'stage': 'ci',
+                                'expected_rev': row['expected_rev'], 'wait_generation': row['generation']})
+        except CliError as exc:
+            failures[row['id']] = str(exc)
+        except (ValueError, TypeError, AttributeError):
+            failures[row['id']] = 'invalid queued CI request'
+    return results, failures
+
+
 def cmd_watch(args: argparse.Namespace, db_path: Path) -> tuple[int, list[dict]]:
-    """Emit deduped JSON notices for due waits without advancing any run."""
+    """Poll queued CI and emit deduped JSON notices for due or failed waits."""
     if not db_path.exists():
         return 0, []
+    emitted, failures = poll_queued_ci(db_path)
     now_dt = utc_now()
     now_iso = format_utc(now_dt)
-    emitted: list[dict] = []
     with open_write_tx(db_path) as conn:
         pending = conn.execute(
             """
@@ -812,9 +859,13 @@ def cmd_watch(args: argparse.Namespace, db_path: Path) -> tuple[int, list[dict]]
         ).fetchall()
         for wait_row in pending:
             wait_target = wait_row['target']
-            if wait_row['deadline_at'] and now_dt < parse_iso_utc(wait_row['deadline_at']):
+            failure = failures.get(wait_row['id'])
+            if not failure and wait_row['deadline_at'] and now_dt < parse_iso_utc(wait_row['deadline_at']):
                 continue
-            if wait_target == 'ci':
+            if failure:
+                notice_target = 'coordinator'
+                reason = 'ci_unverified'
+            elif wait_target == 'ci':
                 notice_target = 'coordinator'
                 reason = 'ci_overdue'
             else:
@@ -830,7 +881,7 @@ def cmd_watch(args: argparse.Namespace, db_path: Path) -> tuple[int, list[dict]]
                 'reason': reason,
                 'expected_rev': wait_row['expected_rev'],
                 'deadline_at': wait_row['deadline_at'],
-                'wait_reason': wait_row['reason'],
+                'wait_reason': failure or wait_row['reason'],
                 'emitted_at': now_iso,
             }
             payload_json = json.dumps(notice, sort_keys=True)
@@ -910,7 +961,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ckpt.add_argument('--skip', action='store_true', help='Explicitly skip an optional stage')
     p_ckpt.add_argument('--note', help='Optional nonsecret note')
 
-    sub.add_parser('watch', parents=[common], help='Emit deduped JSON notices for due waits')
+    sub.add_parser('watch', parents=[common], help='Poll queued CI once and emit JSON notices')
 
     p_monitor = sub.add_parser('monitor', parents=[common], help='Poll required Forgejo CI on an exact revision')
     p_monitor.add_argument('repo', help='Forgejo owner/name')
@@ -921,6 +972,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_monitor.add_argument('--require', action='append', required=True, help='Exact required check context; repeat for each check')
     p_monitor.add_argument('--interval', type=int, default=15)
     p_monitor.add_argument('--timeout', type=int, default=900)
+    p_monitor.add_argument('--queue', action='store_true', help='Register a durable Forgejo PR wait for the watch service')
 
     p_cancel = sub.add_parser('cancel', parents=[common], help='Cancel a run at its current stage')
     p_cancel.add_argument('run_id', help='Run identifier')

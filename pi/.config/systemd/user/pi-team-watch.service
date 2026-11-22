@@ -1,5 +1,5 @@
 [Unit]
-Description=Emit best-effort pi-team-run wait and overdue CI notices to journal
+Description=Poll queued Forgejo CI and emit Pi Team wait notices
 
 [Service]
 Type=oneshot

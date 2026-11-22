@@ -86,6 +86,30 @@ class PiTeamRunTests(unittest.TestCase):
         self.assertEqual((code, result['status']), (0, 'success'))
         self.assertEqual(self.run_json('status', run_id)['current_stage'], 'integrate')
 
+    def test_background_watch_records_failure_then_success_without_coordinator(self) -> None:
+        run_id = self.run_json('start', str(self.repo_dir))['run_id']
+        for stage in ('admit', 'implement', 'check', 'review', 'commit', 'publish'):
+            self.run_json('checkpoint', run_id, stage, '--evidence', f'ev:{stage}')
+        queued = self.run_json('monitor', 'owner/repo', '--pr', '12', '--run-id', run_id,
+                               '--rev', SHA_A, '--require', 'build', '--queue')
+        self.assertEqual(queued['status'], 'queued')
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        watch = runpy.run_path(str(BIN_PATH))['cmd_watch']
+        pr = {'state': 'open', 'head': {'sha': SHA_A}}
+        status = {'sha': SHA_A, 'statuses': [{'context': 'build', 'status': 'pending'}]}
+        with patch.dict(watch.__globals__, {'forgejo_get': lambda _, __, path: pr if path.startswith('pulls/') else status}):
+            self.assertEqual(watch(None, db), (0, []))
+            status['statuses'][0]['status'] = 'failure'
+            self.assertEqual(watch(None, db)[1][0]['reason'], 'ci_unverified')
+            self.assertEqual(watch(None, db), (0, []))
+            status['statuses'][0]['status'] = 'success'
+            self.assertEqual(watch(None, db)[1][0]['reason'], 'ci_passed')
+            self.assertEqual(watch(None, db), (0, []))
+        final = self.run_json('status', run_id)
+        self.assertEqual(final['current_stage'], 'integrate')
+        self.assertEqual(final['checkpoints'][-1]['rev'], SHA_A)
+        self.assertEqual(final['notices'][0]['reason'], 'ci_unverified')
+
     def test_monitor_never_treats_missing_skipped_or_old_success_as_current(self) -> None:
         script = runpy.run_path(str(BIN_PATH))
         waiting, failed = script['check_required']([
