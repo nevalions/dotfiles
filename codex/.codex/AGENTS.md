@@ -81,12 +81,14 @@ One read-only monitor owns polling; the Git worker owns mutations. Wait at most 
 
 - **Honcho:** For cross-session context, explicitly query `linroot` for user preferences or the named repository peer (e.g. `kube-lvl47`) for repo context. Recall is not automatically injected. Prefer targeted context reads or search before reasoned chat. Verify remembered claims against current docs, issue state, or live evidence.
 - **Beads:** authoritative task state, dependencies, blockers, handoffs and durable task lessons. Remembered completion never substitutes for issue state or completion evidence.
-- **LLM wiki:** For prior research, decisions, or documented procedures, use `wiki-skill` at `/home/linroot/vault/linroot-wiki-code`. Read `AGENTS.md`, `SCHEMA.md`, and `RW/index.md` before opening relevant pages. Lookups are read-only; ingest or edit only when requested. Never write to `RO/`.
+- **LLM wiki:** For prior research, decisions, or documented procedures, use `wiki-skill` at `/home/linroot/vault/linroot-wiki-code`. Read `AGENTS.md`, `SCHEMA.md`, and `RW/index.md` before opening relevant pages. Lookups are read-only; ingest or edit only when requested. Authorized wiki edits include lint, commit, push, and verification on the configured remote by default; an explicit draft, local-only, or no-push request overrides this. Never write to `RO/`.
 - **Versioned skills and instructions:** repeatable procedures and standing policy.
 
 Avoid copying the same material into every store; link to its authoritative source. Current instructions and verified evidence outrank recalled summaries. Never store secrets in memory or the wiki.
 
-Honcho defaults to recall only unless the user authorizes recording. For authorized recording, follow the server instructions, reuse stable peer IDs and keep each coherent conversation in one session. Memory tools alone do not guarantee automatic capture or synchronization.
+Honcho defaults to recall only unless the user authorizes recording. Use only the authorized publication channel and matching audience/scope, cite immutable evidence for verified durable facts, and confirm exact readback before reporting publication. Without matching authorization or a required grant, leave a draft if useful and continue delivery. Never store credentials or raw transcripts. Memory tools alone do not guarantee automatic capture or synchronization.
+
+At closeout, report Git delivery, Beads sync, wiki publication, and Honcho publication separately when relevant. Mark local-only, pending, blocked, and verified remote outcomes explicitly.
 
 ## Beads tracking
 
@@ -96,7 +98,7 @@ Run `bd prime` when context is missing/stale. Native hooks may load it on Codex 
 
 Commands: `bd ready`; `bd show <id>`; `bd create "<title>" -p <0-4> -l <labels> -d <desc> --acceptance <ac>`; `bd update <id> --claim`; `bd update <id> --append-notes <text>`; `bd list --status open --json`; `bd close <id>`.
 
-Close only after requested Git stages finish and required CI passes on the exact final pushed/merged commit. Keep open/report pending, failed, cancelled, skipped, unknown or absent required checks. Issues use local Dolt DB; sync is `refs/dolt/data`, `.beads/issues.jsonl` is passive export. See [Beads sync concepts](https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md).
+Close only after requested Git stages finish and required CI passes on the exact final pushed/merged commit. Keep open/report pending, failed, cancelled, skipped, unknown or absent required checks. Follow the repository's documented Beads sync policy for authorized tracker changes. If delivery scope or repository standing policy covers sync, perform it and verify remote publication without asking again. If unrelated pending tracker changes would be included outside scope, preserve them and report the blocker. Local tracker mutations and Git pushes do not prove tracker publication. Issues use local Dolt DB; sync is `refs/dolt/data`, `.beads/issues.jsonl` is passive export. See [Beads sync concepts](https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md).
 
 ## Credentials
 
