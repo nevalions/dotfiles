@@ -8,7 +8,7 @@ Only the wrapper loads the bundled subagent and todo extensions. `~/.pi/agent/ex
 
 ## Interactive team and local run ledger
 
-The separate `~/.pi/agent/bin/pi-team-run` command records durable checkpoints, CI waits, and closeout dispositions. Use it alongside the interactive team; it does not execute stages. See the [pipeline runbook](pipeline.md) for installation, resume, and the opt-in journal watcher.
+The separate `~/.pi/agent/bin/pi-team-run` command records durable checkpoints and polls CI. See the [pipeline runbook](pipeline.md) for installation, resume, the read-only watcher, and the separate opt-in Forgejo pilot runner for scoped merges.
 
 Repository implementation tasks need a Beads issue and an authorized claim. Beads owns task state; `/todos` only reflects the current session. Follow the repo's existing sync procedure and don't close an issue until its definition of done is verified. Tracker changes and remote publication still require authorization.
 
@@ -18,10 +18,10 @@ Both launch modes preflight worktree writes and use a per-worktree advisory `flo
 
 | Role | Provider/model | Effort |
 | --- | --- | --- |
-| Scout | `opencode-go/deepseek-v4.1-flash` | Medium |
-| Planner | `openai-codex/gpt-6.1-sol` | Medium |
+| Scout | `opencode-go/deepseek-v4.1-flash` | Low |
+| Planner (routine / complex) | `openai-codex/gpt-6.1-sol` | Low / Medium |
 | Worker | AGY `gemini-4-hydrogen-high` | High |
-| Reviewer | `openai-codex/gpt-6.1-sol` | High |
+| Reviewer (localized / high-risk) | `openai-codex/gpt-6.1-sol` | Low / High |
 
 The parent coordinates; the scout, planner, and reviewer use read-only tools. The coordinator gives the AGY worker an isolated task worktree and verifies its changes and checks. AGY print mode can deny tools; send edit-only assignments and have the coordinator run checks. The tool reports recognized denial categories without printing raw denial entries. In team mode it renews the coordinator's existing Beads claim every 30 seconds during delegation, aborting AGY on a failed heartbeat. The Beads lease TTL must comfortably exceed the renewal interval plus the five-second heartbeat timeout. This is node-local, and idle, planning, review and CI waits are not renewed. Implementation authorization covers ordinary coding, tests, and review fixes, not commits, pushes, merges, deploys, or tracker changes.
 

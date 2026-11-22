@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import secrets
 import sqlite3
+import subprocess
 import sys
 import time
 from urllib.error import HTTPError, URLError
@@ -835,6 +836,26 @@ def poll_queued_ci(db_path: Path) -> tuple[list[dict], dict[int, str]]:
     return results, failures
 
 
+def cmd_preflight(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    def git(*tokens):
+        try:
+            result = subprocess.run(['git', '-C', args.checkout, *tokens], capture_output=True,
+                                    text=True, timeout=5, check=False)
+        except subprocess.TimeoutExpired:
+            raise CliError('Git preflight exceeded its deadline') from None
+        if result.returncode:
+            raise CliError('preflight requires a readable Git checkout')
+        return result.stdout.rstrip('\n')
+
+    root, git_dir, common_dir, head = git('rev-parse', '--path-format=absolute', '--show-toplevel',
+                                         '--git-dir', '--git-common-dir', 'HEAD').splitlines()
+    payload = {'checkout': root, 'linked_worktree': git_dir != common_dir, 'head': validate_full_rev(head),
+               'dirty': bool(git('status', '--porcelain')), 'next': None}
+    if args.run_id:
+        _, payload['next'] = cmd_resume(args, db_path)
+    return 0, payload
+
+
 def cmd_watch(args: argparse.Namespace, db_path: Path) -> tuple[int, list[dict]]:
     """Poll queued CI and emit deduped JSON notices for due or failed waits."""
     if not db_path.exists():
@@ -937,6 +958,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_start.add_argument('--with-wiki', action='store_true', help='Opt in to optional wiki stage')
     p_start.add_argument('--note', help='Optional nonsecret run note')
 
+    p_preflight = sub.add_parser('preflight', parents=[common], help='Show exact local checkout and ledger state')
+    p_preflight.add_argument('checkout')
+    p_preflight.add_argument('--run-id')
+
     p_status = sub.add_parser('status', parents=[common], help='Inspect a run or list runs')
     p_status.add_argument('run_id', nargs='?', help='Optional run identifier')
     p_status.add_argument('--all', action='store_true', help='Include terminal runs when listing')
@@ -989,6 +1014,7 @@ def main(argv: list[str] | None = None) -> int:
     handlers = {
         'start': cmd_start,
         'status': cmd_status,
+        'preflight': cmd_preflight,
         'resume': cmd_resume,
         'wait': cmd_wait,
         'checkpoint': cmd_checkpoint,

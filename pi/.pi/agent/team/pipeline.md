@@ -91,6 +91,36 @@ python3 -B tests/test_pi_team_run.py
 
 The ledger works without a model or systemd. Outside systemd, run `~/.pi/agent/bin/pi-team-run watch` from your local scheduler. Ensure scheduled and interactive invocations use the same `XDG_STATE_HOME` if overriding the default. Never sync the live ledger through dotfiles.
 
+## Opt-in Forgejo delivery pilot
+
+The PR watcher remains read-only against Forgejo. An explicitly started, separate `pi-team-delivery@ID.service` can continue one authorized squash merge and verify post-merge checks without the Pi session. It never edits Beads, deletes a branch, or deploys directly. Only use it for pilot repositories whose merge side effects were individually authorized; do not allowlist production deployment repositories for the pilot.
+
+Configure private (0600) files under `~/.config/pi-team/` (or the service's `XDG_CONFIG_HOME` equivalent): `delivery-pilot-repos` lists approved pilot repositories, one `owner/name` per line; `delivery-token` holds a dedicated, non-admin Forgejo credential restricted to the pilot repository and subject to its branch protection. The normal watcher token is not used. The protected branch must independently enforce required checks at merge time. The runner pins and rechecks the base tip before POST and verifies the actual squash parent afterwards; Forgejo's merge API guards the head, not the base atomically.
+
+Once a specific merge is authorized, create `delivery/ID.json` (0600) in that directory with this schema, filling values from the approved PR and repo policy:
+
+```json
+{
+  "host": "git.butakov.su",
+  "repo": "owner/pilot-repo",
+  "pr": 12,
+  "head_sha": "<exact ready PR head>",
+  "base_sha": "<exact protected base tip>",
+  "base_ref": "main",
+  "pr_checks": ["<exact required PR context>"],
+  "post_merge_checks": ["<exact required push context>"],
+  "expires_at": "<UTC timestamp no more than 24h away>"
+}
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user start --no-block pi-team-delivery@ID.service
+journalctl --user -u pi-team-delivery@ID.service
+```
+
+The service uses model-free polling and reconciles an already-merged PR instead of merging twice. Restart it with the same unexpired grant to resume after interruption. Do not change an active grant: stop the service and issue a new grant if the PR or base changes. Stop the service or remove the grant to revoke it before the merge request is sent. If evidence drifts, a check fails, or a prior merge response is ambiguous, consult the journal and Forgejo instead of attempting a different candidate under the same grant. This pilot does not automate rollout verification or grant issuance.
+
 ## Opt-in Systemd Watch Timer
 
 The `pi` stow package provides user units at `~/.config/systemd/user/pi-team-watch.{service,timer}` running `pi-team-run watch` every 30 seconds. They remain disabled until explicitly enabled:

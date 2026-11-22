@@ -1,0 +1,12 @@
+[Unit]
+Description=Continue a bounded Pi Team Forgejo pilot delivery (%i)
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/python3 %h/.pi/agent/bin/pi_team_delivery.py %i
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+RuntimeMaxSec=24h
+StandardOutput=journal
+StandardError=journal

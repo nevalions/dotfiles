@@ -1,7 +1,7 @@
 ---
 name: scout
 description: Fast read-only codebase reconnaissance and bounded evidence gathering.
-model: opencode-go/deepseek-v4.1-flash:medium
+model: opencode-go/deepseek-v4.1-flash:low
 tools: [read, grep, find, ls]
 ---
 
