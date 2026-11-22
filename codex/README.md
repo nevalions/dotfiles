@@ -226,6 +226,23 @@ your own terminal if startup reports a vault error, then restart the MCP server
 or Codex session. The launcher keeps vault output in memory and passes the
 resolved values directly to the child process.
 
+Honcho uses the dependency-free `codex-honcho-mcp` launcher and the existing
+Pi connection settings and API key in `~/.honcho/config.json` (with the existing
+`Honcho Codex` rbw item used only when no configured key exists). It shares Pi's `hermes-personal` workspace and
+`pi-coordinator` observer, so existing repository memory is visible. The default
+MCP connection uses Pi's REST API upstream and exposes only scoped recall, peer cards and recent conclusions.
+There is no transcript capture. Session-start repository card recall and an
+explicit exact-scope publisher match the active local Pi configuration.
+
+See [Honcho setup and publishing](honcho/README.md). The standard
+`python3 codex/install.py --skip-plugins` setup includes it after pulling.
+For a targeted update, run `python3 codex/honcho/install.py --check`, then the
+same command without `--check` to update its registration and Stow links.
+Existing Codex settings and hooks are preserved. Start a new Codex session for
+MCP discovery, and enable the new SessionStart hook in `/hooks` if Codex marks
+it untrusted. Explicit publishing is also available through the local CLI in
+the current session; it needs neither a global write grant nor a restart.
+
 On a machine without Claude or these rbw items, provide `PERPLEXITY_API_KEY`,
 `FORGEJO_URL`, and `FORGEJO_TOKEN` through your existing vault/environment setup.
 The public repo contains no tokens or private URLs.

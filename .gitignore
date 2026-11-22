@@ -80,3 +80,6 @@ hermes/.hermes/backups/
 # Anthropic skills Claude Code syncs per account into ~/.claude/skills (a stowed
 # folder): runtime data, not config.
 claude-skills/.claude/skills/synced/
+
+!codex/.codex/honcho/
+codex/.codex/honcho/__pycache__/

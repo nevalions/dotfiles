@@ -1,0 +1,106 @@
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+
+MODULE = Path(__file__).resolve().parents[1] / 'codex/.codex/honcho'
+sys.path.insert(0, str(MODULE))
+import server
+
+
+class Remote:
+    def __init__(self):
+        self.calls = []
+
+    def prepare_session(self, scope):
+        self.prepared_scope = scope
+
+    def call(self, name, arguments):
+        self.calls.append((name, arguments))
+        return server.content('fixture')
+
+
+class HonchoTest(unittest.TestCase):
+    def setUp(self):
+        self.remote = Remote()
+        self.scope = dict(workspace_id=server.WORKSPACE, peer_id=server.OBSERVER,
+                          target_peer_id='kube-lvl47', session_id='probe', task='probe')
+
+    def request(self, name, args, scope=None):
+        return server.respond({'method': 'tools/call', 'params': {'name': name, 'arguments': args}}, scope, self.remote)
+
+    def test_install_preserves_existing_environment_and_forwards_rbw_runtime(self):
+        import importlib.util
+        path = MODULE.parents[1] / 'honcho/install.py'
+        spec = importlib.util.spec_from_file_location('honcho_install', path)
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        existing = ['CUSTOM_SETTING', {'name': 'OTHER_SETTING', 'source': 'local'}]
+        result = installer.runtime_env_vars(existing)
+        self.assertEqual(result[:2], existing)
+        self.assertIn('XDG_RUNTIME_DIR', result)
+        self.assertEqual(existing, ['CUSTOM_SETTING', {'name': 'OTHER_SETTING', 'source': 'local'}])
+        self.assertEqual(installer.runtime_env_vars(result), result)
+        self.assertIn('XDG_RUNTIME_DIR', installer.runtime_env_vars(None))
+
+    def test_default_connection_is_read_only(self):
+        tools = server.respond({'method': 'tools/list'}, None, self.remote)['tools']
+        self.assertEqual({t['name'] for t in tools}, {'recall', 'peer_card', 'list_conclusions'})
+        self.assertTrue(all(t['annotations']['readOnlyHint'] for t in tools))
+        for name in ('publish_verified', 'create_peer', 'delete_conclusion', 'create_conclusions'):
+            self.assertTrue(self.request(name, {})['isError'])
+        self.assertEqual(self.remote.calls, [])
+
+    def test_recall_binds_workspace_and_observer(self):
+        self.request('recall', {'target_peer_id': 'linroot', 'query': 'Editor preferences'})
+        self.assertEqual(self.remote.calls, [('chat', dict(workspace_id=server.WORKSPACE,
+                         peer_id=server.OBSERVER, target_peer_id='linroot', query='Editor preferences', reasoning_level='low'))])
+        self.assertTrue(self.request('recall', {'target_peer_id': 'linroot', 'query': 'x', 'workspace_id': 'other'})['isError'])
+        self.assertEqual(len(self.remote.calls), 1)
+
+    def test_scope_cannot_be_widened(self):
+        args = dict(scope={**self.scope, 'target_peer_id': 'linroot'}, candidate='revision',
+                    checks='passed', verification='independent read', conclusion='probe')
+        self.assertTrue(self.request('publish_verified', args, self.scope)['isError'])
+        self.assertEqual(self.remote.calls, [])
+
+    def test_verified_append_has_provenance(self):
+        args = dict(scope=self.scope, candidate='revision', checks='passed',
+                    verification='independent read', conclusion='probe')
+        self.assertNotIn('isError', self.request('publish_verified', args, self.scope))
+        name, bound = self.remote.calls[0]
+        self.assertEqual(name, 'create_conclusions')
+        self.assertEqual(bound['session_id'], 'probe')
+        self.assertEqual(bound['target_peer_id'], 'kube-lvl47')
+        self.assertIn('Candidate/source: revision', bound['conclusions'][0])
+        self.assertEqual(self.remote.prepared_scope, self.scope)
+
+    def test_repository_routes_follow_home_and_git_common_directory(self):
+        from unittest.mock import patch
+        import recall_scopes
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            with patch.object(recall_scopes, 'HOME', home):
+                self.assertEqual(recall_scopes.targets(home / 'code/kube-lvl47/.git'),
+                                 ['kube-lvl47', 'project-cluster-infra', 'code-wide'])
+                self.assertEqual(recall_scopes.targets(home / 'dotfiles/.git'), ['dotfiles', 'code-wide'])
+                self.assertEqual(recall_scopes.targets(home / 'unmapped/.git'), [])
+
+    def test_grant_requires_private_file_and_fixed_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'grant.json'
+            path.write_text(json.dumps(self.scope))
+            path.chmod(0o600)
+            self.assertEqual(server.grant(path), self.scope)
+            path.chmod(0o644)
+            with self.assertRaises(ValueError):
+                server.grant(path)
+            path.chmod(0o600)
+            path.write_text(json.dumps({**self.scope, 'workspace_id': 'other'}))
+            with self.assertRaises(ValueError):
+                server.grant(path)
+
+
+if __name__ == '__main__':
+    unittest.main()

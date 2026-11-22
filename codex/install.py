@@ -126,6 +126,7 @@ def main():
             if not live.is_file() or live.is_symlink():
                 parser.error("--recover-generated-config requires an existing regular live config.toml; preserved the generated config.")
             recover_generated = True
+    subprocess.run([os.sys.executable, str(package / 'honcho/install.py'), '--target', str(target), '--check'], check=True)
     if args.check:
         result = subprocess.run([*stow_check, "--simulate"], capture_output=True, text=True)
         skills_result = subprocess.run([*skills_stow, "--simulate"], capture_output=True, text=True)
@@ -167,6 +168,7 @@ def main():
         if backup and not live.exists():
             shutil.copy2(backup, live)
         raise
+    subprocess.run([os.sys.executable, str(package / 'honcho/install.py'), '--target', str(target)], check=True)
     print("Installed Codex config, agents and skills. Restart Codex to load MCP connections.")
     if backup:
         print("Previous config: " + str(backup))

@@ -1,0 +1,8 @@
+#!/usr/bin/python3 -I
+import runpy
+import sys
+from pathlib import Path
+
+module = Path(__file__).resolve().parents[2] / '.codex/honcho'
+sys.path.insert(0, str(module))
+runpy.run_path(str(module / 'server.py'), run_name='__main__')
