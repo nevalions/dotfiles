@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
+import runpy
 import os
 from pathlib import Path
 import sqlite3
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BIN_PATH = REPO_ROOT / 'pi' / '.pi' / 'agent' / 'bin' / 'pi-team-run'
@@ -51,6 +53,48 @@ class PiTeamRunTests(unittest.TestCase):
         proc = self.run_cli('watch')
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
         return [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+
+    def test_monitor_resumes_same_scope_and_checkpoints_verified_head(self) -> None:
+        run = self.run_json('start', str(self.repo_dir))
+        run_id = run['run_id']
+        for stage in ('admit', 'implement', 'check', 'review', 'commit', 'publish'):
+            self.run_json('checkpoint', run_id, stage, '--evidence', f'ev:{stage}')
+        script = runpy.run_path(str(BIN_PATH))
+        monitor = script['cmd_monitor']
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        args = script['build_parser']().parse_args([
+            'monitor', 'owner/repo', '--pr', '12', '--run-id', run_id, '--rev', SHA_A,
+            '--require', 'build', '--require', 'test',
+        ])
+        pr = {'state': 'open', 'head': {'sha': SHA_A}}
+        status = {'sha': SHA_A, 'statuses': [{'context': 'build', 'status': 'success'},
+                                            {'context': 'test', 'status': 'failure'}]}
+        with patch.dict(monitor.__globals__, {'forgejo_get': lambda _, __, path: pr if path.startswith('pulls/') else status}):
+            with self.assertRaisesRegex(script['CliError'], 'required CI did not pass: test'):
+                monitor(args, db)
+            self.assertEqual(self.run_json('resume', run_id)['expected_rev'], SHA_A)
+            args.require = ['build']
+            with self.assertRaisesRegex(script['CliError'], 'required check set'):
+                monitor(args, db)
+            args.require = ['test', 'build']
+            status['statuses'][1]['status'] = 'success'
+            pr['head']['sha'] = SHA_B
+            with self.assertRaisesRegex(script['CliError'], 'stale'):
+                monitor(args, db)
+            pr['head']['sha'] = SHA_A
+            code, result = monitor(args, db)
+        self.assertEqual((code, result['status']), (0, 'success'))
+        self.assertEqual(self.run_json('status', run_id)['current_stage'], 'integrate')
+
+    def test_monitor_never_treats_missing_skipped_or_old_success_as_current(self) -> None:
+        script = runpy.run_path(str(BIN_PATH))
+        waiting, failed = script['check_required']([
+            {'context': 'scan', 'status': 'skipped'},
+            {'context': 'test', 'status': 'pending'},
+            {'context': 'test', 'status': 'success'},
+        ], ['scan', 'test', 'build'])
+        self.assertEqual(waiting, ['test', 'build'])
+        self.assertEqual(failed, ['scan'])
 
     def test_private_xdg_state_and_schema_version_check(self) -> None:
         run = self.run_json('start', str(self.repo_dir))

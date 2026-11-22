@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,10 @@ import re
 import secrets
 import sqlite3
 import sys
+import time
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 SCHEMA_VERSION = 1
 
@@ -597,6 +602,9 @@ def cmd_checkpoint(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
         run = fetch_run(conn, args.run_id)
         require_writable_stage(run, stage)
         active_wait = fetch_active_wait(conn, run['run_id'])
+        generation = getattr(args, 'generation', None)
+        if generation is not None and (active_wait is None or active_wait['generation'] != generation):
+            raise CliError('CI wait changed during monitoring; refusing to checkpoint')
         if stage == 'ci':
             if active_wait is None or active_wait['target'] != 'ci' or active_wait['stage'] != 'ci':
                 raise CliError('CI checkpoint requires an active CI wait first')
@@ -644,6 +652,109 @@ def cmd_checkpoint(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
         updated = fetch_run(conn, run['run_id'])
         payload = build_run_dict(conn, updated)
     return 0, payload
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def forgejo_get(host: str, repo: str, path: str):
+    token = os.environ.get('PI_TEAM_FORGEJO_TOKEN')
+    if not token and host == 'git.butakov.su':
+        token_file = Path.home() / '.config/forgejo/token'
+        if token_file.is_file():
+            token = token_file.read_text().strip()
+    headers = {'Accept': 'application/json'}
+    if token:
+        headers['Authorization'] = f'token {token}'
+    request = Request(f'https://{host}/api/v1/repos/{repo}/{path}', headers=headers)
+    with build_opener(NoRedirect()).open(request, timeout=8) as response:
+        return json.load(response)
+
+
+def check_required(statuses: list, required: list[str]) -> tuple[list[str], list[str]]:
+    by_context = {}
+    for entry in statuses:
+        by_context.setdefault(entry['context'], entry['status'])
+    waiting = [name for name in required if by_context.get(name) in (None, 'pending', 'running')]
+    failed = [name for name in required if name not in waiting and by_context[name] != 'success']
+    return waiting, failed
+
+
+def cmd_monitor(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    rev = validate_full_rev(args.rev)
+    host = urlsplit(f'https://{args.host}')
+    if host.netloc != args.host or not re.fullmatch(r'[A-Za-z0-9.-]+(?::[0-9]+)?', args.host):
+        raise CliError('invalid Forgejo host')
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', args.repo) or any(
+        component in ('.', '..') for component in args.repo.split('/')
+    ):
+        raise CliError('expected Forgejo repository as owner/name')
+    if args.pr is not None and args.pr < 1:
+        raise CliError('expected positive PR number')
+    if not 1 <= args.interval <= 120 or not 1 <= args.timeout <= 7200:
+        raise CliError('interval must be 1–120 seconds and timeout 1–7200 seconds')
+    required = sorted(set(args.require))
+    if any(not name.strip() or len(name) > 256 or not name.isprintable() for name in required):
+        raise CliError('invalid required check context')
+    scope = sha256(json.dumps([args.host, args.repo, args.pr, required]).encode()).hexdigest()
+    reason = f'Forgejo {args.repo} PR {args.pr} monitor:{scope}'
+    deadline = utc_now() + timedelta(seconds=args.timeout)
+    generation = None
+    if args.run_id:
+        if args.pr is None:
+            raise CliError('ledger CI monitoring requires --pr; post-merge monitoring is read-only')
+        with open_read_only(db_path) as conn:
+            run = fetch_run(conn, args.run_id)
+            require_writable_stage(run, 'ci')
+            existing = fetch_active_wait(conn, args.run_id)
+        if existing is None:
+            cmd_wait(argparse.Namespace(run_id=args.run_id, stage='ci', target='ci', rev=rev,
+                                      deadline=format_utc(deadline), reason=reason,
+                                      replace=False), db_path)
+            with open_read_only(db_path) as conn:
+                existing = fetch_active_wait(conn, args.run_id)
+        if (existing is None or existing['target'] != 'ci' or existing['expected_rev'] != rev
+                or existing['reason'] != reason):
+            raise CliError('active CI wait does not match this revision, PR and required check set')
+        generation = existing['generation']
+        deadline = min(deadline, parse_iso_utc(existing['deadline_at']))
+
+    def check_head():
+        if args.pr is None:
+            return
+        pr = forgejo_get(args.host, args.repo, f'pulls/{args.pr}')
+        if pr['state'] != 'open' or pr.get('draft') or pr['head']['sha'] != rev:
+            raise CliError('PR is not ready/open at the expected revision; CI evidence is stale')
+
+    while utc_now() < deadline:
+        try:
+            check_head()
+            statuses = forgejo_get(args.host, args.repo, f'commits/{quote(rev)}/status')
+            if statuses.get('sha') != rev:
+                raise CliError('Forgejo status response does not match the expected revision')
+            waiting, failed = check_required(statuses['statuses'], required)
+            if failed:
+                raise CliError('required CI did not pass: ' + ', '.join(failed))
+            if not waiting and utc_now() < deadline:
+                check_head()
+                if utc_now() >= deadline:
+                    break
+                if args.run_id:
+                    cmd_checkpoint(argparse.Namespace(run_id=args.run_id, stage='ci', rev=rev, skip=False,
+                                                      note=None, generation=generation,
+                                                      evidence=f'forgejo:{args.host}/{args.repo}#{args.pr}@{rev}'), db_path)
+                return 0, {'status': 'success', 'revision': rev, 'checks': required, 'run_id': args.run_id}
+        except HTTPError as exc:
+            if exc.code not in (429, 500, 502, 503, 504):
+                raise CliError(f'Forgejo lookup failed (HTTP {exc.code})') from None
+        except (URLError, TimeoutError):
+            pass
+        except (ValueError, TypeError, KeyError):
+            raise CliError('invalid Forgejo response; required CI is unverified') from None
+        time.sleep(max(0, min(args.interval, (deadline - utc_now()).total_seconds())))
+    raise CliError('CI monitoring deadline reached; required checks remain unverified')
 
 
 def cmd_cancel(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
@@ -801,6 +912,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser('watch', parents=[common], help='Emit deduped JSON notices for due waits')
 
+    p_monitor = sub.add_parser('monitor', parents=[common], help='Poll required Forgejo CI on an exact revision')
+    p_monitor.add_argument('repo', help='Forgejo owner/name')
+    p_monitor.add_argument('--host', default='git.butakov.su')
+    p_monitor.add_argument('--pr', type=int, help='Verify this ready PR still points at the exact revision')
+    p_monitor.add_argument('--run-id', help='Checkpoint CI on success for an existing run (requires --pr)')
+    p_monitor.add_argument('--rev', required=True, help='Full commit SHA')
+    p_monitor.add_argument('--require', action='append', required=True, help='Exact required check context; repeat for each check')
+    p_monitor.add_argument('--interval', type=int, default=15)
+    p_monitor.add_argument('--timeout', type=int, default=900)
+
     p_cancel = sub.add_parser('cancel', parents=[common], help='Cancel a run at its current stage')
     p_cancel.add_argument('run_id', help='Run identifier')
     p_cancel.add_argument('stage', help='Current stage name')
@@ -820,6 +941,7 @@ def main(argv: list[str] | None = None) -> int:
         'wait': cmd_wait,
         'checkpoint': cmd_checkpoint,
         'watch': cmd_watch,
+        'monitor': cmd_monitor,
         'cancel': cmd_cancel,
     }
     os.umask(0o077)
