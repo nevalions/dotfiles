@@ -140,6 +140,13 @@ class UnifiedTests(unittest.TestCase):
         instructions = agent / 'AGENTS.md'
         self.assertTrue(instructions.is_symlink())
         self.assertEqual(instructions.resolve(), self.repo / 'pi/.pi/agent/AGENTS.md')
+        runner = agent / 'bin/pi-team-run'
+        self.assertTrue(runner.is_symlink())
+        self.assertTrue(os.access(runner, os.X_OK))
+        units = self.home / '.config/systemd/user'
+        self.assertTrue((units / 'pi-team-watch.service').is_symlink())
+        self.assertTrue((units / 'pi-team-watch.timer').is_symlink())
+        self.assertFalse((units / 'timers.target.wants/pi-team-watch.timer').exists())
         self.assertFalse(agent.is_symlink())
         self.assertFalse(agent.parent.is_symlink())
         extensions = agent / 'extensions'
@@ -163,7 +170,7 @@ class UnifiedTests(unittest.TestCase):
             self.assertTrue(os.access(agent / 'bin' / launcher, os.X_OK))
         self.assertEqual(set(agent.iterdir()), {
             instructions, extensions, agent / 'bin', agent / 'agents', agent / 'team',
-            agent / 'honcho-cli',
+            agent / 'honcho-cli', agent / 'skills',
         })
 
     def test_named_settings_native_cli_after_conflicts_and_no_check_writes(self):

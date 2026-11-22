@@ -6,7 +6,9 @@ Ask for an implementation to run the plan, implementation, tests, review, and fi
 
 Only the wrapper loads the bundled subagent and todo extensions. `~/.pi/agent/extensions/agy-worker.ts` is auto-loaded in both plain Pi and `pi-team`; the wrapper enables team mode. Role files under `~/.pi/agent/agents` are inert without the subagent extension. The legacy Pi worker role is not used by the team workflow. Workflow rules are prompt policy, not sandbox or permission enforcement.
 
-## Interactive today, unattended factory planned
+## Interactive team and local run ledger
+
+The separate `~/.pi/agent/bin/pi-team-run` command records durable checkpoints, CI waits, and closeout dispositions. Use it alongside the interactive team; it does not execute stages. See the [pipeline runbook](pipeline.md) for installation, resume, and the opt-in journal watcher.
 
 Repository implementation tasks need a Beads issue and an authorized claim. Beads owns task state; `/todos` only reflects the current session. Follow the repo's existing sync procedure and don't close an issue until its definition of done is verified. Tracker changes and remote publication still require authorization.
 

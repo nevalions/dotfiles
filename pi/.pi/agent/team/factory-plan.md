@@ -1,6 +1,6 @@
 # Unattended Pi factory implementation plan
 
-**Status: proposed.** The installed `pi-team` is interactive and prompt-driven. This plan grants no standing authorization and does not change plain Pi or PurpleFlow.
+**Status: unattended execution is proposed.** The installed `pi-team` is interactive and prompt-driven. The separate [local pipeline ledger](pipeline.md) is the first shipped slice; it records checkpoints and notices but does not dispatch work. This plan grants no standing authorization and does not change plain Pi or PurpleFlow.
 
 ## 1. Define admission and repository policy
 

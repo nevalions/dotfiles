@@ -1,0 +1,10 @@
+[Unit]
+Description=Run pi-team-watch every 5 minutes (opt-in)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+Unit=pi-team-watch.service
+
+[Install]
+WantedBy=timers.target

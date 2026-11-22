@@ -1,0 +1,8 @@
+[Unit]
+Description=Emit best-effort pi-team-run wait and overdue CI notices to journal
+
+[Service]
+Type=oneshot
+ExecStart=%h/.pi/agent/bin/pi-team-run watch
+StandardOutput=journal
+StandardError=journal

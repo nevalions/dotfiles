@@ -1,0 +1,847 @@
+#!/usr/bin/env python3
+"""Manual durable pipeline bookkeeping CLI for pi team runs."""
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import sqlite3
+import sys
+
+SCHEMA_VERSION = 1
+
+STAGES = (
+    'admit',
+    'implement',
+    'check',
+    'review',
+    'commit',
+    'publish',
+    'ci',
+    'integrate',
+    'verify',
+    'deploy',
+    'beads_close',
+    'honcho',
+    'wiki',
+)
+OPTIONAL_STAGES = frozenset({'deploy', 'honcho', 'wiki'})
+WAIT_TARGETS = ('coordinator', 'user', 'ci')
+TERMINAL_STATUSES = frozenset({'completed', 'cancelled'})
+
+REV_RE = re.compile(r'^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$')
+SECRET_PREFIXES = ('-----BEGIN ', 'Bearer ', 'ghp_', 'github_pat_', 'sk-', 'AKIA')
+
+SCHEMA_STATEMENTS = (
+    """
+    CREATE TABLE runs (
+        run_id TEXT PRIMARY KEY,
+        repo_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('active', 'waiting', 'completed', 'cancelled')),
+        current_stage TEXT,
+        wait_generation INTEGER NOT NULL DEFAULT 0,
+        commit_only INTEGER NOT NULL DEFAULT 0 CHECK (commit_only IN (0, 1)),
+        no_ci INTEGER NOT NULL DEFAULT 0 CHECK (no_ci IN (0, 1)),
+        with_deploy INTEGER NOT NULL DEFAULT 0 CHECK (with_deploy IN (0, 1)),
+        with_honcho INTEGER NOT NULL DEFAULT 0 CHECK (with_honcho IN (0, 1)),
+        with_wiki INTEGER NOT NULL DEFAULT 0 CHECK (with_wiki IN (0, 1)),
+        note TEXT,
+        cancelled_stage TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX idx_runs_active_repo
+        ON runs(repo_key)
+        WHERE status IN ('active', 'waiting')
+    """,
+    """
+    CREATE TABLE checkpoints (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL REFERENCES runs(run_id),
+        stage TEXT NOT NULL,
+        disposition TEXT NOT NULL CHECK (disposition IN ('completed', 'skipped')),
+        evidence TEXT NOT NULL,
+        rev TEXT,
+        note TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(run_id, stage)
+    )
+    """,
+    """
+    CREATE TABLE waits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL REFERENCES runs(run_id),
+        generation INTEGER NOT NULL,
+        stage TEXT NOT NULL,
+        target TEXT NOT NULL CHECK (target IN ('coordinator', 'user', 'ci')),
+        expected_rev TEXT,
+        deadline_at TEXT,
+        reason TEXT,
+        created_at TEXT NOT NULL,
+        resolved_at TEXT,
+        resolution TEXT,
+        UNIQUE(run_id, generation)
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX idx_waits_active_run
+        ON waits(run_id)
+        WHERE resolved_at IS NULL
+    """,
+    """
+    CREATE TABLE notices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL REFERENCES runs(run_id),
+        wait_generation INTEGER NOT NULL,
+        stage TEXT NOT NULL,
+        target TEXT NOT NULL CHECK (target IN ('coordinator', 'user')),
+        wait_target TEXT NOT NULL CHECK (wait_target IN ('coordinator', 'user', 'ci')),
+        reason TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        emitted_at TEXT NOT NULL,
+        UNIQUE(run_id, wait_generation)
+    )
+    """,
+    """
+    CREATE TABLE events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id TEXT NOT NULL REFERENCES runs(run_id),
+        event_type TEXT NOT NULL,
+        stage TEXT,
+        detail TEXT,
+        created_at TEXT NOT NULL
+    )
+    """,
+)
+
+
+class CliError(Exception):
+    """Domain or validation error surfaced cleanly to stderr."""
+
+
+def utc_now() -> datetime:
+    """Return current UTC datetime."""
+    return datetime.now(timezone.utc)
+
+
+def format_utc(dt: datetime) -> str:
+    """Format a timezone-aware datetime as a UTC ISO-8601 string."""
+    return dt.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+
+def parse_iso_utc(raw: str) -> datetime:
+    """Parse an ISO-8601 timestamp with explicit timezone offset or Z."""
+    text = raw.strip()
+    if not text:
+        raise CliError('timestamp must not be empty')
+    if text.endswith(('Z', 'z')):
+        text = text[:-1] + '+00:00'
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise CliError(f'invalid ISO-8601 timestamp: {raw}') from exc
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        raise CliError(f'timestamp must include timezone offset or Z: {raw}')
+    return dt.astimezone(timezone.utc)
+
+
+def validate_stage(stage: str) -> str:
+    """Ensure stage is a known pipeline stage."""
+    if stage not in STAGES:
+        raise CliError(f'unknown stage {stage!r}; valid stages: {", ".join(STAGES)}')
+    return stage
+
+
+def validate_full_rev(rev: str) -> str:
+    """Validate and normalize a full 40- or 64-character hexadecimal git revision."""
+    text = rev.strip()
+    if not REV_RE.fullmatch(text):
+        raise CliError('CI revision must be a full 40- or 64-character hex SHA')
+    return text.lower()
+
+
+def validate_evidence(evidence: str) -> str:
+    """Validate an opaque nonsecret evidence locator token."""
+    text = evidence.strip()
+    if not text:
+        raise CliError('evidence token must not be empty')
+    if len(text) > 512:
+        raise CliError('evidence token exceeds 512 characters')
+    if any(ch in text for ch in ('\n', '\r', '\x00')):
+        raise CliError('evidence token must be a single line without control characters')
+    for prefix in SECRET_PREFIXES:
+        if prefix in text:
+            raise CliError(f'evidence token must be a nonsecret locator (rejected {prefix!r})')
+    return text
+
+
+def canonicalize_repo(repo: str) -> str:
+    """Canonicalize a repository path or identifier without running subprocesses."""
+    raw = repo.strip()
+    if not raw:
+        raise CliError('repository argument must not be empty')
+    expanded = os.path.expanduser(raw)
+    if raw in ('.', '..') or raw.startswith(('/', './', '../', '~/')) or os.path.exists(expanded):
+        return os.path.realpath(expanded)
+    cleaned = raw.rstrip('/')
+    if not cleaned:
+        raise CliError(f'invalid repository identifier: {repo!r}')
+    return cleaned
+
+
+def resolve_state_db_path() -> Path:
+    """Resolve the private XDG state database path."""
+    xdg = os.environ.get('XDG_STATE_HOME', '').strip()
+    if xdg:
+        base = Path(os.path.expanduser(xdg))
+        if not base.is_absolute():
+            raise CliError(f'XDG_STATE_HOME must be an absolute path: {xdg!r}')
+    else:
+        base = Path.home() / '.local' / 'state'
+    return base / 'pi-team-run' / 'state.db'
+
+
+def ensure_private_state_dir(state_dir: Path) -> None:
+    """Create the XDG state directory with 0700 permissions."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(state_dir, 0o700)
+
+
+def check_schema_version(conn: sqlite3.Connection, *, allow_init: bool) -> None:
+    """Verify PRAGMA user_version or initialize a brand-new database."""
+    version = conn.execute('PRAGMA user_version').fetchone()[0]
+    if version == SCHEMA_VERSION:
+        return
+    if version == 0 and allow_init:
+        existing = conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchone()[0]
+        if existing > 0:
+            raise CliError('unsupported unversioned SQLite schema (PRAGMA user_version=0)')
+        for stmt in SCHEMA_STATEMENTS:
+            conn.execute(stmt)
+        conn.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
+        return
+    raise CliError(f'unsupported SQLite schema version {version}; expected {SCHEMA_VERSION}')
+
+
+@contextmanager
+def open_write_tx(db_path: Path):
+    """Open a private SQLite connection inside a BEGIN IMMEDIATE transaction."""
+    ensure_private_state_dir(db_path.parent)
+    conn = sqlite3.connect(str(db_path), timeout=5.0, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    try:
+        os.chmod(db_path, 0o600)
+        conn.execute('PRAGMA busy_timeout = 5000')
+        conn.execute('PRAGMA journal_mode = DELETE')
+        conn.execute('PRAGMA foreign_keys = ON')
+        conn.execute('BEGIN IMMEDIATE')
+        check_schema_version(conn, allow_init=True)
+        yield conn
+        conn.execute('COMMIT')
+    except Exception:
+        try:
+            if conn.in_transaction:
+                conn.execute('ROLLBACK')
+        except sqlite3.Error:
+            pass
+        raise
+    finally:
+        conn.close()
+
+
+@contextmanager
+def open_read_only(db_path: Path):
+    """Open an existing SQLite database strictly read-only."""
+    conn = sqlite3.connect(f'{db_path.resolve().as_uri()}?mode=ro', uri=True, timeout=5.0, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute('PRAGMA busy_timeout = 5000')
+        conn.execute('PRAGMA foreign_keys = ON')
+        conn.execute('BEGIN')
+        check_schema_version(conn, allow_init=False)
+        yield conn
+    finally:
+        conn.close()
+
+
+def active_stages_for_run(run: sqlite3.Row) -> list[str]:
+    """Return the immutable ordered stage list active for a run."""
+    enabled = {
+        'deploy': bool(run['with_deploy']),
+        'honcho': bool(run['with_honcho']),
+        'wiki': bool(run['with_wiki']),
+    }
+    if run['commit_only']:
+        return list(STAGES[:STAGES.index('commit') + 1])
+    return [
+        stage for stage in STAGES
+        if (stage not in OPTIONAL_STAGES or enabled[stage]) and not (stage == 'ci' and run['no_ci'])
+    ]
+
+
+def next_stage_after(run: sqlite3.Row, stage: str) -> str | None:
+    """Return the next active stage after the given stage, or None if terminal."""
+    active = active_stages_for_run(run)
+    idx = active.index(stage)
+    if idx + 1 < len(active):
+        return active[idx + 1]
+    return None
+
+
+def fetch_run(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row:
+    """Fetch a run row or raise CliError if missing."""
+    row = conn.execute('SELECT * FROM runs WHERE run_id = ?', (run_id,)).fetchone()
+    if row is None:
+        raise CliError(f'run not found: {run_id}')
+    return row
+
+
+def fetch_active_wait(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row | None:
+    """Fetch the unresolved wait for a run if one exists."""
+    return conn.execute(
+        'SELECT * FROM waits WHERE run_id = ? AND resolved_at IS NULL',
+        (run_id,),
+    ).fetchone()
+
+
+def require_writable_stage(run: sqlite3.Row, stage: str) -> str:
+    """Validate stage name, non-terminal status, and exact current stage match."""
+    validated = validate_stage(stage)
+    if run['status'] in TERMINAL_STATUSES:
+        raise CliError(f'run {run["run_id"]} is already terminal ({run["status"]})')
+    if run['current_stage'] != validated:
+        raise CliError(
+            f'stale or out-of-order stage {validated!r} for run {run["run_id"]}; '
+            f'current stage is {run["current_stage"]!r}'
+        )
+    return validated
+
+
+def build_run_dict(conn: sqlite3.Connection, run: sqlite3.Row) -> dict:
+    """Build a serializable snapshot of a run and its durability records."""
+    checkpoints = [
+        dict(row)
+        for row in conn.execute(
+            'SELECT stage, disposition, evidence, rev, note, created_at FROM checkpoints WHERE run_id = ? ORDER BY id',
+            (run['run_id'],),
+        ).fetchall()
+    ]
+    active_wait_row = fetch_active_wait(conn, run['run_id'])
+    notices = [
+        json.loads(row['payload_json'])
+        for row in conn.execute(
+            'SELECT payload_json FROM notices WHERE run_id = ? ORDER BY id',
+            (run['run_id'],),
+        ).fetchall()
+    ]
+    return {
+        'run_id': run['run_id'],
+        'repo_key': run['repo_key'],
+        'status': run['status'],
+        'current_stage': run['current_stage'],
+        'wait_generation': run['wait_generation'],
+        'commit_only': bool(run['commit_only']),
+        'no_ci': bool(run['no_ci']),
+        'optional_stages': {
+            'deploy': bool(run['with_deploy']),
+            'honcho': bool(run['with_honcho']),
+            'wiki': bool(run['with_wiki']),
+        },
+        'active_stages': active_stages_for_run(run),
+        'note': run['note'],
+        'cancelled_stage': run['cancelled_stage'],
+        'created_at': run['created_at'],
+        'updated_at': run['updated_at'],
+        'completed_at': run['completed_at'],
+        'active_wait': dict(active_wait_row) if active_wait_row is not None else None,
+        'checkpoints': checkpoints,
+        'notices': notices,
+    }
+
+
+def compute_next_step(run: sqlite3.Row, active_wait: sqlite3.Row | None, now: datetime) -> dict:
+    """Compute the read-only resume guidance for a run without mutating state."""
+    run_id = run['run_id']
+    if run['status'] in TERMINAL_STATUSES:
+        return {
+            'run_id': run_id,
+            'status': run['status'],
+            'current_stage': None,
+            'action': 'none',
+            'authorized': False,
+            'message': f'Run {run_id} is terminal ({run["status"]}); no further action.',
+        }
+    stage = run['current_stage']
+    if active_wait is not None:
+        target = active_wait['target']
+        if target in ('user', 'coordinator'):
+            return {
+                'run_id': run_id,
+                'status': run['status'],
+                'current_stage': stage,
+                'action': f'await_{target}',
+                'wait_target': target,
+                'wait_generation': active_wait['generation'],
+                'authorized': False,
+                'message': (
+                    f'Waiting on {target} at stage {stage!r} (gen {active_wait["generation"]}); '
+                    f'resume does not authorize this wait. After explicit {target} approval, run '
+                    f'`pi-team-run checkpoint {run_id} {stage} --evidence <locator>` or '
+                    f'`pi-team-run cancel {run_id} {stage}`.'
+                ),
+            }
+        deadline = parse_iso_utc(active_wait['deadline_at'])
+        overdue = now >= deadline
+        return {
+            'run_id': run_id,
+            'status': run['status'],
+            'current_stage': stage,
+            'action': 'await_ci',
+            'wait_target': 'ci',
+            'wait_generation': active_wait['generation'],
+            'expected_rev': active_wait['expected_rev'],
+            'deadline_at': active_wait['deadline_at'],
+            'overdue': overdue,
+            'authorized': False,
+            'message': (
+                f'Waiting on CI for exact revision {active_wait["expected_rev"]} '
+                f'(deadline {active_wait["deadline_at"]}, overdue={overdue}). '
+                f'Timeout never succeeds; once verified, run '
+                f'`pi-team-run checkpoint {run_id} ci --rev {active_wait["expected_rev"]} --evidence <locator>`.'
+            ),
+        }
+    if stage == 'ci':
+        return {
+            'run_id': run_id,
+            'status': run['status'],
+            'current_stage': 'ci',
+            'action': 'wait_ci',
+            'authorized': False,
+            'message': (
+                f'Stage {stage!r} requires a CI wait first: '
+                f'`pi-team-run wait {run_id} ci --target ci --rev <full_sha> --deadline <iso8601>`.'
+            ),
+        }
+    hint = f'`pi-team-run checkpoint {run_id} {stage} --evidence <locator>`'
+    if stage in OPTIONAL_STAGES:
+        hint += f' (or `--skip --evidence <locator>`)'
+    return {
+        'run_id': run_id,
+        'status': run['status'],
+        'current_stage': stage,
+        'action': 'checkpoint',
+        'authorized': False,
+        'message': f'Next step for {run_id}: {hint}.',
+    }
+
+
+def cmd_start(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    """Start a new active pipeline run for a repository."""
+    if args.commit_only and (args.no_ci or args.with_deploy or args.with_honcho or args.with_wiki):
+        raise CliError('--commit-only cannot be combined with delivery or publication options')
+    repo_key = canonicalize_repo(args.repo)
+    now = format_utc(utc_now())
+    run_id = args.run_id or f'run-{utc_now().strftime("%Y%m%dT%H%M%SZ")}-{secrets.token_hex(4)}'
+    with open_write_tx(db_path) as conn:
+        existing = conn.execute(
+            "SELECT run_id, status FROM runs WHERE repo_key = ? AND status IN ('active', 'waiting')",
+            (repo_key,),
+        ).fetchone()
+        if existing is not None:
+            raise CliError(
+                f'active run already exists for {repo_key}: {existing["run_id"]} ({existing["status"]})'
+            )
+        try:
+            conn.execute(
+                """
+                INSERT INTO runs (
+                    run_id, repo_key, status, current_stage, wait_generation,
+                    commit_only, no_ci, with_deploy, with_honcho, with_wiki, note, created_at, updated_at
+                ) VALUES (?, ?, 'active', ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    repo_key,
+                    STAGES[0],
+                    int(args.commit_only),
+                    int(args.no_ci),
+                    int(bool(args.with_deploy)),
+                    int(bool(args.with_honcho)),
+                    int(bool(args.with_wiki)),
+                    args.note,
+                    now,
+                    now,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise CliError(f'cannot start run for {repo_key}: {exc}') from exc
+        conn.execute(
+            'INSERT INTO events (run_id, event_type, stage, detail, created_at) VALUES (?, ?, ?, ?, ?)',
+            (run_id, 'start', STAGES[0], args.note, now),
+        )
+        run = fetch_run(conn, run_id)
+        payload = build_run_dict(conn, run)
+    return 0, payload
+
+
+def cmd_status(args: argparse.Namespace, db_path: Path) -> tuple[int, dict | list]:
+    """Inspect one run or list active/all runs without writing."""
+    if not db_path.exists():
+        if args.run_id:
+            raise CliError(f'run not found: {args.run_id}')
+        return 0, []
+    with open_read_only(db_path) as conn:
+        if args.run_id:
+            run = fetch_run(conn, args.run_id)
+            return 0, build_run_dict(conn, run)
+        query = 'SELECT * FROM runs'
+        if not args.all:
+            query += " WHERE status IN ('active', 'waiting')"
+        query += ' ORDER BY created_at ASC'
+        rows = conn.execute(query).fetchall()
+        return 0, [build_run_dict(conn, row) for row in rows]
+
+
+def cmd_resume(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    """Show the next required step for a run without making any state changes."""
+    if not db_path.exists():
+        raise CliError(f'run not found: {args.run_id}')
+    now = utc_now()
+    with open_read_only(db_path) as conn:
+        run = fetch_run(conn, args.run_id)
+        active_wait = fetch_active_wait(conn, run['run_id'])
+        return 0, compute_next_step(run, active_wait, now)
+
+
+def cmd_wait(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    """Place the current stage of a run into an explicit coordinator, user, or CI wait."""
+    stage = validate_stage(args.stage)
+    target = args.target
+    if stage == 'ci' and target != 'ci':
+        raise CliError('stage "ci" requires --target ci')
+    if target == 'ci' and stage != 'ci':
+        raise CliError('--target ci is only valid for stage "ci"')
+    expected_rev: str | None = None
+    deadline_iso: str | None = None
+    if target == 'ci':
+        if not args.rev:
+            raise CliError('CI wait requires --rev with full hexadecimal revision')
+        if not args.deadline:
+            raise CliError('CI wait requires --deadline with ISO-8601 timestamp')
+        expected_rev = validate_full_rev(args.rev)
+        deadline_iso = format_utc(parse_iso_utc(args.deadline))
+    else:
+        if args.rev:
+            raise CliError('--rev is only valid for CI waits')
+        if args.deadline:
+            deadline_iso = format_utc(parse_iso_utc(args.deadline))
+
+    now = format_utc(utc_now())
+    with open_write_tx(db_path) as conn:
+        run = fetch_run(conn, args.run_id)
+        require_writable_stage(run, stage)
+        active_wait = fetch_active_wait(conn, run['run_id'])
+        if active_wait is not None:
+            if not args.replace:
+                raise CliError(
+                    f'run {run["run_id"]} already has an active wait on {active_wait["stage"]!r} '
+                    f'(gen {active_wait["generation"]}); pass --replace to supersede it'
+                )
+            conn.execute(
+                'UPDATE waits SET resolved_at = ?, resolution = ? WHERE id = ?',
+                (now, 'superseded', active_wait['id']),
+            )
+        new_gen = int(run['wait_generation']) + 1
+        conn.execute(
+            """
+            INSERT INTO waits (
+                run_id, generation, stage, target, expected_rev, deadline_at, reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (run['run_id'], new_gen, stage, target, expected_rev, deadline_iso, args.reason, now),
+        )
+        conn.execute(
+            "UPDATE runs SET status = 'waiting', wait_generation = ?, updated_at = ? WHERE run_id = ?",
+            (new_gen, now, run['run_id']),
+        )
+        conn.execute(
+            'INSERT INTO events (run_id, event_type, stage, detail, created_at) VALUES (?, ?, ?, ?, ?)',
+            (run['run_id'], 'wait', stage, f'target={target} gen={new_gen}', now),
+        )
+        updated = fetch_run(conn, run['run_id'])
+        payload = build_run_dict(conn, updated)
+    return 0, payload
+
+
+def cmd_checkpoint(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    """Record a stage checkpoint with required evidence and advance the pipeline."""
+    stage = validate_stage(args.stage)
+    evidence = validate_evidence(args.evidence)
+    if args.skip and stage not in OPTIONAL_STAGES:
+        raise CliError(f'stage {stage!r} is required and cannot be skipped')
+    provided_rev = validate_full_rev(args.rev) if args.rev else None
+    disposition = 'skipped' if args.skip else 'completed'
+    now = format_utc(utc_now())
+
+    with open_write_tx(db_path) as conn:
+        run = fetch_run(conn, args.run_id)
+        require_writable_stage(run, stage)
+        active_wait = fetch_active_wait(conn, run['run_id'])
+        if stage == 'ci':
+            if active_wait is None or active_wait['target'] != 'ci' or active_wait['stage'] != 'ci':
+                raise CliError('CI checkpoint requires an active CI wait first')
+            if provided_rev is None:
+                raise CliError('CI checkpoint requires --rev matching the waited full revision')
+            if provided_rev != active_wait['expected_rev']:
+                raise CliError(
+                    f'CI revision mismatch: waited {active_wait["expected_rev"]}, got {provided_rev}'
+                )
+        if active_wait is not None:
+            conn.execute(
+                'UPDATE waits SET resolved_at = ?, resolution = ? WHERE id = ?',
+                (now, disposition, active_wait['id']),
+            )
+        conn.execute(
+            """
+            INSERT INTO checkpoints (run_id, stage, disposition, evidence, rev, note, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (run['run_id'], stage, disposition, evidence, provided_rev, args.note, now),
+        )
+        nxt = next_stage_after(run, stage)
+        if nxt is None:
+            conn.execute(
+                """
+                UPDATE runs
+                SET status = 'completed', current_stage = NULL, updated_at = ?, completed_at = ?
+                WHERE run_id = ?
+                """,
+                (now, now, run['run_id']),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE runs
+                SET status = 'active', current_stage = ?, updated_at = ?
+                WHERE run_id = ?
+                """,
+                (nxt, now, run['run_id']),
+            )
+        conn.execute(
+            'INSERT INTO events (run_id, event_type, stage, detail, created_at) VALUES (?, ?, ?, ?, ?)',
+            (run['run_id'], f'checkpoint:{disposition}', stage, evidence, now),
+        )
+        updated = fetch_run(conn, run['run_id'])
+        payload = build_run_dict(conn, updated)
+    return 0, payload
+
+
+def cmd_cancel(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    """Cancel a non-terminal run at its current stage and free its repo key."""
+    stage = validate_stage(args.stage)
+    now = format_utc(utc_now())
+    with open_write_tx(db_path) as conn:
+        run = fetch_run(conn, args.run_id)
+        require_writable_stage(run, stage)
+        active_wait = fetch_active_wait(conn, run['run_id'])
+        if active_wait is not None:
+            conn.execute(
+                'UPDATE waits SET resolved_at = ?, resolution = ? WHERE id = ?',
+                (now, 'cancelled', active_wait['id']),
+            )
+        conn.execute(
+            """
+            UPDATE runs
+            SET status = 'cancelled', current_stage = NULL, cancelled_stage = ?,
+                updated_at = ?, completed_at = ?
+            WHERE run_id = ?
+            """,
+            (stage, now, now, run['run_id']),
+        )
+        conn.execute(
+            'INSERT INTO events (run_id, event_type, stage, detail, created_at) VALUES (?, ?, ?, ?, ?)',
+            (run['run_id'], 'cancel', stage, args.reason, now),
+        )
+        updated = fetch_run(conn, run['run_id'])
+        payload = build_run_dict(conn, updated)
+    return 0, payload
+
+
+def cmd_watch(args: argparse.Namespace, db_path: Path) -> tuple[int, list[dict]]:
+    """Emit deduped JSON notices for due waits without advancing any run."""
+    if not db_path.exists():
+        return 0, []
+    now_dt = utc_now()
+    now_iso = format_utc(now_dt)
+    emitted: list[dict] = []
+    with open_write_tx(db_path) as conn:
+        pending = conn.execute(
+            """
+            SELECT w.*, r.repo_key, r.current_stage
+            FROM waits w
+            JOIN runs r ON r.run_id = w.run_id
+            WHERE r.status = 'waiting'
+              AND w.resolved_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM notices n
+                  WHERE n.run_id = w.run_id AND n.wait_generation = w.generation
+              )
+            ORDER BY w.id ASC
+            """
+        ).fetchall()
+        for wait_row in pending:
+            wait_target = wait_row['target']
+            if wait_row['deadline_at'] and now_dt < parse_iso_utc(wait_row['deadline_at']):
+                continue
+            if wait_target == 'ci':
+                notice_target = 'coordinator'
+                reason = 'ci_overdue'
+            else:
+                notice_target = wait_target
+                reason = 'wait_pending'
+            notice = {
+                'run_id': wait_row['run_id'],
+                'repo_key': wait_row['repo_key'],
+                'stage': wait_row['stage'],
+                'wait_generation': wait_row['generation'],
+                'target': notice_target,
+                'wait_target': wait_target,
+                'reason': reason,
+                'expected_rev': wait_row['expected_rev'],
+                'deadline_at': wait_row['deadline_at'],
+                'wait_reason': wait_row['reason'],
+                'emitted_at': now_iso,
+            }
+            payload_json = json.dumps(notice, sort_keys=True)
+            conn.execute(
+                """
+                INSERT INTO notices (
+                    run_id, wait_generation, stage, target, wait_target, reason, payload_json, emitted_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    wait_row['run_id'],
+                    wait_row['generation'],
+                    wait_row['stage'],
+                    notice_target,
+                    wait_target,
+                    reason,
+                    payload_json,
+                    now_iso,
+                ),
+            )
+            emitted.append(notice)
+    return 0, emitted
+
+
+def format_human(command: str, data: object) -> str:
+    """Format command output for interactive CLI callers."""
+    if command == 'resume' and isinstance(data, dict):
+        return data['message']
+    if command == 'status' and isinstance(data, list) and not data:
+        return 'no active runs'
+    return json.dumps(data, indent=2, sort_keys=True)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Construct the CLI argument parser."""
+    parser = argparse.ArgumentParser(
+        prog='pi-team-run',
+        description='Manual durable pipeline bookkeeping for pi team runs.',
+    )
+    parser.add_argument('--json', action='store_true', default=False, help='Emit JSON output')
+    sub = parser.add_subparsers(dest='command', required=True)
+
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument('--json', action='store_true', default=argparse.SUPPRESS, help='Emit JSON output')
+
+    p_start = sub.add_parser('start', parents=[common], help='Start a pipeline run for a repo')
+    p_start.add_argument('repo', help='Repository path or identifier')
+    p_start.add_argument('--run-id', help='Optional explicit run identifier')
+    p_start.add_argument('--commit-only', action='store_true', help='Stop after the local commit checkpoint')
+    p_start.add_argument('--no-ci', action='store_true', help='Omit CI only where repository policy explicitly has none')
+    p_start.add_argument('--with-deploy', action='store_true', help='Opt in to optional deploy stage')
+    p_start.add_argument('--with-honcho', action='store_true', help='Opt in to optional honcho stage')
+    p_start.add_argument('--with-wiki', action='store_true', help='Opt in to optional wiki stage')
+    p_start.add_argument('--note', help='Optional nonsecret run note')
+
+    p_status = sub.add_parser('status', parents=[common], help='Inspect a run or list runs')
+    p_status.add_argument('run_id', nargs='?', help='Optional run identifier')
+    p_status.add_argument('--all', action='store_true', help='Include terminal runs when listing')
+
+    p_resume = sub.add_parser('resume', parents=[common], help='Show next step without modifying state')
+    p_resume.add_argument('run_id', help='Run identifier')
+
+    p_wait = sub.add_parser('wait', parents=[common], help='Record an explicit wait on the current stage')
+    p_wait.add_argument('run_id', help='Run identifier')
+    p_wait.add_argument('stage', help='Current stage name')
+    p_wait.add_argument('--target', required=True, choices=WAIT_TARGETS, help='Wait routing target')
+    p_wait.add_argument('--rev', help='Expected full hex revision (required for CI)')
+    p_wait.add_argument('--deadline', help='ISO-8601 deadline with timezone or Z (required for CI)')
+    p_wait.add_argument('--reason', help='Optional nonsecret wait reason')
+    p_wait.add_argument('--replace', action='store_true', help='Supersede an existing active wait')
+
+    p_ckpt = sub.add_parser('checkpoint', parents=[common], help='Checkpoint the current stage')
+    p_ckpt.add_argument('run_id', help='Run identifier')
+    p_ckpt.add_argument('stage', help='Current stage name')
+    p_ckpt.add_argument('--evidence', required=True, help='Required opaque nonsecret evidence locator')
+    p_ckpt.add_argument('--rev', help='Full hex revision (required for CI checkpoint)')
+    p_ckpt.add_argument('--skip', action='store_true', help='Explicitly skip an optional stage')
+    p_ckpt.add_argument('--note', help='Optional nonsecret note')
+
+    sub.add_parser('watch', parents=[common], help='Emit deduped JSON notices for due waits')
+
+    p_cancel = sub.add_parser('cancel', parents=[common], help='Cancel a run at its current stage')
+    p_cancel.add_argument('run_id', help='Run identifier')
+    p_cancel.add_argument('stage', help='Current stage name')
+    p_cancel.add_argument('--reason', help='Optional cancellation reason')
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    handlers = {
+        'start': cmd_start,
+        'status': cmd_status,
+        'resume': cmd_resume,
+        'wait': cmd_wait,
+        'checkpoint': cmd_checkpoint,
+        'watch': cmd_watch,
+        'cancel': cmd_cancel,
+    }
+    os.umask(0o077)
+    try:
+        db_path = resolve_state_db_path()
+        code, result = handlers[args.command](args, db_path)
+    except CliError as exc:
+        print(f'error: {exc}', file=sys.stderr)
+        return 1
+    except (sqlite3.DatabaseError, OSError) as exc:
+        print(f'state error: {exc}', file=sys.stderr)
+        return 1
+
+    if args.command == 'watch':
+        for notice in result:
+            print(json.dumps(notice, sort_keys=True))
+    elif args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(format_human(args.command, result))
+    return code
+
+
+if __name__ == '__main__':
+    sys.exit(main())
