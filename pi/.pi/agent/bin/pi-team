@@ -14,8 +14,8 @@ examples=$agent_dir/install/releases/$version/node_modules/@earendil-works/pi-co
 subagent=$examples/subagent/index.ts
 todo=$examples/todo.ts
 policy=$agent_dir/team/workflow.md
-if [ ! -r "$subagent" ] || [ ! -r "$todo" ] || [ ! -r "$policy" ] || [ ! -d "$agent_dir/agents" ]; then
-  printf '%s\n' 'pi-team: missing bundled subagent or todo example, workflow policy, or role definitions.' >&2
+if [ ! -r "$subagent" ] || [ ! -r "$todo" ] || [ ! -r "$policy" ] || [ ! -d "$agent_dir/agents" ] || [ ! -r "$agent_dir/extensions/agy-worker.ts" ]; then
+  printf '%s\n' 'pi-team: missing AGY worker extension, bundled subagent or todo example, workflow policy, or role definitions.' >&2
   exit 1
 fi
-exec "$agent_dir/bin/pi" --extension "$subagent" --extension "$todo" --append-system-prompt "$policy" "$@"
+exec "$agent_dir/bin/pi" --extension "$subagent" --extension "$todo" --append-system-prompt "$policy" --agy-team "$@"

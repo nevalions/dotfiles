@@ -1,10 +1,10 @@
 # Pi team CLI
 
-Run `pi-team` instead of `pi` for the team workflow. It loads the bundled subagent and todo examples and appends `workflow.md` to the parent prompt. Add `--model jev/auto` to use Jev for the coordinator; child models and effort are pinned in role frontmatter.
+Run `pi-team` instead of `pi` for the team workflow. It loads the bundled subagent and todo examples and appends `workflow.md` to the parent prompt. Add `--model jev/auto` to use Jev for the coordinator; Pi subagent models and effort are pinned in role frontmatter. The AGY implementation worker is pinned separately to `gemini-4-hydrogen-high` at `high` effort.
 
 Ask for an implementation to run the plan, implementation, tests, review, and fixes without routine approvals. Ask for a plan or review only to keep it read-only. In the TUI, `/todos` shows the current session branch's checklist. It is not a shared board, an unattended queue, or a crash-recovery scheduler.
 
-Only the wrapper loads the extensions. Do not add them to Pi's discovered extensions or shared settings. Role files under `~/.pi/agent/agents` are inert without the subagent extension. Workflow rules are prompt policy, not sandbox or permission enforcement.
+Only the wrapper loads the bundled subagent and todo extensions. `~/.pi/agent/extensions/agy-worker.ts` is auto-loaded in both plain Pi and `pi-team`; the wrapper enables team mode. Role files under `~/.pi/agent/agents` are inert without the subagent extension. The legacy Pi worker role is not used by the team workflow. Workflow rules are prompt policy, not sandbox or permission enforcement.
 
 ## Interactive today, unattended factory planned
 
@@ -18,16 +18,16 @@ A worktree separates changes, not OS privileges: the worker has shell access and
 | --- | --- | --- |
 | Scout | `opencode-go/deepseek-v4.1-flash` | Medium |
 | Planner | `openai-codex/gpt-6.1-sol` | Medium |
-| Worker | `openai-codex/gpt-6.1-terra` | Medium |
+| Worker | AGY `gemini-4-hydrogen-high` | High |
 | Reviewer | `openai-codex/gpt-6.1-sol` | High |
 
-The parent coordinates; the scout, planner, and reviewer use read-only tools. Worker edits are scoped to an isolated task worktree. Implementation authorization covers ordinary coding, tests, and review fixes, not commits, pushes, merges, deploys, or tracker changes.
+The parent coordinates; the scout, planner, and reviewer use read-only tools. The coordinator gives the AGY worker an isolated task worktree and verifies its changes and checks. AGY print mode may deny shell permissions; the coordinator runs required checks without bypassing AGY permissions. Implementation authorization covers ordinary coding, tests, and review fixes, not commits, pushes, merges, deploys, or tracker changes.
 
 ## Install and verify
 
-Deploy with `python3 install-agents.py --tools pi --check` and then the same command without `--check`, or link only `bin/pi-team`, `agents`, and `team` into `~/.pi/agent`. Requires a managed Pi release with both bundled examples and authenticated routes for the role models. Repository implementation also needs a working `bd` CLI, an initialized repo tracker, and a documented sync procedure. Verify the tracker with `bd where --json` and inspect the selected issue before admitting work.
+Deploy with `python3 install-agents.py --tools pi --check` and then the same command without `--check`, Requires a managed Pi release with both bundled examples and authenticated routes for the Pi role models, plus an authenticated `agy` on PATH with access to `gemini-4-hydrogen-high`. Repository implementation also needs a working `bd` CLI, an initialized repo tracker, and a documented sync procedure. Verify the tracker with `bd where --json` and inspect the selected issue before admitting work.
 
-On 2026-11-21, Pi 1.6.0 completed a live smoke test for all four roles. A separate disposable-repository test used GPT-6.2 Sol as coordinator: it updated code and docs in a task worktree, ran independent review, closed all milestones, and left the original checkout unchanged without a second user turn. RPC command discovery showed `todos` in `pi-team` but not plain `pi`. Model listing confirmed `jev/auto` was available; the end-to-end test did not exercise Jev routing.
+On 2026-11-21, before switching the worker to AGY, Pi 1.6.0 completed a live smoke test for the original four Pi roles. A separate disposable-repository test used GPT-6.2 Sol as coordinator: it updated code and docs in a task worktree, ran independent review, closed all milestones, and left the original checkout unchanged without a second user turn. RPC command discovery showed `todos` in `pi-team` but not plain `pi`. Model listing confirmed `jev/auto` was available; the end-to-end test did not exercise Jev routing.
 
 ## Proposed: Jev-assisted review routing
 
