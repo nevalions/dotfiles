@@ -199,6 +199,7 @@ class UnifiedTests(unittest.TestCase):
 
     def test_default_hermes_stow_excludes_named_packages(self):
         self.copy_package('hermes')
+        (self.profile / 'config.base.yaml').write_text('model.default: reviewed\n')
         installer = load(self.repo / 'hermes/install.py')
         home = self.home / '.hermes'
         installer.stow(home, check=False)
