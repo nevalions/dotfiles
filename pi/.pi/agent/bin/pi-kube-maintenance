@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Observe the installed canary without changing Kubernetes resources."""
+from __future__ import annotations
+
+import argparse
+import copy
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+
+class ObservationError(ValueError):
+    """Current canary evidence is missing, changing or unhealthy."""
+
+
+def require(condition, message):
+    if not condition:
+        raise ObservationError(message)
+
+
+def get(args, namespace, kind, name=None):
+    command = ['kubectl', '--context', args.context, '--request-timeout=10s', '-n', namespace, 'get', kind]
+    if name:
+        command.append(name)
+    command += ['-o', 'json']
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=15, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise ObservationError(f'kubectl get {kind} timed out') from exc
+    except OSError as exc:
+        raise ObservationError(f'cannot execute kubectl: {exc}') from exc
+    require(result.returncode == 0, f'kubectl get {kind} failed: {result.stderr.strip()[:1000]}')
+    try:
+        value = json.loads(result.stdout)
+    except ValueError as exc:
+        raise ObservationError(f'kubectl get {kind} returned invalid JSON') from exc
+    require(isinstance(value, dict), f'kubectl get {kind} returned a non-object')
+    return value
+
+
+def owned(resource, kind, uid):
+    return any(ref.get('kind') == kind and ref.get('uid') == uid and ref.get('controller') is True
+               for ref in resource.get('metadata', {}).get('ownerReferences', []))
+
+
+def snapshot(args):
+    flux = get(args, args.flux_namespace, 'kustomizations.kustomize.toolkit.fluxcd.io', args.kustomization)
+    deployment = get(args, args.namespace, 'deployment', args.deployment)
+    replica_sets = get(args, args.namespace, 'replicasets').get('items', [])
+    pods = get(args, args.namespace, 'pods').get('items', [])
+    uid = deployment['metadata']['uid']
+    replica_sets = [rs for rs in replica_sets if owned(rs, 'Deployment', uid)]
+    rs_uids = {rs['metadata']['uid'] for rs in replica_sets}
+    pods = [pod for pod in pods if any(owned(pod, 'ReplicaSet', rs_uid) for rs_uid in rs_uids)]
+    return {'flux': flux, 'deployment': deployment,
+            'replica_sets': sorted(replica_sets, key=lambda x: x['metadata']['uid']),
+            'pods': sorted(pods, key=lambda x: x['metadata']['uid'])}
+
+
+def condition(resource, name):
+    found = [c for c in resource.get('status', {}).get('conditions', []) if c.get('type') == name]
+    require(len(found) <= 1, f'duplicate {name} conditions')
+    return found[0] if found else {}
+
+
+def template(value):
+    value = copy.deepcopy(value)
+    value.get('metadata', {}).get('labels', {}).pop('pod-template-hash', None)
+    return value
+
+
+def identity(resource):
+    metadata = resource['metadata']
+    return {key: metadata[key] for key in ('uid', 'generation', 'resourceVersion') if key in metadata}
+
+
+def validate(state, args):
+    flux, dep = state['flux'], state['deployment']
+    fm, fs = flux['metadata'], flux.get('status', {})
+    require(not fm.get('deletionTimestamp'), 'Flux Kustomization is terminating')
+    require(not dep['metadata'].get('deletionTimestamp'), 'deployment is terminating')
+    ready = condition(flux, 'Ready')
+    require(fs.get('observedGeneration') == fm['generation'], 'Flux observedGeneration is stale')
+    require(ready.get('status') == 'True', 'Flux is not Ready')
+    require(ready.get('observedGeneration', fm['generation']) == fm['generation'], 'Flux Ready condition is stale')
+    require(all(condition(flux, name).get('status') != 'True' for name in ('Reconciling', 'Stalled')), 'Flux is reconciling or stalled')
+    revision = fs.get('lastAppliedRevision')
+    require(isinstance(revision, str) and revision and revision == fs.get('lastAttemptedRevision'), 'Flux applied/attempted revision is missing or differs')
+    dm, ds = dep['metadata'], dep.get('status', {})
+    desired = dep['spec'].get('replicas', 1)
+    require(isinstance(desired, int) and desired > 0, 'deployment must have positive desired replicas')
+    require(ds.get('observedGeneration') == dm['generation'], 'deployment observedGeneration is stale')
+    require(all(ds.get(key, 0) == desired for key in ('replicas', 'updatedReplicas', 'readyReplicas', 'availableReplicas')), 'deployment rollout is incomplete')
+    require(ds.get('unavailableReplicas', 0) == 0, 'deployment has unavailable replicas')
+    require(condition(dep, 'Available').get('status') == 'True', 'deployment is not Available')
+    progress = condition(dep, 'Progressing')
+    require(progress.get('status') == 'True' and progress.get('reason') == 'NewReplicaSetAvailable', 'deployment has not completed progression')
+    deployment_revision = dm.get('annotations', {}).get('deployment.kubernetes.io/revision')
+    require(bool(deployment_revision), 'deployment revision is missing')
+    current = [rs for rs in state['replica_sets'] if
+               rs['metadata'].get('annotations', {}).get('deployment.kubernetes.io/revision') == deployment_revision
+               and template(rs['spec']['template']) == template(dep['spec']['template'])]
+    require(len(current) == 1, 'expected one owned current ReplicaSet matching deployment revision/template')
+    rs = current[0]
+    require(not rs['metadata'].get('deletionTimestamp') and rs['spec'].get('replicas') == desired, 'current ReplicaSet is terminating or scaled differently')
+    require(rs.get('status', {}).get('observedGeneration') == rs['metadata']['generation'], 'ReplicaSet observedGeneration is stale')
+    require(all(rs.get('status', {}).get(key, 0) == desired for key in ('replicas', 'readyReplicas', 'availableReplicas')), 'ReplicaSet is incomplete')
+    pods = [p for p in state['pods'] if owned(p, 'ReplicaSet', rs['metadata']['uid'])]
+    require(len(pods) == desired and len(state['pods']) == desired, 'expected only the current ReplicaSet desired pods')
+    declared = [c for c in dep['spec']['template']['spec']['containers'] if c['name'] == args.container]
+    require(len(declared) == 1, 'canary container is missing or duplicated in deployment')
+    observed_pods = []
+    for pod in pods:
+        name = pod['metadata'].get('name', pod['metadata']['uid'])
+        require(not pod['metadata'].get('deletionTimestamp'), f'pod {name} is terminating')
+        require(pod.get('status', {}).get('phase') == 'Running' and all(condition(pod, c).get('status') == 'True' for c in ('Ready', 'ContainersReady')), f'pod {name} is not Ready')
+        containers = [c for c in pod['spec']['containers'] if c['name'] == args.container]
+        require(len(containers) == 1 and containers[0]['image'] == declared[0]['image'], f'pod {name} container image differs from deployment')
+        statuses = [c for c in pod['status'].get('containerStatuses', []) if c.get('name') == args.container]
+        require(len(statuses) == 1 and statuses[0].get('ready') is True and 'running' in statuses[0].get('state', {}), f'pod {name} canary container is not running/ready')
+        image_id = statuses[0].get('imageID', '')
+        match = re.fullmatch(r'(?:[a-zA-Z0-9+.-]+://)?(?:[^\s@]+@)?(sha256:[0-9a-fA-F]{64})', image_id)
+        require(match is not None, f'pod {name} canary imageID has no sha256 digest')
+        observed_pods.append(dict(identity(pod), name=name, image_id=image_id, digest=match.group(1).lower()))
+    return {'flux': dict(identity(flux), revision=revision),
+            'deployment': dict(identity(dep), revision=deployment_revision, replicas=desired, image=declared[0]['image']),
+            'replica_set': dict(identity(rs), name=rs['metadata'].get('name')), 'pods': observed_pods,
+            'digests': sorted({p['digest'] for p in observed_pods})}
+
+
+def persist(directory, receipt):
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=directory, prefix='.latest-', delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(receipt, output, sort_keys=True)
+            output.write('\n')
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, directory / 'latest.json')
+        temporary = None
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--once', action='store_true', required=True)
+    parser.add_argument('--context', required=True)
+    parser.add_argument('--state-dir', type=Path, required=True)
+    parser.add_argument('--flux-namespace', default='flux-system')
+    parser.add_argument('--kustomization', default='autodeploy-canary')
+    parser.add_argument('--namespace', default='agent-school')
+    parser.add_argument('--deployment', default='autodeploy-canary')
+    parser.add_argument('--container', default='canary')
+    args = parser.parse_args()
+    receipt = {'schema_version': 1, 'mode': 'current-observation', 'verified_release': False,
+               'observed_at': datetime.now(timezone.utc).isoformat(), 'context': args.context,
+               'target': {'flux_namespace': args.flux_namespace, 'kustomization': args.kustomization,
+                          'namespace': args.namespace, 'deployment': args.deployment, 'container': args.container}}
+    try:
+        first = snapshot(args)
+        receipt['observation'] = validate(first, args)
+        second = snapshot(args)
+        validate(second, args)
+        require(first == second, 'canary resources changed during observation; retry after reconciliation settles')
+        receipt['status'] = 'observed'
+        code = 0
+    except (ObservationError, KeyError, TypeError, AttributeError) as exc:
+        receipt.update(status='failed', error=str(exc) or type(exc).__name__)
+        code = 1
+    try:
+        persist(args.state_dir, receipt)
+    except OSError as exc:
+        receipt.update(status='failed', error=f'cannot persist latest.json: {exc}')
+        code = 1
+    print(json.dumps(receipt, sort_keys=True))
+    return code
+
+
+if __name__ == '__main__':
+    sys.exit(main())
