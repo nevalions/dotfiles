@@ -55,6 +55,14 @@ def managed_relinks(target, previous, package):
     return relinks
 
 
+def configure_hooks(hooks):
+    groups = hooks.setdefault('hooks', {}).setdefault('SessionStart', [])
+    command = 'codex-honcho-mcp --session-start'
+    if not any(h.get('command') == command for g in groups for h in g.get('hooks', [])):
+        groups.append({'matcher': 'startup|resume|compact', 'hooks': [
+            {'type': 'command', 'command': command, 'timeout': 30, 'additionalContextLimit': 3000}]})
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--target', type=Path, default=Path.home())
@@ -74,15 +82,11 @@ def main():
         parser.error('An independently managed Honcho server exists; preserved.')
     settings.setdefault('mcp_servers', {})['honcho'] = {
         **desired, **(old or {}), 'command': str(launcher),
+        'args': (old or {}).get('args', ['--auto-grant']),
         'env_vars': runtime_env_vars((old or {}).get('env_vars'))}
     settings.setdefault('features', {}).setdefault('hooks', True)
     hooks = json.loads(hook_file.read_text()) if hook_file.exists() else {}
-    groups = hooks.setdefault('hooks', {}).setdefault('SessionStart', [])
-    command = 'codex-honcho-mcp --session-start'
-    found = any(h.get('command') == command for g in groups for h in g.get('hooks', []))
-    if not found:
-        groups.append({'matcher': 'startup|resume|compact', 'hooks': [
-            {'type': 'command', 'command': command, 'timeout': 30, 'additionalContextLimit': 3000}]})
+    configure_hooks(hooks)
     relinks = []
     previous = None
     if launcher.exists() or launcher.is_symlink():
@@ -126,7 +130,7 @@ def main():
         path.unlink()
     ignore = r'^(?!\.codex$|\.codex/honcho(?:/|$)|\.codex/hooks\.json$|\.local$|\.local/bin$|\.local/bin/codex-honcho-mcp$).*'
     try:
-        subprocess.run(['stow', '--dir', str(PACKAGE.parent), '--target', str(target), '--no-folding', '--ignore', ignore, 'codex'], check=True)
+        subprocess.run(['stow', '--dir', str(PACKAGE.parent), '--target', str(target), '--no-folding', '--ignore', '__pycache__', '--ignore', ignore, 'codex'], check=True)
     except subprocess.CalledProcessError:
         for path, old_link in relinks:
             if not path.exists() and not path.is_symlink():

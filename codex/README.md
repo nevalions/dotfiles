@@ -234,7 +234,9 @@ MCP connection uses Pi's REST API upstream and exposes only scoped recall, peer 
 There is no transcript capture. Session-start repository card recall and an
 explicit exact-scope publisher match the active local Pi configuration.
 
-See [Honcho setup and publishing](honcho/README.md). The standard
+See [Honcho setup and publishing](honcho/README.md). Top-level Codex sessions
+under `~/code` and the `~/ansible` repository automatically receive exact
+repository/thread grants for verified findings; workers and forks stay read-only. The standard
 `python3 codex/install.py --skip-plugins` setup includes it after pulling.
 For a targeted update, run `python3 codex/honcho/install.py --check`, then the
 same command without `--check` to update its registration and Stow links.

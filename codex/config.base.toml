@@ -48,6 +48,7 @@ startup_timeout_sec = 60
 
 [mcp_servers.honcho]
 command = "codex-honcho-mcp"
+args = ["--auto-grant"]
 env_vars = ["XDG_RUNTIME_DIR", "HONCHO_CONFIG_PATH", "HONCHO_BASE_URL", "HONCHO_URL", "HONCHO_ENDPOINT", "HONCHO_API_KEY", "HONCHO_WORKSPACE", "HONCHO_WORKSPACE_ID"]
 startup_timeout_sec = 60
 default_tools_approval_mode = "writes"

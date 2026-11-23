@@ -57,10 +57,49 @@ verify it. Use `recall` for relevant decisions on the first repository target,
 research. Query `linroot` only for user preferences. Empty memory is different
 from unavailable memory. The hook does not send raw prompts or logs.
 
+## Automatic repository publishing
+
+The installed MCP registration uses `--auto-grant`. On top-level SessionStart
+(startup), checkouts under `~/code` and the `~/ansible` repository receive an
+exact repository/thread/task grant. Resume and compact renew only a
+previously registered parent thread; they never promote a child or fork.
+Sessions created before this integration need a fresh top-level start. Linked worktrees use
+the canonical common Git directory. Dotfiles and unmapped roots stay recall-only.
+No peers are provisioned and startup performs no upstream writes. Publishing
+still verifies both existing peers and all exact-scope evidence fields.
+
+Grants live as owner-only regular files under the mode-0700
+`~/.codex/honcho-grants` directory, outside Git. The runtime selects a grant from
+Codex-authored `params._meta.threadId`, rather than model arguments. Workers use
+SubagentStart and forks are excluded, so they receive no automatic grant even
+when the native runtime shares an MCP connection. Missing metadata, unsafe
+permissions, symlink grants and unmatched threads deny publisher calls. These
+files persist for same-thread resume; they contain scope only, never credentials
+or conversation text. Starting an unmapped checkout revokes that thread's grant.
+
+Only the parent publishes eligible verified repository findings at task
+completion: inspect `get_grant`, use its exact scope, cite checked immutable
+evidence and independent verification, then confirm the exact conclusion with
+`readback`. User preferences still require explicit saving authorization and an
+explicit `linroot` grant. A denied append must not be bypassed. Existing explicit
+server arguments are preserved by the installer; remove an old custom override
+or configure `args = ["--auto-grant"]` deliberately to adopt automatic mode.
+New sessions and trusted SessionStart hooks are required for automatic grants.
+MCP tools are discoverable in all sessions; their presence grants no write scope.
+
+This guard follows the native [tool-call metadata implementation](https://github.com/openai/codex/blob/ccf9be8cc458bd6b8336fe84d68d8893f2691a5e/codex-rs/core/src/mcp_tool_call.rs)
+(`with_mcp_tool_call_ids_meta` overwrites `threadId` with the calling thread), and
+[hook event implementation](https://github.com/openai/codex/blob/ccf9be8cc458bd6b8336fe84d68d8893f2691a5e/codex-rs/hooks/src/events/session_start.rs)
+(SessionStart uses the same ThreadId; SubagentStart is a separate event).
+These sources are pinned to the installed Codex 0.171.0 release. Unsupported
+clients without native thread metadata remain recall-only. This is a guard for
+a trusted Unix user, not isolation from arbitrary processes with shell access.
+
 ## Explicit publishing from the current session
 
-A request to save memory authorizes only its requested facts and target. Routine
-work and recall do not authorize publication. Only the parent/coordinator may
+Outside a matching automatic repository grant, a request to save memory
+authorizes only its requested facts and target; routine work and recall do not
+authorize publication. Only the parent/coordinator may
 publish; children return evidence-backed drafts. Do not use an available grant
 to widen the audience or publish to unrelated peers. Existing observer and target peers must already be provisioned. After all
 exact-grant and evidence checks pass, explicit publishing verifies both peers

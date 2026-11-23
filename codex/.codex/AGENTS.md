@@ -86,7 +86,7 @@ One read-only monitor owns polling; the Git worker owns mutations. Wait at most 
 
 Avoid copying the same material into every store; link to its authoritative source. Current instructions and verified evidence outrank recalled summaries. Never store secrets in memory or the wiki.
 
-Honcho defaults to recall only unless the user authorizes recording. Use only the authorized publication channel and matching audience/scope, cite immutable evidence for verified durable facts, and confirm exact readback before reporting publication. Without matching authorization or a required grant, leave a draft if useful and continue delivery. Never store credentials or raw transcripts. Memory tools alone do not guarantee automatic capture or synchronization.
+Honcho defaults to recall only unless the user authorizes recording. In a top-level Codex session for repositories under `~/code` or `~/ansible`, a matching automatic publisher grant authorizes verified repository findings at task completion. Inspect `get_grant`, use only its exact repository/session/task, and confirm exact readback. Children and forks return drafts and never publish; missing or denied grants remain recall-only. Use only the authorized publication channel and matching audience/scope, cite immutable evidence for verified durable facts, and confirm exact readback before reporting publication. Without matching authorization or a required grant, leave a draft if useful and continue delivery. Never store credentials or raw transcripts. Memory tools alone do not guarantee automatic capture or synchronization.
 
 At closeout, report Git delivery, Beads sync, wiki publication, and Honcho publication separately when relevant. Mark local-only, pending, blocked, and verified remote outcomes explicitly.
 

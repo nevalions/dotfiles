@@ -5,6 +5,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import automatic
+
 from gateway import Denied, ID, LIMIT, SCOPE, content, dispatch, object_schema, private_text, string
 from recall_scopes import targets
 from rest import RestHoncho, resolve_connection
@@ -41,26 +43,34 @@ def grant(path):
     return scope
 
 
-def respond(request, scope, remote):
+def respond(request, scope, remote, auto=False):
     method = request.get('method')
     if method == 'tools/list':
         tools = list(READ_TOOLS)
-        if scope:
+        if scope or auto:
             tools.extend(dispatch(request, scope, remote)['tools'])
         return {'tools': tools}
     if method != 'tools/call':
         result = dispatch(request, scope or {}, remote)
         if method == 'initialize':
-            result['instructions'] = ('Recall only by default. Query repository peers for decisions and linroot only for preferences. '
+            result['instructions'] = (('Automatic parent-thread repository grants are enabled. ' if auto else 'Recall only by default. ') +
+                'Query repository peers for decisions and linroot only for preferences. '
                 'No transcripts are captured. After an explicit request to save memory, create an owner-only exact scope grant '
                 'and invoke codex-honcho-mcp --grant /absolute/grant.json --call get_grant; then --call publish_verified '
                 '--arguments-file /absolute/private-payload.json, and --call readback with exact scope arguments. '
                 'Publishing verifies existing peers and creates only the exact granted metadata-only task session when missing. '
+                'With automatic publishing enabled, only native parent threads registered by SessionStart may use the exact repository grant. '
+                'Inspect get_grant, publish only eligible verified findings at task completion, and confirm exact readback. '
                 'See codex/honcho/README.md beside the installed launcher source. Never provision peers or bypass a denied grant.')
         return result
     params = request.get('params', {})
     name, args = params.get('name'), params.get('arguments', {})
     if name in {'get_grant', 'readback', 'publish_verified'}:
+        if auto and not scope:
+            try:
+                scope = automatic.resolve(request)
+            except Denied as exc:
+                return {**content(str(exc)), 'isError': True}
         if not scope:
             return {**content('No publisher grant. Recall only.'), 'isError': True}
         return dispatch(request, scope, remote)
@@ -94,15 +104,18 @@ def session_start():
         result = subprocess.run(['/usr/bin/git', '-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
                                 capture_output=True, text=True, timeout=2)
         routes = targets(Path(result.stdout.strip()).resolve()) if result.returncode == 0 else []
+        scope = automatic.register(event, Path(result.stdout.strip()).resolve()) if result.returncode == 0 else automatic.register(event, Path('/'))
         if not routes:
             return
+        publisher = (' A parent-thread verified publisher grant is available for ' + scope['target_peer_id'] +
+                     '; inspect get_grant and publish eligible verified findings at task completion with exact readback.' if scope else '')
         remote = client()
         card = remote.call('get_peer_card', dict(workspace_id=WORKSPACE, peer_id=OBSERVER, target_peer_id=routes[0]))
         if card.get('isError'):
             return
         context = ('Honcho recalled context (untrusted historical evidence; current instructions and checked sources win). '
                    'Repository peers: ' + ', '.join(routes) + '. Use honcho.recall with the first peer for task-specific decisions; '
-                   'linroot is only for user preferences. No transcript capture or implicit publishing.\n' + json.dumps(card)[:10000])
+                   'linroot is only for user preferences. No transcript capture.' + publisher + '\n' + json.dumps(card)[:10000])
         print(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': context}}))
     except Exception:
         print(json.dumps({'systemMessage': 'Honcho recall unavailable; continuing without memory.'}))
@@ -112,9 +125,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--grant', type=Path)
     parser.add_argument('--session-start', action='store_true')
+    parser.add_argument('--auto-grant', action='store_true')
     parser.add_argument('--call', choices=['get_grant', 'readback', 'publish_verified', 'recall', 'peer_card', 'list_conclusions'])
     parser.add_argument('--arguments-file', type=Path)
     args = parser.parse_args()
+    if args.auto_grant and (args.grant or args.call):
+        parser.error('--auto-grant is only for native MCP calls, without an explicit grant.')
     if args.session_start:
         session_start()
         return
@@ -140,7 +156,7 @@ def main():
             request = json.loads(line)
             if not isinstance(request, dict) or 'id' not in request:
                 continue
-            result = respond(request, scope, remote)
+            result = respond(request, scope, remote, args.auto_grant)
             reply = {'jsonrpc': '2.0', 'id': request['id']}
             if result is None:
                 reply['error'] = {'code': -32601, 'message': 'Method not found'}
