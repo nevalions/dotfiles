@@ -102,6 +102,33 @@ class HonchoTest(unittest.TestCase):
                 self.assertEqual(recall_scopes.targets(home / 'dotfiles/.git'), ['dotfiles', 'code-wide'])
                 self.assertEqual(recall_scopes.targets(home / 'unmapped/.git'), [])
 
+    def test_peer_aliases_match_pi_and_automatic_grants(self):
+        import importlib.util
+        from unittest.mock import patch
+        import automatic
+        import recall_scopes
+        path = MODULE.parents[2] / 'pi/.pi/agent/honcho-cli/recall-scopes.py'
+        spec = importlib.util.spec_from_file_location('pi_recall_scopes', path)
+        pi_routes = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pi_routes)
+        aliases = {
+            'ochistka-musoroprovoda.ru': 'ochistka-musoroprovoda-ru',
+            'videooperator.su': 'videooperator-su',
+            'portals/videosemka.su': 'portals--videosemka-su',
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            with patch.object(recall_scopes, 'HOME', home), patch.object(pi_routes, 'HOME', home), patch.object(automatic, 'HOME', home):
+                for repo, peer in aliases.items():
+                    common = home / 'code' / repo / '.git'
+                    expected = [peer, 'code-wide']
+                    self.assertEqual(recall_scopes.targets(common), expected)
+                    self.assertEqual(pi_routes.targets(common), expected)
+                    self.assertEqual(automatic.route(common), peer)
+                self.assertEqual(pi_routes.targets(home / 'code/statsboard/statsboards-backend/.git'),
+                                 ['statsboard--statsboards-backend', 'project-statsboard', 'code-wide'])
+                self.assertEqual(pi_routes.targets(home / 'code/portals--videosemka.su/.git'), [])
+
     def test_grant_requires_private_file_and_fixed_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'grant.json'

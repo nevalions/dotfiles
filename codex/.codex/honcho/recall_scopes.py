@@ -10,6 +10,11 @@ GROUPS = {
     'code/statsboard/statsboards-backend': 'project-statsboard',
     'code/statsboard/statsboards-frontend': 'project-statsboard',
 }
+ALIASES = {
+    'code/ochistka-musoroprovoda.ru': 'ochistka-musoroprovoda-ru',
+    'code/videooperator.su': 'videooperator-su',
+    'code/portals/videosemka.su': 'portals--videosemka-su',
+}
 
 
 def targets(common):
@@ -24,7 +29,7 @@ def targets(common):
         return []
     if rel.startswith('code/') and (repo in {'ansible', 'dotfiles'} or '--' in rel):
         return []
-    return [repo, *([GROUPS[rel]] if rel in GROUPS else []), 'code-wide']
+    return [ALIASES.get(rel, repo), *([GROUPS[rel]] if rel in GROUPS else []), 'code-wide']
 
 
 if __name__ == '__main__':
