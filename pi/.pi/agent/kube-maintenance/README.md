@@ -35,12 +35,96 @@ and ReplicaSet generations/UIDs/resource versions, pod UIDs and runtime digests.
 Treat a failed receipt as a failed check even if it contains partial observation
 fields. Keep state outside the repository and use one operator host/state path.
 
-A healthy receipt has `status: observed`, `mode: current-observation`, and
-`verified_release: false`. It records the currently installed state without a
-candidate revision or expected image digest. It cannot prove that a requested
-release was delivered or that an image tag resolves to a particular candidate.
-A release verifier must separately correlate an authorized candidate revision
-and expected digest; this first-install observer makes no such claim.
+Without a candidate, a healthy receipt has `status: observed`,
+`mode: current-observation`, and `verified_release: false`. The normal systemd
+invocation automatically reads `/etc/pi-kube-maintenance/candidate.json` when
+present; it needs no timer or CLI change. Removing that file restores observation
+mode. No Kubernetes resources or candidate files are written by the runner.
+
+An operator publishes a candidate atomically after verifying the release CI and
+registry manifests. The automatic file must be a root-owned regular file, with
+no group/world write bits, under root-owned directories without group/world
+write bits. Symlinks, malformed input, and unauthorized files fail closed. Keep
+the service unprivileged and the candidate outside its writable paths. The
+runner trusts these operator-supplied CI/registry references; it does not contact
+Forgejo or a registry and needs no registry credentials. A deliberately invoked
+`--candidate-file /path/to/candidate.json` also permits a file owned by the
+invoking user, with no group/world write bits, for fixtures and one-shot checks.
+That explicit path is an operator override of the file location/owner policy;
+it never overrides the context or target selected by CLI arguments.
+
+Candidate schema (all shown fields required; use full lowercase SHA/digests):
+
+```json
+{
+  "schema_version": 1,
+  "target": {
+    "context": "bay",
+    "flux_namespace": "flux-system",
+    "kustomization": "autodeploy-canary",
+    "namespace": "agent-school",
+    "deployment": "autodeploy-canary",
+    "container": "canary"
+  },
+  "expected_revision": "master@sha1:<40-character-merge-sha>",
+  "release": {
+    "pr": 123,
+    "source_sha": "<40-character-pr-head-sha>",
+    "merge_sha": "<40-character-merge-sha>",
+    "required_ci": [
+      {"context": "<required-check>", "url": "https://<run-url>",
+       "sha": "<40-character-merge-sha>", "status": "success"}
+    ]
+  },
+  "desired_image": "registry.example/canary:<exact-tag>",
+  "registry_evidence": {
+    "tag_ref": "registry.example/canary:<exact-tag>",
+    "manifest_digest": "sha256:<64-character-top-level-manifest-digest>",
+    "runtime_manifest_digest": "sha256:<64-character-selected-platform-manifest-digest>",
+    "url": "https://<registry-evidence-url>"
+  }
+}
+```
+
+List every required successful post-merge CI check for that exact merge SHA.
+For a multi-platform image, verify the running node platform and the selected
+manifest from the registry; retain the top-level digest separately. A runtime
+`repo@sha256:...` is compared with `runtime_manifest_digest`. An opaque runtime
+config digest such as `containerd://sha256:...` cannot establish the registry
+manifest identity and fails candidate verification. An unchanged digest is
+allowed: the exact revision and desired tag still have to match.
+
+Only two identical healthy snapshots, exact Flux applied/attempted revision,
+exact deployment/pod tag and repository, and the registry-verified runtime
+manifest digest produce `mode: candidate-verification`, `status: verified`, and
+`verified_release: true`. Candidate inputs are read safely again before the
+receipt is published. A changed input or resource version fails and can be
+retried. Stale revisions, healthy wrong images, unready workloads, mismatched
+runtime digests and bad CI references fail; no prior success is reused.
+
+Candidate receipts contain the complete candidate and its canonical SHA256
+`candidate_id`. Each run atomically replaces both
+`candidates/<candidate_id>.json` and `latest.json` in the state directory; each
+file is flushed and directory-synced independently. The indexed file records
+the most recent result for that candidate, including transient failures and
+later recovery. It survives candidate removal and later observation runs. The first successful
+receipt is also saved without replacement at `verified/<candidate_id>.json`,
+so later unrelated cluster revisions cannot erase the original proof. This
+historical proof never bypasses a new observation or changes a failed result.
+Consumers must require a successful process and a current receipt with
+`status: verified` and `verified_release: true`; a historical receipt alone is
+not current health evidence. State is private local evidence, not a signed
+external attestation. Use a single timer/operator writer for one state path.
+
+Failures retain the observed Flux attempted/applied revision and selected condition
+reason/status fields, deployment generation/readiness/image and pod image IDs/state
+kinds. Condition messages and termination logs are excluded. This holds even when
+Flux health fails before detailed rollout validation. Error text includes
+actual versus expected revision/image/digest for candidate checks. Inspect
+`latest.json` and the service journal after a broken rollout, retry the same
+candidate after reconciliation, and remove/replace the root-owned candidate
+only as a deliberate operator action. No installation, image build, rollout,
+rollback, or credential provisioning is performed by this verifier.
 
 Run local fixture checks with:
 

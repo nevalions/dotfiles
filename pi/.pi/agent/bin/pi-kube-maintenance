@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import stat
 import sys
 import tempfile
 
@@ -133,7 +135,124 @@ def validate(state, args):
             'digests': sorted({p['digest'] for p in observed_pods})}
 
 
-def persist(directory, receipt):
+
+TARGET_FIELDS = ('context', 'flux_namespace', 'kustomization', 'namespace', 'deployment', 'container')
+DEFAULT_CANDIDATE = Path('/etc/pi-kube-maintenance/candidate.json')
+SHA = r'[0-9a-f]{40}'
+DIGEST = r'sha256:[0-9a-f]{64}'
+
+
+def unique_fields(pairs):
+    result = {}
+    for key, value in pairs:
+        require(key not in result, f'duplicate candidate field: {key}')
+        result[key] = value
+    return result
+
+
+def load_candidate(path, args, explicit=False):
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        require(not explicit, f'candidate file missing: {path}')
+        return None
+    except OSError as exc:
+        raise ObservationError(f'cannot safely open candidate file: {exc}') from exc
+    with os.fdopen(descriptor, 'rb') as source:
+        metadata = os.fstat(source.fileno())
+        require(stat.S_ISREG(metadata.st_mode), 'candidate must be a regular file')
+        require(metadata.st_uid in ({0, os.getuid()} if explicit else {0}), 'candidate owner is unauthorized')
+        require(not metadata.st_mode & 0o022, 'candidate is group/world writable')
+        if not explicit:
+            for parent in path.absolute().parents:
+                info = parent.lstat()
+                require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022, f'candidate directory is not trusted: {parent}')
+            require(metadata.st_uid != os.getuid() or os.getuid() == 0, 'candidate is writable by service owner')
+        raw = source.read(65537)
+        require(len(raw) <= 65536, 'candidate file exceeds 64 KiB')
+    try:
+        candidate = json.loads(raw, object_pairs_hook=unique_fields)
+        require(isinstance(candidate, dict) and candidate.get('schema_version') == 1, 'candidate schema_version must be 1')
+        require(candidate['target'] == {key: getattr(args, key) for key in TARGET_FIELDS}, 'candidate target differs from trusted CLI target')
+        release = candidate['release']
+        require(type(release['pr']) is int and release['pr'] > 0, 'candidate PR must be positive integer')
+        require(all(isinstance(release[key], str) and re.fullmatch(SHA, release[key]) for key in ('source_sha', 'merge_sha')), 'candidate source/merge SHA is invalid')
+        require(candidate['expected_revision'] == 'master@sha1:' + release['merge_sha'], 'candidate expected revision differs from merge SHA')
+        ci = release['required_ci']
+        require(isinstance(ci, list) and ci, 'candidate required CI references are missing')
+        require(all(isinstance(item, dict) and isinstance(item.get('context'), str) and item['context'] and item.get('status') == 'success' and item.get('sha') == release['merge_sha'] and isinstance(item.get('url'), str) and item['url'].startswith('https://') for item in ci), 'candidate CI evidence must reference successful checks on merge SHA')
+        image = candidate['desired_image']
+        require(isinstance(image, str) and '@' not in image and re.fullmatch(r'[^\s]+:[^/\s:]+', image), 'candidate desired image must be exact tagged reference')
+        evidence = candidate['registry_evidence']
+        require(evidence['tag_ref'] == image, 'candidate registry image tag differs from desired image')
+        require(all(isinstance(evidence[key], str) and re.fullmatch(DIGEST, evidence[key]) for key in ('manifest_digest', 'runtime_manifest_digest')), 'candidate registry manifest digest invalid')
+        require(isinstance(evidence['url'], str) and evidence['url'].startswith('https://'), 'candidate registry evidence URL missing')
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise ObservationError(f'invalid candidate receipt: {exc}') from exc
+    return candidate
+
+
+def candidate_id(candidate):
+    return hashlib.sha256(json.dumps(candidate, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def selected(value, fields):
+    return {key: value[key] for key in fields if key in value}
+
+
+def observed_conditions(resource):
+    return [selected(item, ('type', 'status', 'reason', 'observedGeneration'))
+            for item in resource.get('status', {}).get('conditions', [])]
+
+
+def observed_container(container):
+    result = selected(container, ('name', 'ready', 'image', 'imageID'))
+    states = container.get('state', {})
+    for kind in ('running', 'waiting', 'terminated'):
+        if kind in states:
+            result['state'] = kind
+            if 'reason' in states[kind]:
+                result['reason'] = states[kind]['reason']
+            break
+    return result
+
+
+def observed(state, args):
+    flux, dep = state['flux'], state['deployment']
+    fs, ds = flux.get('status', {}), dep.get('status', {})
+    containers = dep.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+    images = [c.get('image') for c in containers if c.get('name') == args.container]
+    return {
+        'flux': dict(identity(flux), **selected(fs, ('observedGeneration', 'lastAppliedRevision', 'lastAttemptedRevision')), conditions=observed_conditions(flux)),
+        'deployment': dict(identity(dep), image=images[0] if len(images) == 1 else images,
+                           **selected(ds, ('observedGeneration', 'replicas', 'readyReplicas', 'updatedReplicas', 'availableReplicas'))),
+        'pods': [{'uid': p.get('metadata', {}).get('uid'), 'conditions': observed_conditions(p),
+                  'containers': [observed_container(c) for c in p.get('status', {}).get('containerStatuses', [])]}
+                 for p in state['pods']]}
+
+
+def candidate_failure_summary(candidate, current):
+    flux, dep = current.get('flux', {}), current.get('deployment', {})
+    reasons = [c.get('reason', '') for c in flux.get('conditions', []) if c.get('status') == 'False']
+    image_ids = [c.get('imageID', '') for p in current.get('pods', []) for c in p.get('containers', [])]
+    return (f"; expected revision {candidate['expected_revision']}, image {candidate['desired_image']}, "
+            f"digest {candidate['registry_evidence']['runtime_manifest_digest']}; "
+            f"actual applied {flux.get('lastAppliedRevision')}, attempted {flux.get('lastAttemptedRevision')}, "
+            f"image {dep.get('image')}, imageIDs {image_ids}, health reasons {reasons}")
+
+
+def validate_candidate(candidate, observation):
+    require(observation['flux']['revision'] == candidate['expected_revision'], f"candidate revision mismatch: actual {observation['flux']['revision']}, expected {candidate['expected_revision']}")
+    require(observation['deployment']['image'] == candidate['desired_image'], f"candidate image mismatch: actual {observation['deployment']['image']}, expected {candidate['desired_image']}")
+    expected_digest = candidate['registry_evidence']['runtime_manifest_digest']
+    require(observation['digests'] == [expected_digest], f"candidate digest mismatch: actual {observation['digests']}, expected {expected_digest}")
+    for pod in observation['pods']:
+        require('@' in pod['image_id'], f"candidate runtime imageID {pod['image_id']} is opaque; registry manifest comparison unavailable")
+        repository = candidate['desired_image'].rsplit(':', 1)[0]
+        actual_repository = pod['image_id'].split('://')[-1].split('@')[0]
+        require(actual_repository == repository, f'candidate runtime image repository mismatch: actual {actual_repository}, expected {repository}')
+
+def persist(directory, receipt, filename='latest.json', first_only=False):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = None
     try:
@@ -143,7 +262,14 @@ def persist(directory, receipt):
             output.write('\n')
             output.flush()
             os.fsync(output.fileno())
-        os.replace(temporary, directory / 'latest.json')
+        if first_only:
+            try:
+                os.link(temporary, directory / filename)
+            except FileExistsError:
+                pass
+            temporary.unlink()
+        else:
+            os.replace(temporary, directory / filename)
         temporary = None
         descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -165,26 +291,46 @@ def main():
     parser.add_argument('--namespace', default='agent-school')
     parser.add_argument('--deployment', default='autodeploy-canary')
     parser.add_argument('--container', default='canary')
+    parser.add_argument('--candidate-file', type=Path, help='explicit trusted operator candidate (root or invoking user owned)')
     args = parser.parse_args()
     receipt = {'schema_version': 1, 'mode': 'current-observation', 'verified_release': False,
                'observed_at': datetime.now(timezone.utc).isoformat(), 'context': args.context,
                'target': {'flux_namespace': args.flux_namespace, 'kustomization': args.kustomization,
                           'namespace': args.namespace, 'deployment': args.deployment, 'container': args.container}}
+    candidate = None
+    candidate_path = args.candidate_file or DEFAULT_CANDIDATE
+    if args.candidate_file is not None or candidate_path.exists() or candidate_path.is_symlink():
+        receipt['mode'] = 'candidate-verification'
     try:
+        candidate = load_candidate(candidate_path, args, explicit=args.candidate_file is not None)
+        if candidate is not None:
+            receipt.update(mode='candidate-verification', candidate_id=candidate_id(candidate), candidate=candidate)
         first = snapshot(args)
+        receipt['observed'] = observed(first, args)
         receipt['observation'] = validate(first, args)
         second = snapshot(args)
         validate(second, args)
         require(first == second, 'canary resources changed during observation; retry after reconciliation settles')
-        receipt['status'] = 'observed'
+        if candidate is not None:
+            validate_candidate(candidate, receipt['observation'])
+        final_candidate = load_candidate(candidate_path, args, explicit=args.candidate_file is not None)
+        require(candidate == final_candidate, 'candidate changed during observation; retry')
+        receipt['status'] = 'verified' if candidate is not None else 'observed'
+        receipt['verified_release'] = candidate is not None
         code = 0
-    except (ObservationError, KeyError, TypeError, AttributeError) as exc:
-        receipt.update(status='failed', error=str(exc) or type(exc).__name__)
+    except (ObservationError, OSError, KeyError, TypeError, AttributeError) as exc:
+        receipt.update(status='failed', verified_release=False, error=str(exc) or type(exc).__name__)
+        if candidate is not None:
+            receipt['error'] += candidate_failure_summary(candidate, receipt.get('observed', {}))
         code = 1
     try:
+        if 'candidate_id' in receipt:
+            persist(args.state_dir / 'candidates', receipt, receipt['candidate_id'] + '.json')
         persist(args.state_dir, receipt)
+        if receipt['verified_release']:
+            persist(args.state_dir / 'verified', receipt, receipt['candidate_id'] + '.json', first_only=True)
     except OSError as exc:
-        receipt.update(status='failed', error=f'cannot persist latest.json: {exc}')
+        receipt.update(status='failed', verified_release=False, error=f'cannot persist receipt: {exc}')
         code = 1
     print(json.dumps(receipt, sort_keys=True))
     return code
