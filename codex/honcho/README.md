@@ -141,6 +141,10 @@ Confirm the exact conclusion before reporting success. On an ambiguous error,
 read back before retrying to avoid duplicates. A denied write stays denied; do
 not switch credentials, provision peers, call a direct API, or remove scope.
 Remove only your temporary grant/payload files after successful readback.
+HTTP 422 reports bounded validation locations and types. A recognized embedding
+token-limit error also reports the limit and actual token count; response input,
+context and arbitrary error messages are never returned. The server's token
+budget applies to the assembled conclusion, including task and evidence fields.
 The CLI workflow works immediately through shell tools without changing MCP
 configuration or restarting Codex. To expose the same publisher as MCP tools
 in a separately scoped session, launch Codex with the Honcho server `args` set

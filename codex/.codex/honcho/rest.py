@@ -12,6 +12,40 @@ from urllib.request import ProxyHandler, Request, build_opener
 from gateway import Denied, ID, LIMIT, NoRedirect, content, require_tailnet_route
 
 TAILNET_API = 'http://100.64.0.16:18000'
+VALIDATION_LIMIT = 65536
+
+
+def validation_detail(error):
+    try:
+        raw = error.read(VALIDATION_LIMIT)
+        if len(raw) >= VALIDATION_LIMIT:
+            return ''
+        details = json.loads(raw).get('detail')
+        if not isinstance(details, list):
+            return ''
+        fields = {'body', 'conclusions', 'content', 'observer_id', 'observed_id', 'session_id',
+                  'id', 'metadata', 'peers', 'observe_me', 'observe_others', 'configuration'}
+        types = {'value_error', 'missing', 'string_type', 'string_too_long', 'string_too_short',
+                 'list_type', 'dict_type', 'bool_type', 'extra_forbidden', 'string_pattern_mismatch',
+                 'too_long', 'too_short'}
+        messages = []
+        for item in details[:3]:
+            if not isinstance(item, dict):
+                continue
+            loc, kind = item.get('loc'), item.get('type')
+            if (not isinstance(loc, list) or not 1 <= len(loc) <= 8 or
+                    any(not (isinstance(part, str) and part in fields or
+                             type(part) is int and 0 <= part <= 100) for part in loc) or kind not in types):
+                continue
+            message = 'validation failed'
+            match = re.fullmatch(r'(?:Value error, )?Content exceeds maximum embedding token limit of '
+                                 r'([0-9]{1,9}) \(got ([0-9]{1,9}) tokens\)', str(item.get('msg', '')))
+            if kind == 'value_error' and loc == ['body', 'conclusions', 0] and match:
+                message = f'embedding token limit {match[1]}, actual {match[2]} tokens'
+            messages.append(f'{".".join(map(str, loc))} ({kind}): {message}')
+        return '; '.join(messages)
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+        return ''
 
 
 def resolve_connection(env=None, config_path=None):
@@ -79,7 +113,9 @@ class RestHoncho:
                     raise ValueError('oversized response')
                 return json.loads(raw)
         except HTTPError as exc:
-            raise Denied(f'Honcho REST request denied or failed (HTTP {exc.code}); no credential or transport fallback was attempted.') from None
+            detail = validation_detail(exc) if exc.code == 422 else ''
+            suffix = f' Validation: {detail}.' if detail else ''
+            raise Denied(f'Honcho REST request denied or failed (HTTP {exc.code}); no credential or transport fallback was attempted.{suffix}') from None
 
     def binding(self, args):
         if args.get('workspace_id') != self.workspace:

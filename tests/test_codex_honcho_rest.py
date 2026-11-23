@@ -1,4 +1,5 @@
 import json
+from io import BytesIO
 from pathlib import Path
 import sys
 import tempfile
@@ -84,6 +85,49 @@ class RestTests(unittest.TestCase):
             with self.assertRaisesRegex(Denied, 'HTTP 403'):
                 remote.call('get_peer_card', self.bound)
             self.assertEqual(request.call_count, 1)
+
+    def validation_failure(self, body, status=422):
+        remote = RestHoncho('http://127.0.0.1:18000', 'fixture', 'hermes-personal')
+        stream = BytesIO(body)
+        error = HTTPError('fixture', status, '', {}, stream)
+        try:
+            with patch.object(remote.opener, 'open', side_effect=error) as request:
+                with self.assertRaises(Denied) as caught:
+                    remote.request('POST', '/conclusions', {'conclusions': []})
+                self.assertEqual(request.call_count, 1)
+            return str(caught.exception), stream.tell()
+        finally:
+            error.close()
+
+    def test_embedding_validation_reports_counts_without_private_details(self):
+        body = json.dumps({'detail': [{'loc': ['body', 'conclusions', 0], 'type': 'value_error',
+            'msg': 'Value error, Content exceeds maximum embedding token limit of 512 (got 531 tokens)',
+            'input': 'SECRET-NOTE', 'ctx': {'error': 'SECRET-CONTEXT'}}]}).encode()
+        message, _ = self.validation_failure(body)
+        self.assertIn('body.conclusions.0 (value_error): embedding token limit 512, actual 531 tokens', message)
+        self.assertNotIn('SECRET', message)
+
+    def test_validation_rejects_reflected_content_and_malformed_bodies(self):
+        for detail in (
+            [{'loc': ['body', 'conclusions', 0, 'content'], 'type': 'string_type', 'msg': 'SECRET-NOTE'}],
+            [{'loc': ['body', 'SECRET-FIELD'], 'type': 'value_error', 'msg': 'SECRET-NOTE'}],
+            [{'loc': ['body'], 'type': 'SECRET-TYPE', 'msg': 'SECRET-NOTE'}],
+            [{'loc': ['body'], 'type': [], 'msg': 'SECRET-NOTE'}],
+            'SECRET-NOTE',
+        ):
+            with self.subTest(detail=detail):
+                message, _ = self.validation_failure(json.dumps({'detail': detail}).encode())
+                self.assertNotIn('SECRET', message)
+        message, _ = self.validation_failure(b'not json SECRET-NOTE')
+        self.assertNotIn('Validation:', message)
+        message, consumed = self.validation_failure(b' ' * 65537)
+        self.assertNotIn('Validation:', message)
+        self.assertEqual(consumed, 65536)
+
+    def test_non_validation_error_does_not_read_or_expose_body(self):
+        message, consumed = self.validation_failure(b'SECRET-NOTE', status=403)
+        self.assertEqual(message, 'Honcho REST request denied or failed (HTTP 403); no credential or transport fallback was attempted.')
+        self.assertEqual(consumed, 0)
 
     def test_ambiguous_append_is_not_retried_and_readback_is_read_only(self):
         self.remote.fail_append = True
