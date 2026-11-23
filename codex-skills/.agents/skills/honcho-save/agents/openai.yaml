@@ -1,0 +1,3 @@
+interface:
+  display_name: "Save Honcho Memory"
+  short_description: "Save verified findings with exact Honcho readback"
