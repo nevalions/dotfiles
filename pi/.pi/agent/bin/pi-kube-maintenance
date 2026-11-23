@@ -177,7 +177,17 @@ def load_candidate(path, args, explicit=False):
         release = candidate['release']
         require(type(release['pr']) is int and release['pr'] > 0, 'candidate PR must be positive integer')
         require(all(isinstance(release[key], str) and re.fullmatch(SHA, release[key]) for key in ('source_sha', 'merge_sha')), 'candidate source/merge SHA is invalid')
-        require(candidate['expected_revision'] == 'master@sha1:' + release['merge_sha'], 'candidate expected revision differs from merge SHA')
+        revision = release.get('gitops_revision_sha', release['merge_sha'])
+        require(isinstance(revision, str) and re.fullmatch(SHA, revision), 'candidate GitOps revision SHA is invalid')
+        require(candidate['expected_revision'] == 'master@sha1:' + revision, 'candidate expected revision differs from GitOps SHA')
+        if revision != release['merge_sha']:
+            proof = candidate['revision_evidence']
+            require(proof['release_merge_sha'] == release['merge_sha'] and proof['revision_sha'] == revision
+                    and proof['relation'] == 'ahead', 'candidate ancestry evidence differs from release/revision')
+            require(proof['desired_image'] == candidate['desired_image'], 'candidate ancestry image differs')
+            require(isinstance(proof['compare_url'], str) and proof['compare_url'].startswith('https://')
+                    and isinstance(proof['file'], str) and proof['file']
+                    and isinstance(proof['blob_sha'], str) and re.fullmatch(SHA, proof['blob_sha']), 'candidate ancestry evidence is incomplete')
         ci = release['required_ci']
         require(isinstance(ci, list) and ci, 'candidate required CI references are missing')
         require(all(isinstance(item, dict) and isinstance(item.get('context'), str) and item['context'] and item.get('status') == 'success' and item.get('sha') == release['merge_sha'] and isinstance(item.get('url'), str) and item['url'].startswith('https://') for item in ci), 'candidate CI evidence must reference successful checks on merge SHA')
@@ -291,7 +301,9 @@ def main():
     parser.add_argument('--namespace', default='agent-school')
     parser.add_argument('--deployment', default='autodeploy-canary')
     parser.add_argument('--container', default='canary')
-    parser.add_argument('--candidate-file', type=Path, help='explicit trusted operator candidate (root or invoking user owned)')
+    candidate_options = parser.add_mutually_exclusive_group()
+    candidate_options.add_argument('--observe-only', action='store_true', help='ignore all candidate files and observe this CLI target only')
+    candidate_options.add_argument('--candidate-file', type=Path, help='explicit trusted operator candidate (root or invoking user owned)')
     args = parser.parse_args()
     receipt = {'schema_version': 1, 'mode': 'current-observation', 'verified_release': False,
                'observed_at': datetime.now(timezone.utc).isoformat(), 'context': args.context,
@@ -299,10 +311,10 @@ def main():
                           'namespace': args.namespace, 'deployment': args.deployment, 'container': args.container}}
     candidate = None
     candidate_path = args.candidate_file or DEFAULT_CANDIDATE
-    if args.candidate_file is not None or candidate_path.exists() or candidate_path.is_symlink():
+    if not args.observe_only and (args.candidate_file is not None or candidate_path.exists() or candidate_path.is_symlink()):
         receipt['mode'] = 'candidate-verification'
     try:
-        candidate = load_candidate(candidate_path, args, explicit=args.candidate_file is not None)
+        candidate = None if args.observe_only else load_candidate(candidate_path, args, explicit=args.candidate_file is not None)
         if candidate is not None:
             receipt.update(mode='candidate-verification', candidate_id=candidate_id(candidate), candidate=candidate)
         first = snapshot(args)
@@ -313,7 +325,7 @@ def main():
         require(first == second, 'canary resources changed during observation; retry after reconciliation settles')
         if candidate is not None:
             validate_candidate(candidate, receipt['observation'])
-        final_candidate = load_candidate(candidate_path, args, explicit=args.candidate_file is not None)
+        final_candidate = None if args.observe_only else load_candidate(candidate_path, args, explicit=args.candidate_file is not None)
         require(candidate == final_candidate, 'candidate changed during observation; retry')
         receipt['status'] = 'verified' if candidate is not None else 'observed'
         receipt['verified_release'] = candidate is not None

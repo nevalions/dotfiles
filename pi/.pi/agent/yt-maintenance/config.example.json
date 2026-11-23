@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "platform": "linux/amd64",
+  "alpine_branch": "v3.24",
+  "package": "libxml2",
+  "scan_max_age_seconds": 172800,
+  "image_repository": "registry.example/library/yt-downloader",
+  "proposal_enabled": false,
+  "target": {
+    "context": "bay",
+    "flux_namespace": "flux-system",
+    "kustomization": "yt-downloader",
+    "namespace": "yt-downloader",
+    "deployment": "yt-downloader",
+    "container": "app"
+  },
+  "transport_command": [
+    "/absolute/private/yt-transport.py"
+  ],
+  "apk_command": [
+    "docker",
+    "run",
+    "--rm",
+    "--pull=never",
+    "--network=none",
+    "--read-only",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--entrypoint",
+    "/sbin/apk",
+    "registry.example/library/python@sha256:REPLACE_WITH_VERIFIED_PLATFORM_DIGEST"
+  ],
+  "forgejo": {
+    "url": "https://git.example",
+    "auth_command": [
+      "/absolute/private/forgejo-read-auth"
+    ]
+  },
+  "harbor": {
+    "url": "https://registry.example",
+    "repository": "library/yt-downloader",
+    "auth_command": [
+      "/absolute/private/harbor-read-auth"
+    ]
+  },
+  "source": {
+    "repo": "owner/yt-downloader",
+    "branch": "master",
+    "dockerfile": "Dockerfile",
+    "commit_author": {
+      "name": "OPERATOR_NAME",
+      "email": "operator@example.com"
+    },
+    "mirror_path": "/absolute/private/cache/producer.git",
+    "remote_url": "git@git.example:owner/yt-downloader.git",
+    "proposal_auth_command": [
+      "/absolute/private/producer-proposal-auth"
+    ],
+    "pr_status_contexts": [
+      "REPLACE_FROM_LIVE_PROTECTION_AND_WORKFLOWS"
+    ],
+    "pr_workflows": [
+      "REPLACE_FROM_LIVE_WORKFLOW_DIRECTORY.yml"
+    ],
+    "post_workflows": [
+      "REPLACE_FROM_LIVE_WORKFLOW_DIRECTORY.yml"
+    ],
+    "post_status_contexts": [
+      "REPLACE_WITH_ALL_APPLICABLE_PUSH_JOBS_INCLUDING_PUBLISH"
+    ]
+  },
+  "gitops": {
+    "repo": "owner/cluster",
+    "branch": "master",
+    "image_file": "yt-downloader/kustomization.yaml",
+    "mirror_path": "/absolute/private/cache/gitops.git",
+    "remote_url": "git@git.example:owner/cluster.git",
+    "pr_status_contexts": [
+      "REPLACE_FROM_LIVE_PROTECTION_AND_WORKFLOWS"
+    ],
+    "pr_workflows": [
+      "REPLACE_FROM_LIVE_WORKFLOW_DIRECTORY.yml"
+    ],
+    "post_status_contexts": [],
+    "post_workflows": [
+      "REPLACE_FROM_LIVE_WORKFLOW_DIRECTORY.yml"
+    ]
+  }
+}

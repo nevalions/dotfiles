@@ -130,6 +130,44 @@ print(json.dumps(json.loads((p/'fixtures.json').read_text())[n]))
                 'desired_image': 'registry/canary:latest',
                 'registry_evidence': {'tag_ref': 'registry/canary:latest', 'manifest_digest': 'sha256:' + 'd' * 64, 'runtime_manifest_digest': DIGEST, 'url': 'https://registry.test/v2/canary/manifests/latest'}}
 
+    def test_observe_only_bypasses_implicit_canary_candidate(self):
+        script = runpy.run_path(str(BIN))
+        fixture = self.candidate_resources()
+        state = {'flux': fixture[0], 'deployment': fixture[1],
+                 'replica_sets': fixture[2]['items'], 'pods': fixture[3]['items']}
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(script['main'].__globals__,
+                load_candidate=unittest.mock.Mock(side_effect=AssertionError('must not load')),
+                snapshot=unittest.mock.Mock(return_value=state)), patch.object(sys, 'argv',
+                ['pi-kube-maintenance', '--once', '--observe-only', '--context', 'bay', '--state-dir', tmp]):
+            with patch('builtins.print'):
+                self.assertEqual(script['main'](), 0)
+            receipt = json.loads((Path(tmp) / 'latest.json').read_text())
+            self.assertFalse(receipt['verified_release'])
+            self.assertEqual(receipt['mode'], 'current-observation')
+
+    def test_descendant_revision_requires_bound_ancestry_evidence(self):
+        candidate = self.candidate()
+        revision = 'e' * 40
+        candidate['release']['gitops_revision_sha'] = revision
+        candidate['expected_revision'] = 'master@sha1:' + revision
+        candidate['revision_evidence'] = {
+            'release_merge_sha': 'b' * 40, 'revision_sha': revision,
+            'relation': 'ahead', 'compare_url': 'https://forgejo.test/compare/b...e',
+            'desired_image': candidate['desired_image'], 'file': 'app/kustomization.yaml',
+            'blob_sha': 'f' * 40}
+        fixture = self.candidate_resources()
+        fixture[0]['status'].update(lastAppliedRevision=candidate['expected_revision'],
+                                    lastAttemptedRevision=candidate['expected_revision'])
+        proc, receipt = self.run_observer(fixture, candidate=candidate)
+        self.assertEqual(proc.returncode, 0, receipt)
+        self.assertTrue(receipt['verified_release'])
+        for field in ('release_merge_sha', 'revision_sha', 'desired_image', 'blob_sha'):
+            bad = copy.deepcopy(candidate)
+            bad['revision_evidence'][field] = 'wrong'
+            proc, receipt = self.run_observer(fixture, candidate=bad)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertFalse(receipt['verified_release'])
+
     def candidate_resources(self):
         fixture = resources()
         fixture[0]['status'].update(lastAppliedRevision='master@sha1:' + 'b' * 40, lastAttemptedRevision='master@sha1:' + 'b' * 40)

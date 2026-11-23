@@ -131,3 +131,19 @@ Run local fixture checks with:
 ```sh
 python3 -m unittest discover -s tests -p test_pi_kube_maintenance.py
 ```
+
+`--observe-only` explicitly ignores both automatic and explicit candidate input
+and cannot be combined with `--candidate-file`. Use it for an independent target
+when the canary's automatic candidate is present. Existing timer invocations
+retain their original candidate behavior.
+
+The trusted controller may bind a release merge to a later, independently proven
+GitOps revision. Optional `release.gitops_revision_sha` defaults to `merge_sha`.
+If it differs, `expected_revision` must use that SHA and `revision_evidence` must
+bind `release_merge_sha`, `revision_sha`, `relation: ahead`, an HTTPS
+`compare_url`, the exact `desired_image`, immutable `file` and 40-character
+`blob_sha`. The controller verifies ancestry and unchanged image pin before
+publishing this packet; the node trusts that evidence like its existing CI and
+registry references. It still independently requires the exact live Flux
+revision, image, runtime digest and two stable healthy snapshots. An unrelated
+commit never replaces the original release merge or its post-merge checks.
