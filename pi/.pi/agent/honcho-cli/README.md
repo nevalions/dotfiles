@@ -1,6 +1,6 @@
 # Honcho publishing from Pi CLI
 
-Interactive `pi` and `pi-team` in the approved `~/code/kube-lvl47` checkout (including linked worktrees) attach a session-scoped publisher on startup or same-directory resume. Check `/mcp` for `honcho_publish`. Workers and unmapped checkouts do not get this registration. The local broker reads the existing `Honcho Codex` vault item with `rbw`; no credential is stored in dotfiles. This is tool separation, not isolation from other processes running as the same Unix user with vault access.
+Interactive `pi` and `pi-team` in mapped Git repositories under `~/code/` and in `~/ansible` (including their linked worktrees) attach a session-scoped publisher on startup or same-directory resume. Check `/mcp` for `honcho_publish`. Only the repository peer is eligible; project and code-wide recall targets are not write targets. The peer must already exist. Workers, `~/dotfiles`, and unmapped checkouts do not get this registration. The local broker reads the existing `Honcho Codex` vault item with `rbw`; no credential is stored in dotfiles. This is tool separation, not isolation from other processes running as the same Unix user with vault access.
 
 The wrapper chains to `~/.pi/agent/bin/pi.managed`. On a fresh managed Pi installation, preserve the original regular executable `~/.pi/agent/bin/pi` at that sibling path **before** stowing `pi` with `--no-folding`. Do not replace an existing `pi.managed` or move the wrapper into that slot. Recall configuration and credentials remain machine-local.
 

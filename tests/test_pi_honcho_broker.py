@@ -13,6 +13,18 @@ import broker
 
 
 class BrokerTests(unittest.TestCase):
+    def test_automatic_targets(self):
+        import launch
+        for repo in ('kube-lvl47', 'agent-ui', 'ansible', 'statsboard--statsboards-backend'):
+            routes = [repo, 'project-example', 'code-wide']
+            self.assertEqual(launch.choose(routes, None), repo)
+            self.assertEqual(launch.choose(routes, repo), repo)
+            for other in routes[1:]:
+                with self.assertRaises(launch.Denied):
+                    launch.choose(routes, other)
+        self.assertIsNone(launch.choose([], None))
+        self.assertIsNone(launch.choose(['dotfiles', 'code-wide'], None))
+
     def test_child_relay_and_unrelated_client(self):
         class Remote:
             notes = []

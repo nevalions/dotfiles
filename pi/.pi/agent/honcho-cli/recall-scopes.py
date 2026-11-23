@@ -11,6 +11,7 @@ GROUPS = {
     'code/statsboard/statsboards-frontend': 'project-statsboard',
 }
 ALIASES = {
+    'code/stoma science': 'stoma_science',
     'code/ochistka-musoroprovoda.ru': 'ochistka-musoroprovoda-ru',
     'code/videooperator.su': 'videooperator-su',
     'code/portals/videosemka.su': 'portals--videosemka-su',
@@ -28,6 +29,8 @@ def targets(common):
     if repo in {'linroot', 'pi-coordinator', 'code-wide'} or repo.startswith('project-'):
         return []
     if rel.startswith('code/') and (repo in {'ansible', 'dotfiles'} or '--' in rel):
+        return []
+    if rel not in ALIASES and repo in ALIASES.values():
         return []
     return [ALIASES.get(rel, repo), *([GROUPS[rel]] if rel in GROUPS else []), 'code-wide']
 

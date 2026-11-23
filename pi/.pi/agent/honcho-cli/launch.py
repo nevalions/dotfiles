@@ -36,8 +36,10 @@ def plain(args):
 
 
 def choose(routes, selection):
-    if routes[0] != 'kube-lvl47' or selection not in (None, routes[0]):
-        raise ValueError('no approved automatic write mapping')
+    if not routes or routes[0] == 'dotfiles':
+        return None
+    if selection not in (None, routes[0]):
+        raise Denied('Requested target is not the repository peer')
     return routes[0]
 
 
@@ -66,8 +68,8 @@ def main():
         try:
             raw = subprocess.check_output(['/usr/bin/python3', '-I', str(DIR / 'recall-scopes.py')], timeout=4)
             routes = json.loads(raw)
-            if routes:
-                target = choose(routes, os.getenv('PI_HONCHO_TARGET'))
+            target = choose(routes, os.getenv('PI_HONCHO_TARGET'))
+            if target:
                 if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}', target):
                     raise ValueError('invalid target')
                 with tempfile.TemporaryDirectory(dir=f'/run/user/{os.getuid()}', prefix='pi-memory-') as tmp:
