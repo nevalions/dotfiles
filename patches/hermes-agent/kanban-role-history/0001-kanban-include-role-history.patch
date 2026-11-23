@@ -1,0 +1,77 @@
+diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
+index 59a9cc85b8..428c3cd3d4 100644
+--- a/hermes_cli/config_defaults.py
++++ b/hermes_cli/config_defaults.py
+@@ -1859,10 +1859,10 @@ DEFAULT_CONFIG = {
+         # cron.scheduler.DEFAULT_FAILURE_REPEAT_ALERT_HOURS.
+         "failure_repeat_alert_hours": 6,
+     },
+-    # Kanban multi-agent coordination. The dispatcher ticks every N seconds, reclaims stale claims,
+-    # promotes dependency-satisfied todos to ready, and fires `hermes -p <assignee> chat -q ...` per
+-    # claimable task. Run ONE dispatcher per profile; two on the same kanban.db race for claims.
++    # Kanban multi-agent coordination.
+     "kanban": {
++        # Executing profile's implicit cross-task history; explicit task/parent history stays.
++        "include_role_history": True,
+         # Auto-subscribe the originating gateway/TUI session to completion + block events when
+         # kanban_create is called from a session with a persistent delivery channel. Disable for
+         # profiles that prefer explicit kanban_notify-subscribe calls per task.
+diff --git a/hermes_cli/kanban_db_context.py b/hermes_cli/kanban_db_context.py
+index 4f204c7cc9..1badfdc01a 100644
+--- a/hermes_cli/kanban_db_context.py
++++ b/hermes_cli/kanban_db_context.py
+@@ -199,6 +199,12 @@ def _ctx_role_history(lines: list[str], conn: sqlite3.Connection, task: Task, no
+     role continuity without wiring anything into SOUL.md / MEMORY.md."""
+     if not task.assignee:
+         return
++    from hermes_cli.config_effective import load_user_config_effective
++
++    # Native admission binds the assignee's profile; do not read the launch env.
++    config = load_user_config_effective()
++    if not (config.get("kanban") or {}).get("include_role_history", True):
++        return
+     role_rows = conn.execute(
+         "SELECT t.id, t.title, r.summary, r.ended_at "
+         "FROM task_runs r JOIN tasks t ON r.task_id = t.id "
+diff --git a/website/docs/user-guide/features/kanban.md b/website/docs/user-guide/features/kanban.md
+index 0a5555bdfd..202c9a7c95 100644
+--- a/website/docs/user-guide/features/kanban.md
++++ b/website/docs/user-guide/features/kanban.md
+@@ -1157,6 +1157,37 @@ The board supports these eight patterns without any new primitives:
+ | **P8 Fleet farming** | one profile, N subjects | 50 social accounts |
+ | **P9 Triage specifier** | rough idea → `triage` → `hermes kanban specify` expands body → `todo` | "turn this one-liner into a spec'd task" |
+ 
++## Optional recent-role history
++
++By default, worker context includes the assignee's five latest completed runs
++on other tasks in the same board (`## Recent work by @…`). To omit that implicit
++cross-task history while retaining persistence, configure each executing profile:
++
++```bash
++hermes -p <worker-profile> config set kanban.include_role_history false
++```
++
++`kanban.include_role_history` defaults to `true`; set it back to `true` to restore
++the existing behavior. This is a **profile-scoped** setting, not board metadata:
++native Kanban admission reads the assigned worker's owning profile, including
++under a multiplex gateway, not the card author's or dispatcher's launch profile.
++It applies across boards handled by that profile. Manual `hermes kanban context`
++and `kanban_show` render using the caller's active profile (use `-p` when comparing
++a CLI preview with a worker).
++
++Disabling it removes only the recent-role section. The current card's body,
++attachments, prior attempts and comments, and explicitly linked completed-parent
++handoffs remain. It does not delete stored runs, change memory/skills/system
++instructions, or prevent deliberate retrieval of other cards. With the option on,
++the existing recent-role query is unchanged, including its treatment of tenants
++and archived cards; this option is not a tenant isolation boundary.
++
++The setting is read when context is assembled for a new admission. Already
++admitted attempts retain their frozen context, including after an owner restart;
++changing this setting does not rewrite an in-flight conversation. After installing
++code that adds this option, restart the owning gateway/backend to load that code.
++Subsequent setting changes apply to newly assembled contexts without restarting.
++
+ ## Handing context to follow-up cards (the parent link)
+ 
+ A parent link is not just a scheduling gate — it is the context handoff channel from a **completed** card to a new one. When you create a card with `--parent <done-card-id>`, two things happen:
