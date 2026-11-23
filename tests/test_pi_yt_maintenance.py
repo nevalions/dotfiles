@@ -162,7 +162,8 @@ class RegistryAndGatesTests(unittest.TestCase):
         from unittest.mock import Mock
         api = Mock()
         sha = 'a' * 40
-        api.pages.return_value = [dict(commit_sha=sha, event='push', workflow_id='ci.yml', id=1, status='success', html_url='https://forgejo/run/1')]
+        api.config = {'forgejo': {'url': 'https://forgejo'}}
+        api.pages.return_value = [dict(commit_sha=sha, event='push', workflow_id='ci.yml', id=1, status='success', html_url='https://forgejo/owner/app/actions/runs/1')]
         self.assertEqual(m.success_runs(api, 'owner/app', sha, 'push', ['ci.yml'])[0]['sha'], sha)
         api.pages.return_value.append(dict(commit_sha=sha, event='push', workflow_id='ci.yml', id=2, status='failure'))
         with self.assertRaises(m.Rejected):
@@ -207,7 +208,7 @@ class ReleaseBindingTests(unittest.TestCase):
         image = 'registry.example/library/app:new'
         config = {'target': {}, 'forgejo': {'url': 'https://git.example'}, 'harbor': {'url': 'https://registry.example'},
                   'gitops': {'repo': 'owner/cluster', 'branch': 'master', 'image_file': 'app/kustomization.yaml',
-                             'pr_status_contexts': ['check'], 'pr_workflows': ['ci.yml'], 'post_workflows': ['ci.yml']},
+                             'pr_status_contexts': ['check'], 'pr_workflows': ['ci.yml'], 'post_workflows': ['ci.yml'], 'post_status_contexts': ['push-check']},
                   'source': {'repo': 'owner/app', 'branch': 'main', 'pr_status_contexts': ['check'],
                              'pr_workflows': ['ci.yml'], 'post_workflows': ['ci.yml'], 'post_status_contexts': ['publish-image']}}
         pr = {'merged': True, 'number': 7, 'merge_commit_sha': merge, 'base': {'ref': 'master'}, 'head': {'sha': source}}
@@ -293,3 +294,60 @@ RUN apk version -t "${installed#libxml2-}" 2.13.9-r3
         self.assertEqual(value['handoff'], 'pending')
         self.assertEqual(value['status'], 'blocked')
         self.assertEqual(observe.call_count, 2)
+
+class EvidenceURLTests(unittest.TestCase):
+    def test_live_root_relative_actions_urls_normalize_to_trusted_origin(self):
+        from unittest.mock import Mock
+        api = Mock()
+        api.config = {'forgejo': {'url': 'https://git.example'}}
+        sha = 'a'*40
+        api.forge.return_value = {'sha':sha}
+        api.pages.return_value = [{'id':1,'sha':sha,'context':'CI / test (push)','status':'success',
+                                  'target_url':'/nevalions/yt-downloader/actions/runs/331/jobs/4'}]
+        values = m.success_statuses(api,'nevalions/yt-downloader',sha,['CI / test (push)'])
+        self.assertEqual(values[0]['url'],'https://git.example/nevalions/yt-downloader/actions/runs/331/jobs/4')
+        api.pages.return_value = [{'commit_sha':sha,'event':'push','workflow_id':'ci.yml','id':331,
+                                  'status':'success','html_url':'/nevalions/yt-downloader/actions/runs/331'}]
+        values = m.success_runs(api,'nevalions/yt-downloader',sha,'push',['ci.yml'])
+        self.assertEqual(values[0]['url'],'https://git.example/nevalions/yt-downloader/actions/runs/331')
+
+    def test_same_origin_absolute_or_explicit_default_port_is_supported(self):
+        for url in ['https://git.example/owner/app/actions/runs/1',
+                    'https://git.example:443/owner/app/actions/runs/1']:
+            self.assertEqual(m.evidence_url('https://git.example','owner/app',url),'https://git.example/owner/app/actions/runs/1')
+
+    def test_external_ambiguous_or_non_actions_urls_rejected(self):
+        path = '/owner/app/actions/runs/331/jobs/4'
+        cases = ['//evil.example'+path,'https://evil.example'+path,'http://git.example'+path,
+                 'https://git.example:444'+path,'https://git.example:0'+path,'https://user:secret@git.example'+path,
+                 path+'?token=value',path+'#fragment',path+'\n','/owner/other/actions/runs/331',
+                 '/owner/app/actions/runs/../331','/owner/app/actions/runs/%2e%2e/331',
+                 '/owner/app/actions/runs/%252e%252e/331','/owner/app\\actions/runs/331',
+                 'https://git.example.evil.example'+path,'owner/app/actions/runs/1','/owner/app/issues/1']
+        for value in cases:
+            with self.subTest(value=value),self.assertRaises(m.Rejected):
+                m.evidence_url('https://git.example','owner/app',value)
+
+    def test_ci_failure_diagnostic_is_distinct_from_invalid_evidence_url(self):
+        from unittest.mock import Mock
+        api = Mock()
+        api.config = {'forgejo':{'url':'https://git.example'}}
+        sha='a'*40
+        api.forge.return_value={'sha':sha}
+        api.pages.return_value=[{'id':1,'sha':sha,'context':'publish','status':'failure','target_url':'//evil.example'}]
+        with self.assertRaisesRegex(m.Rejected,'publish.*failure'):
+            m.success_statuses(api,'owner/app',sha,['publish'])
+        api.pages.return_value[0]['status']='success'
+        with self.assertRaisesRegex(m.Rejected,'evidence URL'):
+            m.success_statuses(api,'owner/app',sha,['publish'])
+
+
+class GitOpsStatusPolicyTests(unittest.TestCase):
+    def test_missing_empty_or_malformed_post_status_policy_fails_before_reads(self):
+        from unittest.mock import Mock
+        for gitops in ({}, {'post_status_contexts': []}, {'post_status_contexts': 'workflow-success'}):
+            api = Mock()
+            with self.subTest(gitops=gitops), self.assertRaisesRegex(m.Rejected, 'GitOps post-merge status policy missing'):
+                m.release_candidate(api, {'gitops': gitops}, {})
+            api.forge.assert_not_called()
+            api.pages.assert_not_called()

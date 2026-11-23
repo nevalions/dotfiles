@@ -44,8 +44,8 @@
     ]
   },
   "source": {
-    "repo": "owner/yt-downloader",
-    "branch": "master",
+    "repo": "nevalions/yt-downloader",
+    "branch": "main",
     "dockerfile": "Dockerfile",
     "commit_author": {
       "name": "OPERATOR_NAME",
@@ -67,7 +67,10 @@
     ],
     "post_status_contexts": [
       "REPLACE_WITH_ALL_APPLICABLE_PUSH_JOBS_INCLUDING_PUBLISH"
-    ]
+    ],
+    "proposal_actor": "yt-os-refresh-proposer",
+    "signing_key_file": "/absolute/private/pi-yt-maintenance/signing-key.pem",
+    "signing_public_key_sha256": "REPLACE_WITH_SHA256_OF_RAW_32_BYTE_ED25519_PUBLIC_KEY"
   },
   "gitops": {
     "repo": "owner/cluster",
@@ -81,9 +84,12 @@
     "pr_workflows": [
       "REPLACE_FROM_LIVE_WORKFLOW_DIRECTORY.yml"
     ],
-    "post_status_contexts": [],
+    "post_status_contexts": [
+      "REPLACE_WITH_ALL_APPLICABLE_GITOPS_PUSH_JOB_CONTEXTS"
+    ],
     "post_workflows": [
       "REPLACE_FROM_LIVE_WORKFLOW_DIRECTORY.yml"
     ]
-  }
+  },
+  "signing_enabled": false
 }

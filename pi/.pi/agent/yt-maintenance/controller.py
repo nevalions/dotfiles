@@ -10,6 +10,7 @@ import fcntl
 import fnmatch
 import hashlib
 import io
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -190,7 +191,7 @@ class HTTP:
             with build_opener(NoRedirect()).open(request, timeout=30) as response:
                 payload = response.read(16 * 1024 * 1024 + 1)
                 require(len(payload) <= 16 * 1024 * 1024, 'HTTP response exceeds limit')
-                return payload if raw else json.loads(payload)
+                return payload if raw else (json.loads(payload) if payload else None)
         except (HTTPError, URLError, TimeoutError) as exc:
             code = getattr(exc, 'code', 'network')
             if code == 404:
@@ -200,11 +201,17 @@ class HTTP:
     def forge(self, repo, suffix, body=None, method='GET'):
         require(re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo), 'invalid repository scope')
         headers = None
-        if method != 'GET':
-            source = self.config['source']
+        source = self.config['source']
+        comment_read = (method == 'GET' and repo == source['repo'] and self.config.get('proposal_enabled') is True
+                        and source.get('proposal_auth_command') and re.fullmatch(r'/issues/(?:[1-9][0-9]*/comments|comments/[1-9][0-9]*)', suffix) is not None)
+        if method != 'GET' or comment_read:
             allowed = (method, suffix.split('?', 1)[0]) in {
                 ('POST', '/branches'), ('POST', '/pulls'),
                 ('PUT', '/contents/' + quote(source['dockerfile'], safe='/'))}
+            allowed = allowed or comment_read
+            allowed = allowed or (method == 'POST' and re.fullmatch(r'/issues/[1-9][0-9]*/comments', suffix) is not None)
+            allowed = allowed or (method == 'PATCH' and re.fullmatch(r'/issues/comments/[1-9][0-9]*', suffix) is not None)
+            allowed = allowed or (method == 'POST' and re.fullmatch(r'/pulls/[1-9][0-9]*/update\?style=rebase', suffix) is not None)
             require(repo == source['repo'] and allowed and self.config.get('proposal_enabled') is True,
                     'Forgejo write exceeds proposal policy')
             require(source.get('proposal_auth_command'), 'a separately authorized repository-scoped proposal credential is required')
@@ -449,6 +456,9 @@ def only_source_file(command, before, after, path):
     require(all(re.fullmatch(r'[0-9a-f]{40}', v) for v in (before, after)), 'source comparison SHA invalid')
     files = run(command + ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '--no-renames', before, after, '--']).splitlines()
     require(files == [path], 'proposal branch changes another file')
+    for ref in (before, after):
+        tree = run(command + ['ls-tree', ref, '--', path]).strip()
+        require(re.fullmatch(r'100644 blob [0-9a-f]{40}\t' + re.escape(path), tree), 'proposal file must remain a regular nonexecutable Git blob')
 
 
 def pin(api, config, ref):
@@ -494,6 +504,35 @@ def workflow_policy(api, repo, ref, branch, event, expected):
     require(applicable and applicable == {Path(v).name for v in expected}, 'workflow policy changed; review expected checks before continuing')
 
 
+def evidence_url(base_url, repo, value):
+    require(isinstance(value, str) and value and not any(ord(char) <= 32 or ord(char) == 127 for char in value)
+            and '\\' not in value, 'invalid CI evidence URL characters')
+    require(re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo), 'invalid CI evidence repository')
+    try:
+        base = urlsplit(base_url)
+        require(base.scheme == 'https' and base.hostname and not base.username and not base.password
+                and base.path in ('', '/') and not base.query and not base.fragment, 'invalid trusted CI evidence URL origin')
+        origin_port = 443 if base.port is None else base.port
+        require(0 < origin_port <= 65535, 'invalid trusted CI evidence URL port')
+        require(not value.startswith('//'), 'protocol-relative CI evidence URL refused')
+        parsed = urlsplit(value)
+        if value.startswith('/'):
+            require(not parsed.scheme and not parsed.netloc, 'invalid root-relative CI evidence URL')
+        else:
+            require(parsed.scheme == 'https' and parsed.hostname == base.hostname and (443 if parsed.port is None else parsed.port) == origin_port
+                    and not parsed.username and not parsed.password, 'CI evidence URL origin differs from trusted Forgejo')
+        require(not parsed.query and not parsed.fragment, 'CI evidence URL query or fragment refused')
+        require(re.fullmatch('/' + re.escape(repo) + r'/actions/runs/[1-9][0-9]*(?:/jobs/[0-9]+)?', parsed.path),
+                'CI evidence URL is not the expected repository Actions path')
+        host = '[' + base.hostname + ']' if ':' in base.hostname else base.hostname
+        origin = 'https://' + host + (':' + str(origin_port) if origin_port != 443 else '')
+        return origin + parsed.path
+    except ValueError as exc:
+        if isinstance(exc, Rejected):
+            raise
+        raise Rejected('invalid CI evidence URL syntax') from exc
+
+
 def success_statuses(api, repo, sha, required):
     combined = api.forge(repo, '/commits/' + sha + '/status')
     require(combined.get('sha', sha) == sha, 'combined status is for another SHA')
@@ -507,8 +546,9 @@ def success_statuses(api, repo, sha, required):
     result = []
     for context in required:
         value = selected.get(context, {})
-        require(value.get('status') == 'success' and str(value.get('target_url', '')).startswith('https://'), 'required commit status is not successful')
-        result.append({'context': context, 'status': 'success', 'sha': sha, 'url': value['target_url']})
+        require(value.get('status') == 'success', f'required commit status {context!r} on {sha} is {value.get("status", "missing")}')
+        url = evidence_url(api.config['forgejo']['url'], repo, value.get('target_url'))
+        result.append({'context': context, 'status': 'success', 'sha': sha, 'url': url})
     return result
 
 
@@ -527,10 +567,11 @@ def success_runs(api, repo, sha, event, workflows):
     for workflow in workflows:
         value = selected.get(Path(str(workflow)).name, {})
         status = value.get('status')
-        require(status == 'success' or (status == 'completed' and value.get('conclusion') == 'success'), 'required workflow is missing or not successful')
-        require(str(value.get('html_url', '')).startswith('https://'), 'workflow evidence URL missing')
+        require(status == 'success' or (status == 'completed' and value.get('conclusion') == 'success'),
+                f'required workflow {workflow!r} ({event}) on {sha} is {status or "missing"}, conclusion {value.get("conclusion")}')
+        url = evidence_url(api.config['forgejo']['url'], repo, value.get('html_url'))
         result.append({'context': 'workflow:' + str(workflow), 'status': 'success', 'sha': sha,
-                       'url': value['html_url'], 'run_id': value['id'], 'event': event})
+                       'url': url, 'run_id': value['id'], 'event': event})
     return result
 
 
@@ -546,6 +587,7 @@ def merged_pr(api, repo, sha, branch):
 
 def release_candidate(api, config, receipt):
     gitops = config['gitops']
+    require(isinstance(gitops.get('post_status_contexts'), list) and gitops['post_status_contexts'], 'GitOps post-merge status policy missing')
     repo, branch = gitops['repo'], gitops['branch']
     observed_revision = receipt['observation']['flux']['revision']
     require(re.fullmatch(re.escape(branch) + r'@sha1:[0-9a-f]{40}', observed_revision), 'observed GitOps revision invalid')
@@ -588,7 +630,7 @@ def release_candidate(api, config, receipt):
     workflow_policy(api, repo, merge, branch, 'push', gitops['post_workflows'])
     pr_ci = success_statuses(api, repo, source, sorted(set(required) | set(gitops['pr_status_contexts'])))
     pr_ci += success_runs(api, repo, source, 'pull_request', gitops['pr_workflows'])
-    post_ci = success_statuses(api, repo, merge, gitops.get('post_status_contexts', []))
+    post_ci = success_statuses(api, repo, merge, gitops['post_status_contexts'])
     post_ci += success_runs(api, repo, merge, 'push', gitops['post_workflows'])
     top, child, artifact_path = platform_artifact(api, config, desired.rsplit(':', 1)[1])
     producer_sha = source_revision(config, child)
@@ -632,7 +674,186 @@ def strict_source(config, contents):
             and 'apk version -t "${installed#libxml2-}" 2.13.9-r3' in contents, 'source lacks supported installed libxml2 minimum guard')
 
 
-def propose(api, config, qualification, state, write=False):
+def signing_module():
+    path = Path(__file__).resolve().parent / 'proposal_signing.py'
+    spec = importlib.util.spec_from_file_location('pi_yt_proposal_signing', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def proposal_scope(config, pr, branch, record):
+    source = config['source']
+    require(source['repo'] == 'nevalions/yt-downloader' and source['branch'] == 'main'
+            and source['dockerfile'] == 'Dockerfile', 'signed source scope is not the approved pilot')
+    require(record.get('owned') is True and record.get('pr') == pr['number'] and record.get('branch') == branch,
+            'PR was not created and recorded by this controller')
+    require(pr.get('state') == 'open' and pr.get('merged') is not True, 'signed PR is no longer open')
+    require(pr.get('user', {}).get('login') == source.get('proposal_actor') and source.get('proposal_actor') and source['proposal_actor'] != 'linroot', 'PR author is not the dedicated proposal actor')
+    require(pr['base']['ref'] == 'main' and pr['base']['repo']['full_name'] == source['repo']
+            and pr['head']['ref'] == branch and pr['head']['repo']['full_name'] == source['repo'], 'PR source/target repository or branch differs')
+    require(pr['head']['sha'] == record.get('head_sha'), 'PR head changed outside this controller')
+
+
+def recover_proposal(api, config, qualification, intent, pr, checkpoint):
+    source = config['source']
+    repo = source['repo']
+    branch = 'maintenance/apk-' + qualification['qualification_id'][:20]
+    require(intent.get('intent') is True and intent.get('post_ready') is True
+            and intent.get('repository') == repo and intent.get('proposal_actor') == source.get('proposal_actor')
+            and intent.get('branch') == branch, 'proposal intent does not prove controller creation')
+    require(pr['head']['sha'] == intent.get('head_sha') and pr['base'].get('sha') == intent.get('base_sha')
+            and api.forge(repo, '/branches/main')['commit']['id'] == intent['base_sha'], 'interrupted proposal no longer matches exact intended base/head')
+    record = dict(intent, owned=True, pr=pr['number'], url=pr['html_url'], status='recovered', signed=False)
+    proposal_scope(config, pr, branch, record)
+    before, _ = api.contents(repo, 'Dockerfile', intent['base_sha'])
+    after, _ = api.contents(repo, 'Dockerfile', intent['head_sha'])
+    require(hashlib.sha256(after.encode()).hexdigest() == intent.get('proposed_sha256'), 'interrupted proposal bytes differ from persisted intent')
+    epoch_only(before, after)
+    command = git_prepare(config, 'source', branch)
+    git_prepare(config, 'source')
+    only_source_file(command, intent['base_sha'], intent['head_sha'], 'Dockerfile')
+    files = api.pages(repo, '/pulls/' + str(pr['number']) + '/files')
+    require(len(files) == 1 and files[0].get('filename') == 'Dockerfile'
+            and files[0].get('status') in ('modified', 'changed'), 'interrupted proposal file scope differs')
+    first = observe(config)
+    fresh_qualification = qualify(api, config, first)
+    require(fresh_qualification is not None and fresh_qualification['qualification_id'] == qualification['qualification_id'], 'production fix changed before ownership recovery')
+    same_deployment(first, observe(config))
+    require(api.forge(repo, '/pulls/' + str(pr['number']))['head']['sha'] == intent['head_sha']
+            and api.forge(repo, '/branches/main')['commit']['id'] == intent['base_sha'], 'proposal moved during ownership recovery')
+    return record
+
+
+def matching_signed_comment(module, key, comment, payload, actor):
+    if comment.get('user', {}).get('login') != actor:
+        return False
+    try:
+        previous = module.verify_comment(comment.get('body'), key.public_key(), at=now(), allow_expired=True)
+    except (ValueError, TypeError, KeyError):
+        return False
+    fields = ('repository', 'target', 'pr_number', 'base_sha', 'head_sha', 'path',
+              'before_sha256', 'after_sha256', 'old_epoch', 'new_epoch')
+    return (all(previous.get(field) == payload[field] for field in fields)
+            and previous['qualification']['qualification_id'] == payload['qualification']['qualification_id'])
+
+
+def protection_snapshot(api, config, base_sha):
+    source = config['source']
+    require(source['repo'] == 'nevalions/yt-downloader' and source['branch'] == 'main', 'protection source scope differs')
+    module = signing_module()
+    repo = source['repo']
+    first = api.forge(repo, '/branches/main')
+    fields = ('name', 'protected', 'enable_status_check', 'effective_branch_protection_name', 'status_check_contexts')
+    require(first.get('name') == 'main' and first.get('protected') is True
+            and first.get('enable_status_check') is True and first.get('effective_branch_protection_name') == 'main'
+            and first.get('commit', {}).get('id') == base_sha, 'live effective main protection/base is missing or differs')
+    contexts = first.get('status_check_contexts')
+    require(isinstance(contexts, list) and len(contexts) == 8 and set(contexts) == set(module.REQUIRED_CONTEXTS), 'live branch protection does not expose exact eight contexts')
+    rule = api.forge(repo, '/branch_protections/main')
+    require(rule.get('branch_name') == 'main' and rule.get('rule_name', 'main') == 'main', 'authoritative protection rule is not exact main')
+    required = rule.get('status_check_contexts')
+    require(isinstance(required, list) and len(required) == 8 and set(required) == set(module.REQUIRED_CONTEXTS), 'authoritative protection contexts differ from exact eight checks')
+    flags = ('apply_to_admins', 'block_on_outdated_branch', 'enable_status_check')
+    require(all(rule.get(field) is True for field in flags), 'authoritative main protection enforcement flags are not all true')
+    second = api.forge(repo, '/branches/main')
+    require(all(first.get(field) == second.get(field) for field in fields)
+            and second.get('commit', {}).get('id') == base_sha, 'main protection/base changed during authoritative read')
+    result = {'repository': repo, 'branch': 'main', 'base_sha': base_sha, 'checked_at': now(),
+              'status_check_contexts': sorted(required), **{field: rule[field] for field in flags}}
+    module.validate_protection(result, base_sha, now())
+    return result
+
+
+def refresh_proof(api, config, qualification, record, checkpoint):
+    source, repo = config['source'], config['source']['repo']
+    module = signing_module()
+    require(source.get('signing_key_file') and source.get('signing_public_key_sha256'), 'trusted workstation signing key policy missing')
+    require(config.get('signing_enabled') is True, 'source automatic merge signing is disabled')
+    pr = api.forge(repo, '/pulls/' + str(record['pr']))
+    branch = 'maintenance/apk-' + qualification['qualification_id'][:20]
+    proposal_scope(config, pr, branch, record)
+    current = api.forge(repo, '/branches/main')['commit']['id']
+    before, _ = api.contents(repo, 'Dockerfile', current)
+    strict_source(config, before)
+    after, _ = api.contents(repo, 'Dockerfile', pr['head']['sha'])
+    previous_base = record['base_sha']
+    previous, _ = api.contents(repo, 'Dockerfile', previous_base)
+    epoch_only(previous, after)
+    command = git_prepare(config, 'source', branch)
+    git_prepare(config, 'source')
+    only_source_file(command, previous_base, pr['head']['sha'], 'Dockerfile')
+    if previous_base != current:
+        git_ancestor(command, previous_base, current)
+        if epoch_line(before)[2] >= epoch_line(after)[2]:
+            record.update(status='obsolete-awaiting-rollout', signed=False)
+            checkpoint()
+            return record
+        expected_after = advance_epoch(before, epoch_line(after)[2].isoformat())
+        require(api.forge(repo, '/pulls/' + str(record['pr']))['head']['sha'] == pr['head']['sha'], 'PR changed before rebase')
+        require(api.forge(repo, '/branches/main')['commit']['id'] == current, 'source base changed before rebase')
+        api.forge(repo, '/pulls/' + str(record['pr']) + '/update?style=rebase', None, 'POST')
+        pr = api.forge(repo, '/pulls/' + str(record['pr']))
+        record.update(head_sha=pr['head']['sha'], base_sha=current, signed=False)
+        checkpoint()
+        proposal_scope(config, pr, branch, record)
+        command = git_prepare(config, 'source', branch)
+        after, _ = api.contents(repo, 'Dockerfile', pr['head']['sha'])
+        require(after == expected_after, 'rebased proposal content differs from exact original epoch refresh')
+    epoch_only(before, after)
+    only_source_file(command, current, pr['head']['sha'], 'Dockerfile')
+    files = api.pages(repo, '/pulls/' + str(record['pr']) + '/files')
+    require(len(files) == 1 and files[0].get('filename') == 'Dockerfile'
+            and files[0].get('status') in ('modified', 'changed'), 'PR file scope differs before signing')
+    # Signing is a second independent production qualification, not a cache hit.
+    first = observe(config)
+    fresh_qualification = qualify(api, config, first)
+    require(fresh_qualification is not None and fresh_qualification['qualification_id'] == qualification['qualification_id'], 'production fix changed before signing')
+    same_deployment(first, observe(config))
+    require(api.forge(repo, '/branches/main')['commit']['id'] == current, 'source base changed before signing')
+    final_pr = api.forge(repo, '/pulls/' + str(record['pr']))
+    proposal_scope(config, final_pr, branch, record)
+    protection = protection_snapshot(api, config, current)
+    key = module.load_private(source['signing_key_file'], source['signing_public_key_sha256'])
+    payload = module.bound_payload(fresh_qualification, branch, current, final_pr['head']['sha'], record['pr'], before, after, issued=now(), protection=protection)
+    body = module.signed_comment(payload, key)
+    comment = None
+    if record.get('comment_id'):
+        try:
+            comment = api.forge(repo, '/issues/comments/' + str(record['comment_id']))
+        except NotFound:
+            pass
+        if comment is not None:
+            require(matching_signed_comment(module, key, comment, payload, source['proposal_actor']), 'recorded signature comment is not authentic matching controller proof')
+    if comment is None:
+        comments = api.forge(repo, '/issues/' + str(record['pr']) + '/comments')
+        require(isinstance(comments, list) and len(comments) <= 1000, 'signature comment recovery response exceeds bound')
+        matching = [value for value in comments if matching_signed_comment(module, key, value, payload, source['proposal_actor'])]
+        if matching:
+            comment = max(matching, key=lambda value: value['id'])
+            record.update(comment_id=comment['id'], comment_body=comment['body'])
+            checkpoint()
+    record['pending_comment_body'] = body
+    checkpoint()
+    if comment is None:
+        comment = api.forge(repo, '/issues/' + str(record['pr']) + '/comments', {'body': body}, 'POST')
+    else:
+        comment = api.forge(repo, '/issues/comments/' + str(comment['id']), {'body': body}, 'PATCH')
+    comment_id = comment['id']
+    readback = api.forge(repo, '/issues/comments/' + str(comment_id))
+    require(readback.get('body') == body and readback.get('user', {}).get('login') == source['proposal_actor'], 'signed comment readback differs')
+    require(module.verify_comment(body, key.public_key(), at=now()) == payload, 'signed payload readback differs')
+    record.pop('pending_comment_body', None)
+    record.update(status='signed', signed=True, comment_id=comment_id, comment_body=body,
+                  issued_at=payload['issued_at'], expires_at=payload['expires_at'], base_sha=current, head_sha=final_pr['head']['sha'])
+    checkpoint()
+    require(api.forge(repo, '/branches/main')['commit']['id'] == current
+            and api.forge(repo, '/pulls/' + str(record['pr']))['head']['sha'] == final_pr['head']['sha'], 'source moved after signing; proof cannot authorize current merge')
+    return record
+
+
+def propose(api, config, qualification, state, write=False, checkpoint=None):
+    checkpoint = checkpoint or (lambda: None)
     source = config['source']
     repo, path = source['repo'], source['dockerfile']
     head = api.forge(repo, '/branches/' + quote(source['branch'], safe=''))['commit']['id']
@@ -644,16 +865,30 @@ def propose(api, config, qualification, state, write=False):
         bootstrap_source, _ = api.contents(repo, path, pr['head']['sha'])
         strict_source(config, bootstrap_source)
         if pr.get('state') == 'open':
-            return {'status': 'covered-by-bootstrap-pr', 'pr': bootstrap_pr, 'url': pr['html_url'], 'head_sha': pr['head']['sha']}
+            return {'status': 'covered-by-bootstrap-pr', 'pr': bootstrap_pr, 'url': pr['html_url'], 'head_sha': pr['head']['sha'], 'signed': False}
         require(pr.get('merged') is True, 'bootstrap producer PR was closed without merge')
-        return {'status': 'bootstrap-merged-awaiting-rollout', 'pr': bootstrap_pr, 'url': pr['html_url'], 'head_sha': pr['head']['sha']}
+        return {'status': 'bootstrap-merged-awaiting-rollout', 'pr': bootstrap_pr, 'url': pr['html_url'], 'head_sha': pr['head']['sha'], 'signed': False}
     strict_source(config, contents)
     key = qualification['qualification_id']
     branch = 'maintenance/apk-' + key[:20]
+    owned = state['proposals'].get(key, {})
     open_prs = api.pages(repo, '/pulls?state=open')
     for pr in open_prs:
         if pr['base']['ref'] != source['branch']:
             continue
+        if pr['head'].get('ref') == branch and owned.get('post_ready') is True and owned.get('owned') is not True:
+            if not write:
+                return {'status': 'recoverable-intended-proposal', 'pr': pr['number'], 'signed': False}
+            recovered = recover_proposal(api, config, qualification, owned, pr, checkpoint)
+            state['proposals'][key] = recovered
+            checkpoint()
+            if config.get('signing_enabled') is True:
+                return refresh_proof(api, config, qualification, recovered, checkpoint)
+            return recovered
+        if pr['head'].get('ref') == branch and owned.get('owned') is True and owned.get('pr') == pr['number']:
+            if write and config.get('signing_enabled') is True:
+                return refresh_proof(api, config, qualification, owned, checkpoint)
+            return dict(owned, status='owned-awaiting-refresh')
         files = api.pages(repo, '/pulls/' + str(pr['number']) + '/files')
         if len(files) != 1 or files[0].get('filename') != path or files[0].get('status') not in ('modified', 'changed'):
             continue
@@ -662,11 +897,10 @@ def propose(api, config, qualification, state, write=False):
             epoch_only(contents, proposed)
         except (Rejected, ValueError):
             continue
-        state['proposals'][key] = {'status': 'existing', 'pr': pr['number'], 'url': pr['html_url'], 'head_sha': pr['head']['sha']}
-        return state['proposals'][key]
-    if key in state['proposals']:
-        return state['proposals'][key]
-    proposed = advance_epoch(contents, date.today().isoformat())
+        return {'status': 'existing-unowned', 'pr': pr['number'], 'url': pr['html_url'], 'head_sha': pr['head']['sha'], 'signed': False}
+    if owned.get('pr'):
+        return dict(owned, status='previous-proposal-closed', signed=False)
+    proposed = advance_epoch(contents, datetime.now(timezone.utc).date().isoformat())
     decision = {'status': 'qualified', 'branch': branch, 'base_sha': head, 'file': path, 'old_blob': blob,
                 'new_content_sha256': hashlib.sha256(proposed.encode()).hexdigest(), 'qualification_id': key,
                 'content': proposed, 'diff': ''.join(difflib.unified_diff(contents.splitlines(keepends=True), proposed.splitlines(keepends=True), fromfile='a/' + path, tofile='b/' + path))}
@@ -675,50 +909,65 @@ def propose(api, config, qualification, state, write=False):
     if config.get('proposal_enabled') is not True or not source.get('proposal_auth_command'):
         decision.update(status='awaiting-authorization', reason='separately authorized repository-scoped proposal write grant missing')
         state.setdefault('decisions', {})[key] = decision
+        checkpoint()
         return decision
-    # The only write endpoints: a deterministic source branch, its one Dockerfile,
-    # and a PR. No merge, protection, secrets, settings or arbitrary file writes.
+    if config.get('signing_enabled') is True:
+        require(repo == 'nevalions/yt-downloader' and source['branch'] == 'main'
+                and source.get('proposal_actor') and source['proposal_actor'] != 'linroot', 'automatic signing requires dedicated pilot actor and scope')
+        module = signing_module()
+        module.validate_qualification(qualification, now())
+        module.load_private(source['signing_key_file'], source['signing_public_key_sha256'])
     author = source.get('commit_author', {})
     require(isinstance(author.get('name'), str) and author['name'] and isinstance(author.get('email'), str) and '@' in author['email'], 'source commit author is missing')
     branches = api.pages(repo, '/branches')
     existing = [b for b in branches if b['name'] == branch]
     git_prepare(config, 'source')
     if existing:
+        require(owned.get('intent') is True and owned.get('branch') == branch, 'existing branch has no controller ownership intent')
         branch_sha = existing[0]['commit']['id']
         on_branch, _ = api.contents(repo, path, branch_sha)
-        git_command = git_prepare(config, 'source', branch)
+        command = git_prepare(config, 'source', branch)
         if branch_sha != head:
-            only_source_file(git_command, head, branch_sha, path)
-        if branch_sha == head:
-            update = api.forge(repo, '/contents/' + quote(path, safe='/'),
-                               {'branch': branch, 'sha': blob, 'author': author, 'committer': author, 'content': base64.b64encode(proposed.encode()).decode(),
-                                'message': 'chore: refresh qualified Alpine OS packages'}, 'PUT')
-            branch_sha = update['commit']['sha']
-            on_branch, _ = api.contents(repo, path, branch_sha)
-            git_command = git_prepare(config, 'source', branch)
-            only_source_file(git_command, head, branch_sha, path)
-        epoch_only(contents, on_branch)
-        proposed = on_branch
+            old_base = owned['base_sha']
+            old_contents, _ = api.contents(repo, path, old_base)
+            git_ancestor(command, old_base, head)
+            only_source_file(command, old_base, branch_sha, path)
+            epoch_only(old_contents, on_branch)
+            proposed = on_branch
     else:
-        # Check base again immediately before creating the branch.
+        state['proposals'][key] = {'intent': True, 'branch': branch, 'base_sha': head}
+        checkpoint()
         require(api.forge(repo, '/branches/' + quote(source['branch'], safe=''))['commit']['id'] == head, 'source base changed')
         api.forge(repo, '/branches', {'new_branch_name': branch, 'old_ref_name': head}, 'POST')
+        branch_sha = head
+    if branch_sha == head:
         update = api.forge(repo, '/contents/' + quote(path, safe='/'),
                            {'branch': branch, 'sha': blob, 'author': author, 'committer': author, 'content': base64.b64encode(proposed.encode()).decode(),
                             'message': 'chore: refresh qualified Alpine OS packages'}, 'PUT')
         branch_sha = update['commit']['sha']
         verified, _ = api.contents(repo, path, branch_sha)
         epoch_only(contents, verified)
-        git_command = git_prepare(config, 'source', branch)
-        only_source_file(git_command, head, branch_sha, path)
+        command = git_prepare(config, 'source', branch)
+        only_source_file(command, head, branch_sha, path)
     body = ('Qualified immutable deployed image: `' + qualification['runtime_manifest_digest'] + '` (' + qualification['platform'] + ').\n\n'
-            'Successful fresh Harbor report: `' + qualification['scan_report_id'] + '`. Official same-branch index: ' + qualification['apk_index']['url'] + '.\n\n'
-            'Only the anchored APK_PATCH_EPOCH date advances. Source merging requires operator approval; this controller cannot merge.\n\n'
+            'Only the anchored APK_PATCH_EPOCH date advances. The independent merge bot requires a fresh signed issue comment, exact current source diff and successful current-head checks.\n\n'
             'Qualification: `' + key + '`.')
+    creation_base = owned['base_sha'] if existing and branch_sha != head else head
+    state['proposals'][key] = {'intent': True, 'post_ready': True, 'branch': branch,
+                              'base_sha': creation_base, 'head_sha': branch_sha,
+                              'repository': repo, 'proposal_actor': source.get('proposal_actor'),
+                              'proposed_sha256': hashlib.sha256(proposed.encode()).hexdigest()}
+    checkpoint()
     result = api.forge(repo, '/pulls', {'base': source['branch'], 'head': branch, 'title': 'chore: refresh qualified Alpine libxml2 fix', 'body': body}, 'POST')
-    decision.update(status='opened', pr=result['number'], url=result['html_url'], head_sha=branch_sha)
-    state['proposals'][key] = decision
-    return decision
+    record = {'owned': True, 'status': 'opened', 'branch': branch, 'base_sha': head, 'head_sha': branch_sha,
+              'pr': result['number'], 'url': result['html_url'], 'qualification_id': key, 'signed': False}
+    if existing and branch_sha != head:
+        record['base_sha'] = owned['base_sha']
+    state['proposals'][key] = record
+    checkpoint()
+    if config.get('signing_enabled') is True:
+        return refresh_proof(api, config, qualification, record, checkpoint)
+    return record
 
 
 def registry_unchanged(api, config, candidate):
@@ -745,7 +994,7 @@ def tick(config, state_path, check=False, qualification_only=False):
         output['qualification'] = qualification
         if qualification:
             same_deployment(observation, observe(config))
-            output['proposal'] = propose(api, config, qualification, state, write=not check)
+            output['proposal'] = propose(api, config, qualification, state, write=not check, checkpoint=(lambda: atomic_json(state_path, state)) if not check else None)
     except (Rejected, KeyError, ValueError, TypeError, AttributeError) as exc:
         qualification_error = str(exc)
         output['qualification_error'] = qualification_error
