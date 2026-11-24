@@ -110,6 +110,54 @@ class PiTeamRunTests(unittest.TestCase):
         self.assertEqual(final['checkpoints'][-1]['rev'], SHA_A)
         self.assertEqual(final['notices'][0]['reason'], 'ci_unverified')
 
+    def test_delivery_profile_is_read_only_and_host_scoped(self) -> None:
+        repo = 'nevalions/frontend-angular-signals'
+        profile = self.run_json('delivery-profile', repo)
+        self.assertFalse(profile['grants_authority'])
+        self.assertEqual(profile['base'], 'master')
+        self.assertEqual(len(profile['pr_checks']), 8)
+        self.assertIn('CI / publish-image (push)', profile['push_checks'])
+        self.assertFalse(self.xdg_state.exists())
+        self.assertNotEqual(self.run_cli('delivery-profile', repo, '--host', 'example.org').returncode, 0)
+        self.assertNotEqual(self.run_cli('monitor', repo, '--profile', '--require', 'test', '--rev', SHA_A).returncode, 0)
+
+    def test_profile_queue_checks_base_and_frozen_policy(self) -> None:
+        repo = 'nevalions/frontend-angular-signals'
+        profile = self.run_json('delivery-profile', repo)
+        run_id = self.run_json('start', str(self.repo_dir))['run_id']
+        for stage in ('admit', 'implement', 'check', 'review', 'commit', 'publish'):
+            self.run_json('checkpoint', run_id, stage, '--evidence', f'ev:{stage}')
+        self.run_json('monitor', repo, '--pr', '12', '--run-id', run_id,
+                      '--rev', SHA_A, '--profile', '--queue')
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        poll = runpy.run_path(str(BIN_PATH))['poll_queued_ci']
+        pr = {'state': 'open', 'head': {'sha': SHA_A}, 'base': {'ref': 'wrong', 'repo': {'full_name': repo}}}
+        status = {'sha': SHA_A, 'statuses': [{'context': name, 'status': 'success'} for name in profile['pr_checks']]}
+        with patch.dict(poll.__globals__, {'forgejo_get': lambda _, __, path: pr if path.startswith('pulls/') else status}):
+            self.assertIn('PR target does not match', next(iter(poll(db)[1].values())))
+            current = poll.__globals__['DELIVERY_PROFILES'][('git.butakov.su', repo)]
+            with patch.dict(current, {'pr_checks': ['different']}):
+                self.assertIn('checks changed', next(iter(poll(db)[1].values())))
+            pr['base']['ref'] = 'master'
+            self.assertEqual(poll(db)[0][0]['reason'], 'ci_passed')
+        self.assertEqual(self.run_json('status', run_id)['current_stage'], 'integrate')
+
+    def test_profile_post_merge_requires_current_base_and_image_publication(self) -> None:
+        repo = 'nevalions/frontend-angular-signals'
+        script = runpy.run_path(str(BIN_PATH))
+        monitor = script['cmd_monitor']
+        args = script['build_parser']().parse_args(['monitor', repo, '--rev', SHA_A, '--profile'])
+        args.once = True
+        branch = {'commit': {'id': SHA_B}}
+        status = {'sha': SHA_A, 'statuses': [{'context': 'CI / quality-gate (push)', 'status': 'success'}]}
+        with patch.dict(monitor.__globals__, {'forgejo_get': lambda _, __, path: branch if path.startswith('branches/') else status}):
+            with self.assertRaisesRegex(script['CliError'], 'base tip does not match'):
+                monitor(args, self.xdg_state)
+            branch['commit']['id'] = SHA_A
+            self.assertEqual(monitor(args, self.xdg_state)[1]['status'], 'pending')
+            status['statuses'].append({'context': 'CI / publish-image (push)', 'status': 'success'})
+            self.assertEqual(monitor(args, self.xdg_state)[1]['status'], 'success')
+
     def test_monitor_never_treats_missing_skipped_or_old_success_as_current(self) -> None:
         script = runpy.run_path(str(BIN_PATH))
         waiting, failed = script['check_required']([

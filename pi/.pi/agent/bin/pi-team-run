@@ -686,6 +686,42 @@ def check_required(statuses: list, required: list[str]) -> tuple[list[str], list
 WATCH_PREFIX = 'forgejo-ci-v1:'
 
 
+DELIVERY_PROFILES = {
+    ('git.butakov.su', 'nevalions/frontend-angular-signals'): {
+        'base': 'master',
+        'pr_checks': [f'CI / {name} (pull_request)' for name in
+                      ('lint', 'typecheck', 'test', 'build', 'quality-gate')] +
+                     [f'security-pr / {name} (pull_request)' for name in ('semgrep', 'gitleaks', 'trivy-fs')],
+        'push_checks': ['CI / quality-gate (push)', 'CI / publish-image (push)'],
+        'merge': {'mechanism': 'Forgejo server-side squash', 'entrypoint': 'scripts/ship.sh'},
+        'artifact': {'repository': 'docker.butakov.su/library/statsboards-frontend',
+                     'revision_label': 'org.opencontainers.image.revision'},
+        'deploy': {
+            'dev': {'mechanism': 'kube-lvl47 auto-deploy PR and Flux', 'namespace': 'stats-dev',
+                    'hosts': ['butakov.su']},
+            'prod': {'mechanism': 'separately authorized kube-lvl47 pin PR and Flux', 'namespace': 'stats-prod',
+                     'hosts': ['statsboard.online', 'statsboard.ru']},
+        },
+        'rollout_evidence': ['authorized environment and GitOps revision applied by Flux',
+                             'published image digest tied to the exact application merge SHA',
+                             'ready serving pods running that digest in the target environment',
+                             'served asset and affected route checks on the target public host'],
+    },
+}
+
+
+def get_delivery_profile(host, repo):
+    profile = DELIVERY_PROFILES.get((host, repo))
+    if profile is None:
+        raise CliError('no delivery profile for this Forgejo host and repository')
+    return profile
+
+
+def cmd_delivery_profile(args: argparse.Namespace, _db_path: Path) -> tuple[int, dict]:
+    profile = get_delivery_profile(args.host, args.repo)
+    return 0, {'host': args.host, 'repo': args.repo, **profile, 'grants_authority': False}
+
+
 def cmd_monitor(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     queue = getattr(args, 'queue', False)
     once = getattr(args, 'once', False)
@@ -703,12 +739,24 @@ def cmd_monitor(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
         raise CliError('expected positive PR number')
     if not 1 <= args.interval <= 120 or not 1 <= args.timeout <= 7200:
         raise CliError('interval must be 1–120 seconds and timeout 1–7200 seconds')
-    required = sorted(set(args.require))
+    profile = get_delivery_profile(args.host, args.repo) if getattr(args, 'profile', False) else None
+    if profile and args.require and not getattr(args, 'watch_generation', None):
+        raise CliError('use either --profile or --require, not both')
+    required = sorted(set(profile['pr_checks' if args.pr else 'push_checks'] if profile else (args.require or [])))
+    if profile and args.require and required != args.require:
+        raise CliError('queued delivery profile checks changed; register a new wait')
     if not required or any(not name.strip() or len(name) > 256 or not name.isprintable() for name in required):
         raise CliError('invalid required check context')
-    scope = sha256(json.dumps([args.host, args.repo, args.pr, required]).encode()).hexdigest()
+    scope_parts = [args.host, args.repo, args.pr, required]
+    queue_parts = [args.repo, args.pr, required]
+    if profile:
+        scope_parts.append(profile['base'])
+        queue_parts.append(profile['base'])
+        if getattr(args, 'queued_base', profile['base']) != profile['base']:
+            raise CliError('queued delivery profile base changed; register a new wait')
+    scope = sha256(json.dumps(scope_parts).encode()).hexdigest()
     reason = f'Forgejo {args.repo} PR {args.pr} monitor:{scope}'
-    queued_reason = WATCH_PREFIX + json.dumps([args.repo, args.pr, required], separators=(',', ':'))
+    queued_reason = WATCH_PREFIX + json.dumps(queue_parts, separators=(',', ':'))
     if queue:
         reason = queued_reason
     deadline = utc_now() + timedelta(seconds=args.timeout)
@@ -741,10 +789,16 @@ def cmd_monitor(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
 
     def check_head():
         if args.pr is None:
+            if profile:
+                branch = forgejo_get(args.host, args.repo, f"branches/{quote(profile['base'], safe='')}")
+                if branch['commit']['id'] != rev:
+                    raise CliError('profile base tip does not match the expected merged revision')
             return
         pr = forgejo_get(args.host, args.repo, f'pulls/{args.pr}')
         if pr['state'] != 'open' or pr.get('draft') or pr['head']['sha'] != rev:
             raise CliError('PR is not ready/open at the expected revision; CI evidence is stale')
+        if profile and (pr['base']['ref'] != profile['base'] or pr['base']['repo']['full_name'] != args.repo):
+            raise CliError('PR target does not match the delivery profile base')
 
     while utc_now() < deadline:
         try:
@@ -820,9 +874,12 @@ def poll_queued_ci(db_path: Path) -> tuple[list[dict], dict[int, str]]:
         if parse_iso_utc(row['deadline_at']) <= utc_now():
             continue
         try:
-            repo, pr, required = json.loads(row['reason'][len(WATCH_PREFIX):])
+            repo, pr, required, *profile_base = json.loads(row['reason'][len(WATCH_PREFIX):])
+            if len(profile_base) > 1:
+                raise CliError('invalid queued CI request')
             _, result = cmd_monitor(argparse.Namespace(
                 rev=row['expected_rev'], host='git.butakov.su', repo=repo, pr=pr, require=required,
+                profile=bool(profile_base), queued_base=profile_base[0] if profile_base else None,
                 run_id=row['run_id'], interval=1, timeout=30, once=True, queue=False,
                 watch_generation=row['generation'],
             ), db_path)
@@ -994,7 +1051,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_monitor.add_argument('--pr', type=int, help='Verify this ready PR still points at the exact revision')
     p_monitor.add_argument('--run-id', help='Checkpoint CI on success for an existing run (requires --pr)')
     p_monitor.add_argument('--rev', required=True, help='Full commit SHA')
-    p_monitor.add_argument('--require', action='append', required=True, help='Exact required check context; repeat for each check')
+    checks = p_monitor.add_mutually_exclusive_group(required=True)
+    checks.add_argument('--require', action='append', help='Exact required check context; repeat for each check')
+    checks.add_argument('--profile', action='store_true', help='Use the registered delivery profile for this host and repo')
+    p_profile = sub.add_parser('delivery-profile', parents=[common], help='Show the read-only delivery policy for a repository')
+    p_profile.add_argument('repo', help='Forgejo owner/name')
+    p_profile.add_argument('--host', default='git.butakov.su')
     p_monitor.add_argument('--interval', type=int, default=15)
     p_monitor.add_argument('--timeout', type=int, default=900)
     p_monitor.add_argument('--queue', action='store_true', help='Register a durable Forgejo PR wait for the watch service')
@@ -1015,6 +1077,7 @@ def main(argv: list[str] | None = None) -> int:
         'start': cmd_start,
         'status': cmd_status,
         'preflight': cmd_preflight,
+        'delivery-profile': cmd_delivery_profile,
         'resume': cmd_resume,
         'wait': cmd_wait,
         'checkpoint': cmd_checkpoint,

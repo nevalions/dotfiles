@@ -37,6 +37,25 @@
 
 Optional stages (`deploy`, `honcho`, `wiki`) are omitted unless opted in at `start`. Required stages cannot be skipped mid-run. `start --commit-only` stops after the commit checkpoint; `start --no-ci` omits CI only for a repo with an explicit no-CI policy. Neither flag grants authority. Before `beads_close`, verify everything in scope; record a truthful not-applicable or pending disposition rather than claiming an external write you did not perform.
 
+## Delivery profile pilot: frontend-angular-signals
+
+```bash
+pi-team-run delivery-profile nevalions/frontend-angular-signals --json
+
+# Pass the ready PR's exact head and existing ledger run.
+pi-team-run monitor nevalions/frontend-angular-signals --profile --pr "$PR" \
+  --run-id "$RUN_ID" --rev "$PR_HEAD" --queue
+
+# Check the exact merged tip and the publish-image gate after integration.
+pi-team-run monitor nevalions/frontend-angular-signals --profile --rev "$MERGE_SHA"
+```
+
+`--profile` replaces hand-entered `--require` contexts. The pilot is keyed by Forgejo host and repository, verifies that the PR targets `master` in that repository, and requires the current `master` tip for post-merge monitoring. If the tip advances, this path stops rather than silently switching revisions. The queued watcher retains the checked context set and target branch; a changed profile requires a new wait. For other repositories, use the existing explicit `--require` flow. If repo policy or server branch protection differs from this profile, reconcile it before using the profile as a gate.
+
+The profile is guidance, not authorization or an executor. With publish and merge authorized, use the application's `scripts/ship.sh` server-side flow and record the actual tested PR head and resulting merge SHA. The script can refresh the candidate; a changed head invalidates earlier CI evidence. Treat default-branch image publication as separate from deployment. A default-branch publish can trigger the existing `stats-dev` GitOps automation, so disclose that side effect before an otherwise ambiguous delivery. Production promotion requires separate authorization and the `kube-lvl47` pin PR flow; do not use direct cluster writes.
+
+For a deployment in scope, use the application's `docs/release-checklist.md`: tie the published digest to the merge SHA, confirm Flux applied the intended GitOps revision, match the serving pods' image IDs in the target environment to that digest, and check the affected public routes. Record these independently before checkpointing deployment. The watcher never merges, changes GitOps, or verifies a rollout by itself.
+
 ## Common Commands
 
 ```bash
