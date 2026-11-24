@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "platform": "linux/amd64",
+  "alpine_branch": "v3.24",
+  "package": "libxml2",
+  "scan_max_age_seconds": 172800,
+  "image_repository": "registry.example/library/ochistka-musoroprovoda-frontend",
+  "proposal_enabled": false,
+  "target": {
+    "context": "bay",
+    "flux_namespace": "flux-system",
+    "kustomization": "ochistka-musoroprovoda",
+    "namespace": "ochistka-musoroprovoda",
+    "deployment": "ochistka-musoroprovoda",
+    "container": "nginx"
+  },
+  "transport_command": [
+    "/absolute/private/pi_yt_transport.py"
+  ],
+  "apk_command": [
+    "docker",
+    "run",
+    "--rm",
+    "--pull=never",
+    "--network=none",
+    "--read-only",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--entrypoint",
+    "/sbin/apk",
+    "registry.example/library/python@sha256:REPLACE_WITH_VERIFIED_PLATFORM_DIGEST"
+  ],
+  "forgejo": {
+    "url": "https://git.example",
+    "auth_command": [
+      "/absolute/private/pi_yt_auth.py",
+      "forgejo",
+      "ochistka-musoroprovoda"
+    ]
+  },
+  "harbor": {
+    "url": "https://registry.example",
+    "repository": "library/ochistka-musoroprovoda-frontend",
+    "auth_command": [
+      "/absolute/private/pi_yt_auth.py",
+      "harbor",
+      "ochistka-musoroprovoda"
+    ]
+  },
+  "source": {
+    "repo": "nevalions/ochistka-musoroprovoda.ru",
+    "branch": "master",
+    "dockerfile": "Dockerfile",
+    "commit_author": {
+      "name": "OPERATOR_NAME",
+      "email": "operator@example.com"
+    },
+    "mirror_path": "/absolute/private/cache/ochistka-musoroprovoda/producer.git",
+    "remote_url": "git@git.example:nevalions/ochistka-musoroprovoda.ru.git",
+    "proposal_auth_command": [
+      "/absolute/private/ochistka-musoroprovoda/producer-proposal-auth"
+    ],
+    "pr_status_contexts": [
+      "CI / build (pull_request)"
+    ],
+    "pr_workflows": [
+      "ci.yml"
+    ],
+    "post_workflows": [
+      "ci.yml"
+    ],
+    "post_status_contexts": [
+      "CI / build (push)",
+      "CI / publish-image (push)"
+    ],
+    "proposal_actor": "ochistka-musoroprovoda-os-refresh-proposer",
+    "signing_key_file": "/absolute/private/ochistka-musoroprovoda/signing-key.pem",
+    "signing_public_key_sha256": "REPLACE_WITH_SHA256_OF_RAW_32_BYTE_ED25519_PUBLIC_KEY"
+  },
+  "gitops": {
+    "repo": "owner/cluster",
+    "branch": "master",
+    "image_file": "ochistka-musoroprovoda/overlays/prod/kustomization.yaml",
+    "mirror_path": "/absolute/private/cache/ochistka-musoroprovoda/gitops.git",
+    "remote_url": "git@git.example:owner/cluster.git",
+    "pr_status_contexts": [
+      "REPLACE_FROM_LIVE_PROTECTION_AND_WORKFLOWS"
+    ],
+    "pr_workflows": [
+      "REPLACE_FROM_LIVE_WORKFLOW_DIRECTORY.yml"
+    ],
+    "post_status_contexts": [
+      "REPLACE_WITH_ALL_APPLICABLE_GITOPS_PUSH_JOB_CONTEXTS"
+    ],
+    "post_workflows": [
+      "REPLACE_FROM_LIVE_WORKFLOW_DIRECTORY.yml"
+    ]
+  },
+  "signing_enabled": false
+}

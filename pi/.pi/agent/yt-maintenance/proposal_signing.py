@@ -21,6 +21,20 @@ REQUIRED_CONTEXTS = (
     'CI / test (pull_request)', 'CI / quality-gate (pull_request)',
     'security-pr / semgrep (pull_request)', 'security-pr / gitleaks (pull_request)',
     'security-pr / trivy-fs (pull_request)', 'security-pr / pip-audit (pull_request)')
+SITE_POLICIES = {
+    'nevalions/ochistka-musoroprovoda.ru': ('master', 'ochistka-musoroprovoda'),
+    'nevalions/videooperator.su': ('master', 'videooperator-su'),
+    'nevalions/videosemka.su': ('master', 'videosemka-su'),
+}
+
+
+def source_policy(repository):
+    if repository == 'nevalions/yt-downloader':
+        return 'main', REQUIRED_CONTEXTS
+    need(repository in SITE_POLICIES, 'source repository is outside approved policy')
+    return SITE_POLICIES[repository][0], ('CI / build (pull_request)',)
+
+
 PROTECTION_FIELDS = frozenset(('repository', 'branch', 'base_sha', 'checked_at',
                                'apply_to_admins', 'block_on_outdated_branch',
                                'enable_status_check', 'status_check_contexts'))
@@ -98,12 +112,20 @@ def validate_qualification(value, issued):
     need(value.get('qualification_id') == qualification_id(value), 'qualification identity mismatch')
 
 
-def validate_protection(value, base_sha, issued):
+def validate_source_qualification(value, repository):
+    if repository in SITE_POLICIES:
+        app = SITE_POLICIES[repository][1]
+        image = value.get('deployed_image', '').rsplit(':', 1)[0]
+        need(image.endswith('/library/' + app + '-frontend'), 'qualified image belongs to another source')
+
+
+def validate_protection(value, base_sha, issued, repository='nevalions/yt-downloader'):
+    branch, contexts = source_policy(repository)
     need(isinstance(value, dict) and set(value) == PROTECTION_FIELDS, 'signed protection fields missing or unexpected')
-    need(value['repository'] == 'nevalions/yt-downloader' and value['branch'] == 'main'
+    need(value['repository'] == repository and value['branch'] == branch
          and value['base_sha'] == base_sha, 'signed protection source identity differs')
     need(all(value[field] is True for field in ('apply_to_admins', 'block_on_outdated_branch', 'enable_status_check')), 'signed protection enforcement flag is not true')
-    need(value['status_check_contexts'] == sorted(REQUIRED_CONTEXTS), 'signed protection contexts differ from exact eight checks')
+    need(value['status_check_contexts'] == sorted(contexts), 'signed protection contexts differ from exact policy checks')
     need(type(value['checked_at']) in (int, float), 'signed protection timestamp is not numeric')
     recent(value['checked_at'], issued, 900)
 
@@ -125,18 +147,20 @@ def epoch_change(before, after):
     return old_date.isoformat(), new_date.isoformat()
 
 
-def bound_payload(qualification, branch, base_sha, head_sha, pr_number, before, after, *, issued=None, lifetime=900, protection=None):
+def bound_payload(qualification, branch, base_sha, head_sha, pr_number, before, after, *, issued=None, lifetime=900, protection=None, repository='nevalions/yt-downloader'):
+    target, contexts = source_policy(repository)
     issued = time.time() if issued is None else issued
     need(type(lifetime) is int and 0 < lifetime <= 900, 'signature lifetime exceeds policy')
     need(type(issued) in (int, float), 'signature issue time invalid')
     validate_qualification(qualification, issued)
+    validate_source_qualification(qualification, repository)
     need(branch == 'maintenance/apk-' + qualification['qualification_id'][:20], 'proposal branch is not deterministic')
     need(all(isinstance(v, str) and re.fullmatch(r'[0-9a-f]{40}', v) for v in (base_sha, head_sha)), 'proposal commit identity invalid')
     need(type(pr_number) is int and pr_number > 0, 'proposal number invalid')
-    validate_protection(protection, base_sha, issued)
+    validate_protection(protection, base_sha, issued, repository)
     old_epoch, new_epoch = epoch_change(before, after)
     need(new_epoch <= datetime.fromtimestamp(issued, timezone.utc).date().isoformat(), 'new epoch must not be a future UTC date')
-    return {'schema_version': 1, 'type': 'yt-os-refresh', 'repository': 'nevalions/yt-downloader', 'target': 'main',
+    return {'schema_version': 1, 'type': 'yt-os-refresh', 'repository': repository, 'target': target,
             'base_sha': base_sha, 'head_sha': head_sha, 'pr_number': pr_number, 'path': 'Dockerfile',
             'before_sha256': hashlib.sha256(before.encode('utf-8')).hexdigest(),
             'after_sha256': hashlib.sha256(after.encode('utf-8')).hexdigest(), 'old_epoch': old_epoch, 'new_epoch': new_epoch,
@@ -164,7 +188,8 @@ def signed_comment(payload, key):
     return '<!-- yt-os-refresh-v1\n' + canonical(envelope).decode('utf-8') + '\n-->'
 
 
-def verify_comment(body, public_key, *, at=None, allow_expired=False):
+def verify_comment(body, public_key, *, at=None, allow_expired=False, repository='nevalions/yt-downloader'):
+    target, contexts = source_policy(repository)
     try:
         need(isinstance(body, str) and len(body.encode()) <= 65536, 'signature comment oversized')
         match = re.fullmatch(r'<!-- yt-os-refresh-v1\n([^\n]+)\n-->', body)
@@ -178,13 +203,14 @@ def verify_comment(body, public_key, *, at=None, allow_expired=False):
         payload = json.loads(raw.decode('utf-8'), object_pairs_hook=unique)
         current = time.time() if at is None else at
         need(payload.get('schema_version') == 1 and payload.get('type') == 'yt-os-refresh'
-             and payload.get('repository') == 'nevalions/yt-downloader' and payload.get('target') == 'main'
+             and payload.get('repository') == repository and payload.get('target') == target
              and payload.get('path') == 'Dockerfile', 'signature payload scope invalid')
         need(type(payload.get('issued_at')) in (int, float) and type(payload.get('expires_at')) in (int, float)
              and payload['issued_at'] <= current and (allow_expired or current < payload['expires_at'])
              and 0 < payload['expires_at'] - payload['issued_at'] <= 900, 'signature expired or outside lifetime policy')
         validate_qualification(payload['qualification'], payload['issued_at'])
-        validate_protection(payload.get('protection'), payload['base_sha'], payload['issued_at'])
+        validate_source_qualification(payload['qualification'], repository)
+        validate_protection(payload.get('protection'), payload['base_sha'], payload['issued_at'], repository)
         if not allow_expired:
             recent(payload['protection']['checked_at'], current, 900)
         return payload

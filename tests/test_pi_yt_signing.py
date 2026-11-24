@@ -390,3 +390,25 @@ RUN apk version -t "${installed#libxml2-}" 2.13.9-r3
             body=m.signed_comment(bad,self.key)
             with self.subTest(field=field),self.assertRaises(m.SigningError):
                 m.verify_comment(body,self.key.public_key(),at=CLOCK)
+
+class SiteSigningTests(SigningTests):
+    def test_site_proofs_bind_repository_image_master_and_exact_ci(self):
+        key = Ed25519PrivateKey.generate()
+        for repo, (branch, app) in m.SITE_POLICIES.items():
+            q = qualification()
+            q['deployed_image'] = 'registry.example/library/' + app + '-frontend:old'
+            proof = protection()
+            proof.update(repository=repo, branch=branch, status_check_contexts=['CI / build (pull_request)'])
+            payload = m.bound_payload(q, self.branch, '1'*40, '2'*40, 123, self.before, self.after,
+                                      issued=CLOCK, protection=proof, repository=repo)
+            body = m.signed_comment(payload, key)
+            self.assertEqual(m.verify_comment(body, key.public_key(), at=CLOCK+1, repository=repo), payload)
+            for other in set(m.SITE_POLICIES) - {repo}:
+                with self.assertRaises(m.SigningError):
+                    m.verify_comment(body, key.public_key(), at=CLOCK+1, repository=other)
+            with self.assertRaises(m.SigningError):
+                m.verify_comment(body, key.public_key(), at=CLOCK+1)
+            proof['status_check_contexts'] = []
+            with self.assertRaises(m.SigningError):
+                m.bound_payload(q, self.branch, '1'*40, '2'*40, 123, self.before, self.after,
+                                issued=CLOCK, protection=proof, repository=repo)

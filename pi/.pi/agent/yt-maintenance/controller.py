@@ -149,6 +149,34 @@ def verify_receipt(receipt, candidate, started):
     require(started <= timestamp(receipt.get('observed_at')) <= now() + 5, 'receipt is not from this invocation')
 
 
+def approved_source(config):
+    source = config['source']
+    module = signing_module()
+    try:
+        branch, contexts = module.source_policy(source['repo'])
+    except ValueError as exc:
+        raise Rejected('source repository is outside approved policy') from exc
+    require(source['branch'] == branch and source['dockerfile'] == 'Dockerfile', 'source scope differs from immutable policy')
+    return branch, contexts
+
+
+def site_policy(config):
+    repo = config.get('source', {}).get('repo')
+    module = signing_module()
+    if repo not in module.SITE_POLICIES:
+        return None
+    branch, app = module.SITE_POLICIES[repo]
+    approved_source(config)
+    expected = {'context': 'bay', 'flux_namespace': 'flux-system', 'kustomization': app,
+                'namespace': app, 'deployment': app, 'container': 'nginx'}
+    require(config['target'] == expected, 'site observer target differs from immutable policy')
+    require(config['image_repository'].endswith('/library/' + app + '-frontend')
+            and config['harbor']['repository'] == 'library/' + app + '-frontend', 'site image differs from immutable policy')
+    require(config['gitops']['image_file'] == app + '/overlays/prod/kustomization.yaml', 'site overlay differs from immutable policy')
+    require(config['platform'] == 'linux/amd64', 'site platform differs from approved policy')
+    return app
+
+
 def load_config(path):
     info = path.lstat()
     require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077, 'config must be user-owned regular mode 0600 file')
@@ -163,6 +191,10 @@ def load_config(path):
     require(config['source']['dockerfile'] == 'Dockerfile', 'source path must be Dockerfile')
     require(type(config.get('scan_max_age_seconds', 172800)) is int and 0 < config.get('scan_max_age_seconds', 172800) <= 172800, 'scan freshness policy may not exceed 48 hours')
     require(config['gitops']['branch'] == 'master', 'observer currently supports master revision grammar')
+    if config['source']['repo'] in signing_module().SITE_POLICIES:
+        site_policy(config)
+    elif config.get('signing_enabled') is True:
+        approved_source(config)
     return config
 
 
@@ -242,6 +274,9 @@ class HTTP:
 
 def observe(config, candidate=None):
     command = config['transport_command'] + ['observe' if candidate is None else 'verify']
+    app = site_policy(config)
+    if app:
+        command.append(app)
     code, payload = run(command, None if candidate is None else json.dumps(candidate), timeout=300, allow_failure=True, return_status=True)
     value = json.loads(payload)
     require(code == 0 or (candidate is not None and value.get('verified_release') is False), 'transport process failed despite success receipt')
@@ -667,9 +702,15 @@ def release_candidate(api, config, receipt):
 
 def strict_source(config, contents):
     epoch_line(contents)
-    require(len(re.findall(r'^ARG PYTHON_BASE_IMAGE=library/python:3\.14-alpine3\.24$', contents, re.M)) == 1, 'source Python base series drifted')
+    if config['source']['repo'] in signing_module().SITE_POLICIES:
+        require(len(re.findall(r'^FROM nginxinc/nginx-unprivileged:[A-Za-z0-9_.-]*alpine3\.24(?:@sha256:[0-9a-f]{64})?$', contents, re.M)) == 1, 'source nginx Alpine base series drifted')
+    else:
+        require(len(re.findall(r'^ARG PYTHON_BASE_IMAGE=library/python:3\.14-alpine3\.24$', contents, re.M)) == 1, 'source Python base series drifted')
     contents = '\n'.join(line for line in contents.splitlines() if not line.lstrip().startswith('#'))
-    require('"${VERSION_ID%.*}" = "3.24"' in contents, 'source lacks supported Alpine 3.24 runtime guard')
+    if config['source']['repo'] in signing_module().SITE_POLICIES:
+        require('[ "${VERSION_ID%.*}" = 3.24 ]' in contents, 'source lacks supported Alpine 3.24 runtime guard')
+    else:
+        require('"${VERSION_ID%.*}" = "3.24"' in contents, 'source lacks supported Alpine 3.24 runtime guard')
     require('apk list --installed libxml2' in contents
             and 'apk version -t "${installed#libxml2-}" 2.13.9-r3' in contents, 'source lacks supported installed libxml2 minimum guard')
 
@@ -684,13 +725,12 @@ def signing_module():
 
 def proposal_scope(config, pr, branch, record):
     source = config['source']
-    require(source['repo'] == 'nevalions/yt-downloader' and source['branch'] == 'main'
-            and source['dockerfile'] == 'Dockerfile', 'signed source scope is not the approved pilot')
+    approved_source(config)
     require(record.get('owned') is True and record.get('pr') == pr['number'] and record.get('branch') == branch,
             'PR was not created and recorded by this controller')
     require(pr.get('state') == 'open' and pr.get('merged') is not True, 'signed PR is no longer open')
     require(pr.get('user', {}).get('login') == source.get('proposal_actor') and source.get('proposal_actor') and source['proposal_actor'] != 'linroot', 'PR author is not the dedicated proposal actor')
-    require(pr['base']['ref'] == 'main' and pr['base']['repo']['full_name'] == source['repo']
+    require(pr['base']['ref'] == source['branch'] and pr['base']['repo']['full_name'] == source['repo']
             and pr['head']['ref'] == branch and pr['head']['repo']['full_name'] == source['repo'], 'PR source/target repository or branch differs')
     require(pr['head']['sha'] == record.get('head_sha'), 'PR head changed outside this controller')
 
@@ -703,7 +743,7 @@ def recover_proposal(api, config, qualification, intent, pr, checkpoint):
             and intent.get('repository') == repo and intent.get('proposal_actor') == source.get('proposal_actor')
             and intent.get('branch') == branch, 'proposal intent does not prove controller creation')
     require(pr['head']['sha'] == intent.get('head_sha') and pr['base'].get('sha') == intent.get('base_sha')
-            and api.forge(repo, '/branches/main')['commit']['id'] == intent['base_sha'], 'interrupted proposal no longer matches exact intended base/head')
+            and api.forge(repo, '/branches/' + source['branch'])['commit']['id'] == intent['base_sha'], 'interrupted proposal no longer matches exact intended base/head')
     record = dict(intent, owned=True, pr=pr['number'], url=pr['html_url'], status='recovered', signed=False)
     proposal_scope(config, pr, branch, record)
     before, _ = api.contents(repo, 'Dockerfile', intent['base_sha'])
@@ -721,7 +761,7 @@ def recover_proposal(api, config, qualification, intent, pr, checkpoint):
     require(fresh_qualification is not None and fresh_qualification['qualification_id'] == qualification['qualification_id'], 'production fix changed before ownership recovery')
     same_deployment(first, observe(config))
     require(api.forge(repo, '/pulls/' + str(pr['number']))['head']['sha'] == intent['head_sha']
-            and api.forge(repo, '/branches/main')['commit']['id'] == intent['base_sha'], 'proposal moved during ownership recovery')
+            and api.forge(repo, '/branches/' + source['branch'])['commit']['id'] == intent['base_sha'], 'proposal moved during ownership recovery')
     return record
 
 
@@ -729,7 +769,7 @@ def matching_signed_comment(module, key, comment, payload, actor):
     if comment.get('user', {}).get('login') != actor:
         return False
     try:
-        previous = module.verify_comment(comment.get('body'), key.public_key(), at=now(), allow_expired=True)
+        previous = module.verify_comment(comment.get('body'), key.public_key(), at=now(), allow_expired=True, repository=payload['repository'])
     except (ValueError, TypeError, KeyError):
         return False
     fields = ('repository', 'target', 'pr_number', 'base_sha', 'head_sha', 'path',
@@ -740,28 +780,28 @@ def matching_signed_comment(module, key, comment, payload, actor):
 
 def protection_snapshot(api, config, base_sha):
     source = config['source']
-    require(source['repo'] == 'nevalions/yt-downloader' and source['branch'] == 'main', 'protection source scope differs')
+    branch, contexts_policy = approved_source(config)
     module = signing_module()
     repo = source['repo']
-    first = api.forge(repo, '/branches/main')
+    first = api.forge(repo, '/branches/' + source['branch'])
     fields = ('name', 'protected', 'enable_status_check', 'effective_branch_protection_name', 'status_check_contexts')
-    require(first.get('name') == 'main' and first.get('protected') is True
-            and first.get('enable_status_check') is True and first.get('effective_branch_protection_name') == 'main'
-            and first.get('commit', {}).get('id') == base_sha, 'live effective main protection/base is missing or differs')
+    require(first.get('name') == branch and first.get('protected') is True
+            and first.get('enable_status_check') is True and first.get('effective_branch_protection_name') == branch
+            and first.get('commit', {}).get('id') == base_sha, 'live effective default-branch protection/base is missing or differs')
     contexts = first.get('status_check_contexts')
-    require(isinstance(contexts, list) and len(contexts) == 8 and set(contexts) == set(module.REQUIRED_CONTEXTS), 'live branch protection does not expose exact eight contexts')
-    rule = api.forge(repo, '/branch_protections/main')
-    require(rule.get('branch_name') == 'main' and rule.get('rule_name', 'main') == 'main', 'authoritative protection rule is not exact main')
+    require(isinstance(contexts, list) and len(contexts) == len(contexts_policy) and set(contexts) == set(contexts_policy), 'live branch protection does not expose exact policy contexts')
+    rule = api.forge(repo, '/branch_protections/' + source['branch'])
+    require(rule.get('branch_name') == branch and rule.get('rule_name', branch) == branch, 'authoritative protection rule is not the exact default branch')
     required = rule.get('status_check_contexts')
-    require(isinstance(required, list) and len(required) == 8 and set(required) == set(module.REQUIRED_CONTEXTS), 'authoritative protection contexts differ from exact eight checks')
+    require(isinstance(required, list) and len(required) == len(contexts_policy) and set(required) == set(contexts_policy), 'authoritative protection contexts differ from exact policy checks')
     flags = ('apply_to_admins', 'block_on_outdated_branch', 'enable_status_check')
-    require(all(rule.get(field) is True for field in flags), 'authoritative main protection enforcement flags are not all true')
-    second = api.forge(repo, '/branches/main')
+    require(all(rule.get(field) is True for field in flags), 'authoritative default-branch protection enforcement flags are not all true')
+    second = api.forge(repo, '/branches/' + source['branch'])
     require(all(first.get(field) == second.get(field) for field in fields)
-            and second.get('commit', {}).get('id') == base_sha, 'main protection/base changed during authoritative read')
-    result = {'repository': repo, 'branch': 'main', 'base_sha': base_sha, 'checked_at': now(),
+            and second.get('commit', {}).get('id') == base_sha, 'default-branch protection/base changed during authoritative read')
+    result = {'repository': repo, 'branch': branch, 'base_sha': base_sha, 'checked_at': now(),
               'status_check_contexts': sorted(required), **{field: rule[field] for field in flags}}
-    module.validate_protection(result, base_sha, now())
+    module.validate_protection(result, base_sha, now(), repo)
     return result
 
 
@@ -773,7 +813,7 @@ def refresh_proof(api, config, qualification, record, checkpoint):
     pr = api.forge(repo, '/pulls/' + str(record['pr']))
     branch = 'maintenance/apk-' + qualification['qualification_id'][:20]
     proposal_scope(config, pr, branch, record)
-    current = api.forge(repo, '/branches/main')['commit']['id']
+    current = api.forge(repo, '/branches/' + source['branch'])['commit']['id']
     before, _ = api.contents(repo, 'Dockerfile', current)
     strict_source(config, before)
     after, _ = api.contents(repo, 'Dockerfile', pr['head']['sha'])
@@ -791,7 +831,7 @@ def refresh_proof(api, config, qualification, record, checkpoint):
             return record
         expected_after = advance_epoch(before, epoch_line(after)[2].isoformat())
         require(api.forge(repo, '/pulls/' + str(record['pr']))['head']['sha'] == pr['head']['sha'], 'PR changed before rebase')
-        require(api.forge(repo, '/branches/main')['commit']['id'] == current, 'source base changed before rebase')
+        require(api.forge(repo, '/branches/' + source['branch'])['commit']['id'] == current, 'source base changed before rebase')
         api.forge(repo, '/pulls/' + str(record['pr']) + '/update?style=rebase', None, 'POST')
         pr = api.forge(repo, '/pulls/' + str(record['pr']))
         record.update(head_sha=pr['head']['sha'], base_sha=current, signed=False)
@@ -810,12 +850,12 @@ def refresh_proof(api, config, qualification, record, checkpoint):
     fresh_qualification = qualify(api, config, first)
     require(fresh_qualification is not None and fresh_qualification['qualification_id'] == qualification['qualification_id'], 'production fix changed before signing')
     same_deployment(first, observe(config))
-    require(api.forge(repo, '/branches/main')['commit']['id'] == current, 'source base changed before signing')
+    require(api.forge(repo, '/branches/' + source['branch'])['commit']['id'] == current, 'source base changed before signing')
     final_pr = api.forge(repo, '/pulls/' + str(record['pr']))
     proposal_scope(config, final_pr, branch, record)
     protection = protection_snapshot(api, config, current)
     key = module.load_private(source['signing_key_file'], source['signing_public_key_sha256'])
-    payload = module.bound_payload(fresh_qualification, branch, current, final_pr['head']['sha'], record['pr'], before, after, issued=now(), protection=protection)
+    payload = module.bound_payload(fresh_qualification, branch, current, final_pr['head']['sha'], record['pr'], before, after, issued=now(), protection=protection, repository=repo)
     body = module.signed_comment(payload, key)
     comment = None
     if record.get('comment_id'):
@@ -842,12 +882,12 @@ def refresh_proof(api, config, qualification, record, checkpoint):
     comment_id = comment['id']
     readback = api.forge(repo, '/issues/comments/' + str(comment_id))
     require(readback.get('body') == body and readback.get('user', {}).get('login') == source['proposal_actor'], 'signed comment readback differs')
-    require(module.verify_comment(body, key.public_key(), at=now()) == payload, 'signed payload readback differs')
+    require(module.verify_comment(body, key.public_key(), at=now(), repository=repo) == payload, 'signed payload readback differs')
     record.pop('pending_comment_body', None)
     record.update(status='signed', signed=True, comment_id=comment_id, comment_body=body,
                   issued_at=payload['issued_at'], expires_at=payload['expires_at'], base_sha=current, head_sha=final_pr['head']['sha'])
     checkpoint()
-    require(api.forge(repo, '/branches/main')['commit']['id'] == current
+    require(api.forge(repo, '/branches/' + source['branch'])['commit']['id'] == current
             and api.forge(repo, '/pulls/' + str(record['pr']))['head']['sha'] == final_pr['head']['sha'], 'source moved after signing; proof cannot authorize current merge')
     return record
 
@@ -912,8 +952,8 @@ def propose(api, config, qualification, state, write=False, checkpoint=None):
         checkpoint()
         return decision
     if config.get('signing_enabled') is True:
-        require(repo == 'nevalions/yt-downloader' and source['branch'] == 'main'
-                and source.get('proposal_actor') and source['proposal_actor'] != 'linroot', 'automatic signing requires dedicated pilot actor and scope')
+        approved_source(config)
+        require(source.get('proposal_actor') and source['proposal_actor'] != 'linroot', 'automatic signing requires dedicated pilot actor and scope')
         module = signing_module()
         module.validate_qualification(qualification, now())
         module.load_private(source['signing_key_file'], source['signing_public_key_sha256'])
@@ -985,6 +1025,12 @@ def same_deployment(first, second):
 def tick(config, state_path, check=False, qualification_only=False):
     state = json.loads(state_path.read_text()) if state_path.exists() else {'schema_version': 1, 'proposals': {}, 'verified': {}}
     require(state.get('schema_version') == 1, 'state schema invalid')
+    app = site_policy(config)
+    if app or 'scope' in state:
+        binding = identity({'repository': config['source']['repo'], 'target': config['target']})
+        require(state.get('scope', binding) == binding, 'state belongs to another site')
+        require('scope' in state or not state.get('proposals') and not state.get('verified') and not state.get('pending') and not state.get('decisions'), 'unbound site state is not empty')
+        state['scope'] = binding
     api = HTTP(config)
     output = {'schema_version': 1, 'started_at': datetime.now(timezone.utc).isoformat(), 'mode': 'check' if check else 'once'}
     observation = observe(config)
@@ -1046,11 +1092,21 @@ def main():
     action.add_argument('--check', action='store_true', help='fresh read-only qualification/release preview; no proposal, transport verify or state mutation')
     action.add_argument('--once', action='store_true', help='one bounded scheduled pass; failures retry on next invocation')
     parser.add_argument('--qualify-only', action='store_true', help='skip release verification')
-    parser.add_argument('--config', type=Path, default=Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'pi-yt-maintenance/config.json')
-    parser.add_argument('--state-dir', type=Path, default=Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'pi-yt-maintenance')
+    parser.add_argument('--site', choices=('ochistka-musoroprovoda', 'videooperator-su', 'videosemka-su'))
+    parser.add_argument('--config', type=Path)
+    parser.add_argument('--state-dir', type=Path)
     args = parser.parse_args()
+    config_root = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'pi-yt-maintenance'
+    state_root = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'pi-yt-maintenance'
+    if args.site:
+        config_root = config_root / 'sites' / args.site
+        state_root = state_root / 'sites' / args.site
+    args.config = args.config or config_root / 'config.json'
+    args.state_dir = args.state_dir or state_root
     try:
         config = load_config(args.config)
+        if args.site:
+            require(site_policy(config) == args.site, 'selected site differs from config policy')
         if args.check:
             output = tick(config, args.state_dir / 'state.json', check=True, qualification_only=args.qualify_only)
         else:

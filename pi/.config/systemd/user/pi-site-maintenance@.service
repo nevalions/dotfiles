@@ -1,0 +1,12 @@
+[Unit]
+Description=Trusted Alpine maintenance for %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.pi/agent/bin/pi-yt-maintenance --once --site %i
+TimeoutStartSec=30min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true

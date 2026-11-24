@@ -287,3 +287,40 @@ nonboolean flags, reordered/missing/duplicate contexts and stale/future
 snapshots fail closed. Expired signatures may establish ownership of an
 already existing comment for refresh only; fresh merge authorization always
 requires a new snapshot and signature.
+
+## Approved website frontends
+
+The same flow supports exactly these additional producer scopes. All use protected
+`master`, `Dockerfile`, `linux/amd64`, Alpine `v3.24` and `libxml2`.
+
+| Producer repository | Site selector / namespace / Deployment / Flux Kustomization | Container | Image suffix / GitOps overlay |
+| --- | --- | --- | --- |
+| `nevalions/ochistka-musoroprovoda.ru` | `ochistka-musoroprovoda` | `nginx` | `library/ochistka-musoroprovoda-frontend`; `ochistka-musoroprovoda/overlays/prod/kustomization.yaml` |
+| `nevalions/videooperator.su` | `videooperator-su` | `nginx` | `library/videooperator-su-frontend`; `videooperator-su/overlays/prod/kustomization.yaml` |
+| `nevalions/videosemka.su` | `videosemka-su` | `nginx` | `library/videosemka-su-frontend`; `videosemka-su/overlays/prod/kustomization.yaml` |
+
+`--site SITE` selects `~/.config/pi-yt-maintenance/sites/SITE/config.json`
+and `~/.local/state/pi-yt-maintenance/sites/SITE`. The shipped site examples
+start with proposals and signing disabled. Pin each site's actual protection,
+workflow directory, auth helpers, producer/GitOps bare mirrors and signing key
+before enabling it. Never reuse a signer or proposal credential across sites.
+The independent `pi-site-maintenance@SITE.timer` units are installed by stow but
+must be explicitly enabled after validation. Each instance has its own lock,
+qualification/proposal history, pending candidates and verified receipts. State
+records its source/target identity and rejects cross-site reuse.
+
+The immutable allowlist binds source repository, default branch, Dockerfile,
+image suffix, platform and frontend target/overlay. Each site's exact protected
+PR context is `CI / build (pull_request)`; producer post-merge evidence includes
+both build and publication. Website runtime source must use a versioned
+`nginxinc/nginx-unprivileged:*alpine3.24` base with Alpine/libxml2 guards. The
+existing Python/yt policy retains its eight exact contexts. Additional protection
+contexts or workflow files stop the flow for policy review.
+
+The signed envelope deliberately retains schema 1, type `yt-os-refresh` and
+comment marker `yt-os-refresh-v1`. Its repository and target are bound to the
+explicit site policy; the broker must pin the matching site's public key,
+repository, actor and image. A proof for one site cannot verify as another site
+or as yt. Transport argv is `transport_command + [operation, SITE]`, where only
+`observe` and `verify` exist. Compound portal Kustomizations do not authorize
+changes to their contact Deployment/image.

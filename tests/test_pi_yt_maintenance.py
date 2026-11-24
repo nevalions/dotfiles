@@ -351,3 +351,53 @@ class GitOpsStatusPolicyTests(unittest.TestCase):
                 m.release_candidate(api, {'gitops': gitops}, {})
             api.forge.assert_not_called()
             api.pages.assert_not_called()
+
+class SitePolicyTests(unittest.TestCase):
+    def config(self, repo, app):
+        return {'source': {'repo': repo, 'branch': 'master', 'dockerfile': 'Dockerfile'},
+                'target': {'context': 'bay', 'flux_namespace': 'flux-system', 'kustomization': app,
+                           'namespace': app, 'deployment': app, 'container': 'nginx'},
+                'image_repository': 'registry.example/library/' + app + '-frontend',
+                'harbor': {'repository': 'library/' + app + '-frontend'},
+                'gitops': {'image_file': app + '/overlays/prod/kustomization.yaml'},
+                'platform': 'linux/amd64'}
+
+    def test_site_targets_cannot_cross_source_namespace_image_or_overlay(self):
+        for repo, (_, app) in m.signing_module().SITE_POLICIES.items():
+            config = self.config(repo, app)
+            self.assertEqual(m.site_policy(config), app)
+            mutations = [('source', 'branch', 'main'), ('target', 'deployment', 'portal-contact'),
+                         ('target', 'container', 'app'), ('target', 'namespace', 'other'),
+                         ('harbor', 'repository', 'library/other'),
+                         ('gitops', 'image_file', 'other/kustomization.yaml')]
+            for section, field, value in mutations:
+                bad = copy.deepcopy(config)
+                bad[section][field] = value
+                with self.subTest(repo=repo, field=field), self.assertRaises(m.Rejected):
+                    m.site_policy(bad)
+
+    def test_nginx_runtime_guard_rejects_floating_or_wrong_branch(self):
+        config = self.config('nevalions/videooperator.su', 'videooperator-su')
+        dockerfile = '''FROM nginxinc/nginx-unprivileged:alpine3.24
+ARG APK_PATCH_EPOCH=2026-11-23
+RUN [ "${VERSION_ID%.*}" = 3.24 ] && apk list --installed libxml2
+RUN apk version -t "${installed#libxml2-}" 2.13.9-r3
+'''
+        m.strict_source(config, dockerfile)
+        for wrong in ('alpine', 'alpine3.23'):
+            with self.assertRaises(m.Rejected):
+                m.strict_source(config, dockerfile.replace('alpine3.24', wrong))
+
+
+class SiteStateTests(SitePolicyTests):
+    def test_cross_site_and_unbound_nonempty_state_refuse_before_external_reads(self):
+        config = self.config('nevalions/videooperator.su', 'videooperator-su')
+        for state in ({'schema_version': 1, 'scope': 'other', 'verified': {}, 'proposals': {}},
+                      {'schema_version': 1, 'verified': {}, 'proposals': {'existing': {}}}):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / 'state.json'
+                path.write_text(json.dumps(state))
+                with patch.object(m, 'observe') as observe:
+                    with self.assertRaises(m.Rejected):
+                        m.tick(config, path)
+                    observe.assert_not_called()
