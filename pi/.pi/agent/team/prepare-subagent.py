@@ -9,6 +9,7 @@ import tempfile
 def prepare(source, cache):
     text = source.read_text(encoding="utf-8")
     watchdog = Path(__file__).resolve().with_name("subagent-watchdog.mjs")
+    blockers = watchdog.with_name("subagent-blockers.mjs")
 
     def replace(old, new):
         nonlocal text
@@ -19,7 +20,20 @@ def prepare(source, cache):
     replace('from "./agents.ts";', f"from {json.dumps(str(source.with_name('agents.ts')))};")
     replace('import { spawn } from "node:child_process";',
             'import { spawn } from "node:child_process";\n'
-            f'import {{ subagentTimeout, watchSubagent }} from {json.dumps(str(watchdog))};')
+            f'import {{ subagentTimeout, watchSubagent }} from {json.dumps(str(watchdog))};\n'
+            f'import {{ childBlocker, cwdBlocker, installBlockerGuard }} from {json.dumps(str(blockers))};')
+    replace('\terrorMessage?: string;\n\tterminationSignal?', '\terrorMessage?: string;\n\tblocker?: string;\n\tterminationSignal?')
+    replace('\tcwd: string;\n}\n\nfunction resolveAgent', '\tcwd: string;\n\tblocker?: string;\n}\n\nfunction resolveAgent')
+    replace('\tconst discovery = discoverAgents(effectiveCwd, scope);',
+            '\tconst blocker = cwdBlocker(cwd, effectiveCwd);\n'
+            '\tif (blocker) return { cwd: effectiveCwd, available: [], blocker };\n'
+            '\tconst discovery = discoverAgents(effectiveCwd, scope);')
+    replace('\tconst effectiveCwd = resolvedAgent.cwd;',
+            '\tif (resolvedAgent.blocker) {\n'
+            '\t\treturn { ...createUnstartedResult(agentName, task, step, "failed", resolvedAgent.blocker), blocker: resolvedAgent.blocker };\n'
+            '\t}\n\tconst effectiveCwd = resolvedAgent.cwd;')
+    replace('export default function (pi: ExtensionAPI) {',
+            'export default function (pi: ExtensionAPI) {\n\tinstallBlockerGuard(pi);')
     replace('\tspawnError?: Error;', '\tspawnError?: Error;\n\ttimeoutError?: string;')
     replace('\t\t\tlet exited = false;\n\t\t\tlet closed = false;\n\t\t\tlet killTimer: ReturnType<typeof setTimeout> | undefined;',
             '\t\t\tconst hardMs = subagentTimeout();\n\t\t\tlet watchdog: ReturnType<typeof watchSubagent> | undefined;')
@@ -43,7 +57,13 @@ def prepare(source, cache):
     replace('\t\t\tproc.on("exit", () => {\n\t\t\t\texited = true;\n\t\t\t});\n', '')
     replace('\t\tif (wasAborted) {',
             '\t\tif (outcome.timeoutError) {\n\t\t\tcurrentResult.status = "failed";\n'
-            '\t\t\tcurrentResult.errorMessage = outcome.timeoutError;\n\t\t} else if (wasAborted) {')
+            '\t\t\tcurrentResult.errorMessage = currentResult.blocker = outcome.timeoutError;\n\t\t} else if (wasAborted) {')
+    replace('\t\treturn currentResult;\n\t} finally {',
+            '\t\tconst blocker = childBlocker(currentResult, outcome);\n'
+            '\t\tif (blocker) {\n'
+            '\t\t\tcurrentResult.status = "failed";\n'
+            '\t\t\tcurrentResult.errorMessage = currentResult.blocker = blocker;\n'
+            '\t\t}\n\t\treturn currentResult;\n\t} finally {')
 
     data = text.encode("utf-8")
     cache.mkdir(mode=0o700, parents=True, exist_ok=True)

@@ -16,7 +16,7 @@ team_dir=${launcher%/*}/../team
 subagent_source=$examples/subagent/index.ts
 todo=$examples/todo.ts
 policy=$team_dir/workflow.md
-if [ ! -r "$subagent_source" ] || [ ! -r "$todo" ] || [ ! -r "$policy" ] || [ ! -r "$team_dir/prepare-subagent.py" ] || [ ! -r "$team_dir/subagent-watchdog.mjs" ] || [ ! -d "$agent_dir/agents" ] || [ ! -r "$agent_dir/extensions/agy-worker.ts" ]; then
+if [ ! -r "$subagent_source" ] || [ ! -r "$todo" ] || [ ! -r "$policy" ] || [ ! -r "$team_dir/prepare-subagent.py" ] || [ ! -r "$team_dir/subagent-watchdog.mjs" ] || [ ! -r "$team_dir/subagent-blockers.mjs" ] || [ ! -d "$agent_dir/agents" ] || [ ! -r "$agent_dir/extensions/agy-worker.ts" ]; then
   printf '%s\n' 'pi-team: missing AGY worker extension, bundled subagent or todo example, workflow policy, or role definitions.' >&2
   exit 1
 fi
