@@ -8,7 +8,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const release = process.env.PI_TEST_RELEASE_PACKAGE;
 if (process.argv.includes("--no-session")) {
-  if (process.argv.includes("Task: quota")) {
+  if (process.argv.includes("Task: isolation")) {
+    assert.ok(process.argv.includes("--no-extensions"));
+    assert.ok(process.argv.includes("--no-mcp"));
+    assert.ok(process.argv.includes("--tools"));
+    console.log(JSON.stringify({ type: "message_end", message: {
+      role: "assistant", content: [{ type: "text", text: "isolated" }],
+      stopReason: "stop", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { total: 0 } },
+    } }));
+    console.log(JSON.stringify({ type: "agent_end" }));
+  } else if (process.argv.includes("Task: quota")) {
     console.error("provider returned HTTP 429: quota exceeded");
     process.exitCode = 1;
   } else if (!process.argv.includes("Task: empty")) {
@@ -18,7 +27,7 @@ if (process.argv.includes("--no-session")) {
     setInterval(() => {}, 1000);
   }
 } else {
-  test("the generated Pi tool returns both timeout phases to the coordinator", {
+  test("the generated Pi tool isolates children and reports both timeout phases", {
     skip: !release && "Set PI_TEST_RELEASE_PACKAGE to the managed pi-coding-agent package directory",
     timeout: 25_000,
   }, async () => {
@@ -36,7 +45,7 @@ if (process.argv.includes("--no-session")) {
       }), /unsupported bundled subagent layout/);
       const agents = join(root, ".pi", "agents");
       mkdirSync(agents, { recursive: true });
-      writeFileSync(join(agents, "fixture.md"), "---\nname: fixture\ndescription: Synthetic test agent\n---\n");
+      writeFileSync(join(agents, "fixture.md"), "---\nname: fixture\ndescription: Synthetic test agent\ntools: [read, grep, find, ls]\n---\n");
       const { loadExtensions } = await import(pathToFileURL(resolve(release, "dist/core/extensions/loader.js")));
       const loaded = await loadExtensions([generated], root);
       assert.deepEqual(loaded.errors, []);
@@ -54,6 +63,10 @@ if (process.argv.includes("--no-session")) {
       const closing = await execute("finish");
       assert.equal(closing.details.results[0].status, "failed");
       assert.match(closing.content[0].text, /after its turn ended.*within 10000 ms/);
+
+      const isolated = await execute("isolation");
+      assert.equal(isolated.details.results[0].status, "completed");
+      assert.equal(isolated.content[0].text, "isolated");
 
       const invalid = await execute("hang", join(root, "missing"));
       assert.equal(invalid.details.results[0].exitCode, null);

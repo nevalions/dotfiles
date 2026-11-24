@@ -34,6 +34,8 @@ def prepare(source, cache):
             '\t}\n\tconst effectiveCwd = resolvedAgent.cwd;')
     replace('export default function (pi: ExtensionAPI) {',
             'export default function (pi: ExtensionAPI) {\n\tinstallBlockerGuard(pi);')
+    replace('["--mode", "json", "-p", "--no-session"]',
+            '["--mode", "json", "-p", "--no-session", "--no-extensions", "--no-mcp"]')
     replace('\tspawnError?: Error;', '\tspawnError?: Error;\n\ttimeoutError?: string;')
     replace('\t\t\tlet exited = false;\n\t\t\tlet closed = false;\n\t\t\tlet killTimer: ReturnType<typeof setTimeout> | undefined;',
             '\t\t\tconst hardMs = subagentTimeout();\n\t\t\tlet watchdog: ReturnType<typeof watchSubagent> | undefined;')
