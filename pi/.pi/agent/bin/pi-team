@@ -11,11 +11,14 @@ case "$version" in
     exit 1 ;;
 esac
 examples=$agent_dir/install/releases/$version/node_modules/@earendil-works/pi-coding-agent/examples/extensions
-subagent=$examples/subagent/index.ts
+launcher=$(readlink -f -- "$0")
+team_dir=${launcher%/*}/../team
+subagent_source=$examples/subagent/index.ts
 todo=$examples/todo.ts
-policy=$agent_dir/team/workflow.md
-if [ ! -r "$subagent" ] || [ ! -r "$todo" ] || [ ! -r "$policy" ] || [ ! -d "$agent_dir/agents" ] || [ ! -r "$agent_dir/extensions/agy-worker.ts" ]; then
+policy=$team_dir/workflow.md
+if [ ! -r "$subagent_source" ] || [ ! -r "$todo" ] || [ ! -r "$policy" ] || [ ! -r "$team_dir/prepare-subagent.py" ] || [ ! -r "$team_dir/subagent-watchdog.mjs" ] || [ ! -d "$agent_dir/agents" ] || [ ! -r "$agent_dir/extensions/agy-worker.ts" ]; then
   printf '%s\n' 'pi-team: missing AGY worker extension, bundled subagent or todo example, workflow policy, or role definitions.' >&2
   exit 1
 fi
+subagent=$(python3 -I "$team_dir/prepare-subagent.py" "$subagent_source" "$agent_dir/install/team-cache")
 exec "$agent_dir/bin/pi" --extension "$subagent" --extension "$todo" --append-system-prompt "$policy" --agy-team "$@"

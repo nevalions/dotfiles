@@ -1,0 +1,58 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { test } from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const release = process.env.PI_TEST_RELEASE_PACKAGE;
+if (process.argv.includes("--no-session")) {
+  if (process.argv.includes("Task: finish")) {
+    console.log(JSON.stringify({ type: "agent_end" }));
+  }
+  setInterval(() => {}, 1000);
+} else {
+  test("the generated Pi tool returns both timeout phases to the coordinator", {
+    skip: !release && "Set PI_TEST_RELEASE_PACKAGE to the managed pi-coding-agent package directory",
+    timeout: 25_000,
+  }, async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-team-test-"));
+    const previousLimit = process.env.PI_TEAM_SUBAGENT_TIMEOUT_MS;
+    try {
+      const prepare = fileURLToPath(new URL("../pi/.pi/agent/team/prepare-subagent.py", import.meta.url));
+      const subprocessArgs = ["-I", prepare, resolve(release, "examples/extensions/subagent/index.ts"), join(root, "cache")];
+      const generated = execFileSync("python3", subprocessArgs, { encoding: "utf8" }).trim();
+      assert.equal(execFileSync("python3", subprocessArgs, { encoding: "utf8" }).trim(), generated);
+      const unsupported = join(root, "unsupported.ts");
+      writeFileSync(unsupported, "export default () => {};\n");
+      assert.throws(() => execFileSync("python3", ["-I", prepare, unsupported, join(root, "cache")], {
+        stdio: "pipe",
+      }), /unsupported bundled subagent layout/);
+      const agents = join(root, ".pi", "agents");
+      mkdirSync(agents, { recursive: true });
+      writeFileSync(join(agents, "fixture.md"), "---\nname: fixture\ndescription: Synthetic test agent\n---\n");
+      const { loadExtensions } = await import(pathToFileURL(resolve(release, "dist/core/extensions/loader.js")));
+      const loaded = await loadExtensions([generated], root);
+      assert.deepEqual(loaded.errors, []);
+      const tool = loaded.extensions[0].tools.get("subagent");
+      const execute = (task) => tool.definition.execute("fixture", {
+        agent: "fixture", agentScope: "project", task,
+      }, undefined, undefined, { cwd: root, hasUI: false });
+
+      process.env.PI_TEAM_SUBAGENT_TIMEOUT_MS = "500";
+      const running = await execute("hang");
+      assert.equal(running.details.results[0].status, "failed");
+      assert.match(running.content[0].text, /timed out after 500 ms before its turn ended/);
+
+      process.env.PI_TEAM_SUBAGENT_TIMEOUT_MS = "18000";
+      const closing = await execute("finish");
+      assert.equal(closing.details.results[0].status, "failed");
+      assert.match(closing.content[0].text, /after its turn ended.*within 10000 ms/);
+    } finally {
+      if (previousLimit === undefined) delete process.env.PI_TEAM_SUBAGENT_TIMEOUT_MS;
+      else process.env.PI_TEAM_SUBAGENT_TIMEOUT_MS = previousLimit;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}

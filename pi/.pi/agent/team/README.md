@@ -1,10 +1,10 @@
 # Pi team CLI
 
-Run `pi-team` instead of `pi` for the team workflow. It loads the bundled subagent and todo examples and appends `workflow.md` to the parent prompt. Add `--model jev/auto` to use Jev for the coordinator; Pi subagent models and effort are pinned in role frontmatter. The AGY implementation worker is pinned separately to `gemini-4-hydrogen-high` at `high` effort.
+Run `pi-team` instead of `pi` for the team workflow. It loads a deadline-protected copy of the bundled subagent example and the bundled todo example, and appends `workflow.md` to the parent prompt. Add `--model jev/auto` to use Jev for the coordinator; Pi subagent models and effort are pinned in role frontmatter. The AGY implementation worker is pinned separately to `gemini-4-hydrogen-high` at `high` effort.
 
 Ask for an implementation to run the plan, implementation, tests, review, and fixes without routine approvals. Ask for a plan or review only to keep it read-only. In the TUI, `/todos` shows the current session branch's checklist. It is not a shared board, an unattended queue, or a crash-recovery scheduler.
 
-Only the wrapper loads the bundled subagent and todo extensions. `~/.pi/agent/extensions/agy-worker.ts` is auto-loaded in both plain Pi and `pi-team`; the wrapper enables team mode. Role files under `~/.pi/agent/agents` are inert without the subagent extension. The legacy Pi worker role is not used by the team workflow. Workflow rules are prompt policy, not sandbox or permission enforcement.
+Only the wrapper loads the team subagent and todo extensions. Each Pi subagent has a five-minute total deadline (override with a positive `PI_TEAM_SUBAGENT_TIMEOUT_MS`) and at most ten seconds to close after emitting `agent_end`. On expiry, the wrapper reports which phase timed out, asks the child to terminate, and force-kills it if it has not exited after five seconds. A timeout is a failed delegation, not a completed review; inspect any partial output before retrying. Restart the coordinator to pick up launcher changes. An incompatible bundled subagent layout is rejected at launch rather than silently running without deadlines. `~/.pi/agent/extensions/agy-worker.ts` is auto-loaded in both plain Pi and `pi-team`; the wrapper enables team mode. Role files under `~/.pi/agent/agents` are inert without the subagent extension. The legacy Pi worker role is not used by the team workflow. Workflow rules are prompt policy, not sandbox or permission enforcement.
 
 ## Interactive team and local run ledger
 
