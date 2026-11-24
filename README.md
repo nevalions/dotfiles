@@ -149,6 +149,21 @@ stow -D <directory>
 stow -t ~ -v
 ```
 
+### Local validation
+
+Run `python3 validate.py` to check the repository without applying configs or
+reloading services. Run a subset with `python3 validate.py stow herdr`.
+
+| Check | Requires | Validates |
+|-------|----------|-----------|
+| `stow` | GNU Stow | Dry-runs `openclaude`, `claude-skills`, and `git` together against a temporary target. This does not check for conflicts in your home directory. |
+| `lua` | StyLua | Checks Lua formatting in the checkout. |
+| `claude` | Claude Code | Validates each Claude mod and runs its tests. |
+| `herdr` | Herdr | Checks the checkout’s `herdr/.config/herdr/config.toml`, not the installed config. |
+
+Missing tools and failed checks produce a nonzero exit status; other requested
+checks still run. This repository intentionally has no CI.
+
 ### Common Workflows
 
 #### Development Session
