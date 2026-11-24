@@ -1,6 +1,17 @@
 # AGENTS.md
 
+## Repository map
+
+- Most top-level tool directories are GNU Stow packages for user configuration. See `README.md` for the package list and exceptions.
+- `pi/`, `codex/`, and the other agent packages hold harness configuration; see `AGENT-INSTALL.md` for setup.
+- `claude-mods/` contains Claude Code plugins, loaded in place rather than stowed.
+
 ## Repository Commands
+
+### Local validation
+
+- From the repository root, run `python3 validate.py` for all supported local checks, or pass one or more of `stow`, `lua`, `claude`, and `herdr` to run a subset.
+- Requires Python 3 and, for the selected checks, GNU Stow, StyLua, Claude Code, or Herdr respectively. The Stow check uses a temporary target and does not detect conflicts in your home directory. See `README.md` under Local validation for coverage.
 
 ### Configuration Management
 - `stow <directory>` - Apply symlinks for specific configuration
