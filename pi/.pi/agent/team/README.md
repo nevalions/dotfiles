@@ -25,6 +25,10 @@ Both launch modes preflight worktree writes and use a per-worktree advisory `flo
 
 The parent coordinates; the scout, planner, and reviewer use read-only tools. The coordinator gives the AGY worker an isolated task worktree and verifies its changes and checks. AGY print mode can deny tools; send edit-only assignments and have the coordinator run checks. The tool reports recognized denial categories without printing raw denial entries. In team mode it renews the coordinator's existing Beads claim every 30 seconds during delegation, aborting AGY on a failed heartbeat. The Beads lease TTL must comfortably exceed the renewal interval plus the five-second heartbeat timeout. This is node-local, and idle, planning, review and CI waits are not renewed. Implementation authorization covers ordinary coding, tests, and review fixes, not commits, pushes, merges, deploys, or tracker changes.
 
+## Frontend verification
+
+For user-visible web changes, the coordinator checks the affected app in the task worktree. It runs relevant repo Playwright tests when locally runnable, or uses an available local Playwright browser to smoke-test the changed flow if there is no relevant test. For visual changes it inspects the rendered UI, not just the test exit status. The coordinator passes candidate-specific evidence to the read-only reviewer and reports any checks it could not run. This is a [workflow checkpoint](workflow.md#frontend-browser-checkpoint), not a launcher hook or a Playwright installer.
+
 ## Install and verify
 
 Deploy with `python3 install-agents.py --tools pi --check` and then the same command without `--check`. Requires Linux with working bubblewrap PID namespaces and util-linux `flock`, a managed Pi release with both bundled examples and authenticated routes for the Pi role models, plus an authenticated `agy` on PATH with access to `gemini-4-hydrogen-high`. Repository implementation also needs a working `bd` CLI, an initialized repo tracker, and a documented sync procedure. Verify the tracker with `bd where --json` and inspect the selected issue before admitting work.
