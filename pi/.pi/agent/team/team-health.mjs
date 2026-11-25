@@ -1,11 +1,26 @@
 const routes = ["openai-codex/gpt-6.1-sol", "opencode-go/deepseek-v4.1-flash"];
+const writeRoutes = [
+  {ref: "opencode-go/deepseek-v4.1-flash"},
+  {ref: "openai-codex/gpt-6.1-sol", thinking: "medium"},
+];
+
+function isEligibleRoute(available, ref, primary, excluded) {
+  const [provider, id] = ref.split("/");
+  return provider !== primary?.split("/")[0] && !excluded.has(provider) &&
+    available.some(m => m.provider === provider && m.id === id);
+}
 
 export function alternate(registry, primary, excluded = new Set()) {
   const available = registry?.getAvailable() ?? [];
   for (const ref of routes) {
-    const [provider, id] = ref.split("/");
-    if (provider !== primary?.split("/")[0] && !excluded.has(provider) &&
-        available.some(m => m.provider === provider && m.id === id)) return ref;
+    if (isEligibleRoute(available, ref, primary, excluded)) return ref;
+  }
+}
+
+export function writeAlternate(registry, primary, excluded = new Set()) {
+  const available = registry?.getAvailable() ?? [];
+  for (const route of writeRoutes) {
+    if (isEligibleRoute(available, route.ref, primary, excluded)) return {...route};
   }
 }
 
@@ -34,13 +49,30 @@ export function installCoordinatorRecovery(pi) {
     if (!issue || !ctx.model) return;
     const {provider, id} = ctx.model;
     failed.add(provider);
-    const next = alternate(ctx.modelRegistry, provider, failed);
-    const model = next && ctx.modelRegistry.find(...next.split("/"));
-    if (model && await pi.setModel(model).catch(() => false)) {
-      warn(ctx, `Coordinator ${provider}/${id}: ${issue}; continuing with ${next}.`);
-      return {continue: true, entries: [...event.entries, {type: "custom_message", customType: "team-provider-fallback",
-        content: "Continue the interrupted assignment from verified state. Do not repeat completed tool actions.", display: false}]};
+    while (!ctx.signal?.aborted) {
+      const next = writeAlternate(ctx.modelRegistry, provider, failed);
+      if (!next) break;
+      const [nextProvider, nextId] = next.ref.split("/");
+      const model = ctx.modelRegistry?.find?.(nextProvider, nextId);
+      let activated = false;
+      if (model) {
+        try {
+          activated = Boolean(await pi.setModel(model));
+        } catch {
+          activated = false;
+        }
+      }
+      if (ctx.signal?.aborted) return;
+      if (activated) {
+        if (next.thinking) pi.setThinkingLevel(next.thinking);
+        const target = next.thinking ? `${next.ref} (${next.thinking})` : next.ref;
+        warn(ctx, `Coordinator ${provider}/${id}: ${issue}; continuing with ${target}.`);
+        return {continue: true, entries: [...event.entries, {type: "custom_message", customType: "team-provider-fallback",
+          content: "Continue the interrupted assignment from verified state. Do not repeat completed tool actions.", display: false}]};
+      }
+      failed.add(nextProvider);
     }
+    if (ctx.signal?.aborted) return;
     warn(ctx, `Coordinator ${provider}/${id}: ${issue}; no approved fallback remains.`);
   });
 }

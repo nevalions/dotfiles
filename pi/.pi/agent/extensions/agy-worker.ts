@@ -4,7 +4,7 @@ import type { Stats } from "node:fs";
 import { lstat, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
-import { activityLease, alternate, routeIssue, warn } from "../team/team-health.mjs";
+import { activityLease, routeIssue, warn, writeAlternate } from "../team/team-health.mjs";
 import { runAgyStream } from "../team/agy-stream.mjs";
 import { worktreeSampler } from "../team/worktree-activity.mjs";
 import { Type } from "typebox";
@@ -252,7 +252,7 @@ const defaultModel = "gemini-4-hydrogen-high";
 const defaultEffort = "high";
 
 export default function (pi: ExtensionAPI, stream = runAgyStream) {
-  let recovery: { key: string; model: string; excluded: Set<string> } | undefined;
+  let recovery: { key: string; model: string; thinking?: string; excluded: Set<string> } | undefined;
   pi.registerFlag("agy-model", { type: "string", default: defaultModel, description: "Plain Pi worker model ID from agy models" });
   pi.registerFlag("agy-effort", { type: "string", default: defaultEffort, description: "Plain Pi worker effort: low, medium, high, xhigh, or max" });
   pi.registerFlag("agy-team", { type: "boolean", default: false, description: "Require a linked task worktree and pin the team worker to Hydrogen High" });
@@ -276,7 +276,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
     async execute(_id, { task, cwd: worktree, issue, actor, resumeWithFallback }, signal, onUpdate, ctx) {
       const team = pi.getFlag("agy-team") === true;
       let model = team ? defaultModel : pi.getFlag("agy-model");
-      const effort = team ? defaultEffort : pi.getFlag("agy-effort");
+      let effort = team ? defaultEffort : pi.getFlag("agy-effort");
       if (typeof model !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(model) ||
           typeof effort !== "string" || !efforts.includes(effort)) {
         throw new Error("Set --agy-model to an ID from agy models and --agy-effort to low, medium, high, xhigh, or max.");
@@ -327,6 +327,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       if (resumeWithFallback) {
         if (!recovery || recovery.key !== key) throw new Error("No pending writer fallback for this claim and worktree.");
         model = recovery.model;
+        if (recovery.thinking) effort = recovery.thinking;
         for (const provider of recovery.excluded) attempted.add(provider);
         attempted.add(model.split("/")[0]);
       }
@@ -430,10 +431,11 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
         const problem = /bwrap: execvp .*: (?:No such file or directory|Permission denied)/i.test(result.stderr)
           ? "CLI unavailable" : ("diagnosticIssue" in result && result.diagnosticIssue) || routeIssue(diagnostic);
         if (problem) {
-          const next = alternate(ctx.modelRegistry, resumeWithFallback ? model : undefined, attempted);
-          if (next) recovery = {key, model: next, excluded: attempted};
+          const next = writeAlternate(ctx.modelRegistry, resumeWithFallback ? model : undefined, attempted);
+          if (next) recovery = {key, model: next.ref, thinking: next.thinking, excluded: attempted};
+          const nextEffort = next ? next.thinking ?? defaultEffort : undefined;
           const message = `${launch}: ${problem}. Inspect partial edits and revalidate the claim. ${next
-            ? `Then use resumeWithFallback for ${next}; no work has been replayed.` : "No approved fallback remains."}`;
+            ? `Then use resumeWithFallback for ${next.ref} (${nextEffort}); no work has been replayed.` : "No approved fallback remains."}`;
           warn(ctx, message);
           throw new Error(message);
         }

@@ -97,24 +97,97 @@ test('team renews during delegation, aborts on failure and stops renewing', asyn
   assert.equal(heartbeatCalls(calls).length, 3);
 });
 
-test('team offers a scoped fallback without replaying a writer; resumed writer retains isolation', async t => {
+async function withTempAgentDir(t) {
   const agentDir = await mkdtemp(join(tmpdir(), 'pi-config-'));
   t.after(() => rm(agentDir, { recursive: true, force: true }));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = agentDir;
   t.after(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
+  return agentDir;
+}
+
+function assertRestrictedWriterArgs(args, agentDir, model, thinking) {
+  for (const flag of ['--nonblock','bwrap','--unshare-pid','--tmp-overlay',agentDir,'--no-approve','--no-mcp','--no-extensions','read,grep,find,ls,edit,write']) {
+    assert.ok(args.includes(flag));
+  }
+  assert.equal(args[args.indexOf('--model') + 1], model);
+  assert.equal(args[args.indexOf('--thinking') + 1], thinking);
+}
+
+test('team offers a scoped fallback without replaying a writer; resumed writer retains isolation', async t => {
+  const agentDir = await withTempAgentDir(t);
   const modelRegistry = {getAvailable: () => [{provider: "openai-codex", id: "gpt-6.1-sol"}]};
   let count = 0;
   const {calls, execute} = await fixture(t, {launch: () => ++count === 1
     ? {...ok, code: 1, stderr: "User location is not supported"} : {...ok, stdout: "edited"}});
   await assert.rejects(execute(undefined, true, modelRegistry), /No pending/);
-  await assert.rejects(execute(undefined, false, modelRegistry), /location restriction.*resumeWithFallback/);
+  await assert.rejects(execute(undefined, false, modelRegistry), /location restriction.*resumeWithFallback for openai-codex\/gpt-6\.1-sol \(medium\)/);
   assert.equal(count, 1);
   const resumed = await execute(undefined, true, modelRegistry);
   assert.equal(resumed.details.model, "openai-codex/gpt-6.1-sol");
+  assert.equal(resumed.details.effort, "medium");
   const args = calls.filter(([,args]) => args.includes('--no-fork')).at(-1)[1];
-  for (const flag of ['--nonblock','bwrap','--unshare-pid','--tmp-overlay',agentDir,'--no-approve','--no-mcp','--no-extensions','read,grep,find,ls,edit,write']) assert.ok(args.includes(flag));
+  assertRestrictedWriterArgs(args, agentDir, 'openai-codex/gpt-6.1-sol', 'medium');
   assert.equal(heartbeatCalls(calls).length, 2);
+  await assert.rejects(execute(undefined, true, modelRegistry), /No pending/);
+});
+
+test('team falls back AGY -> Flash writer (high) -> Sol writer (medium) without replay and retains isolation', async t => {
+  const agentDir = await withTempAgentDir(t);
+  const modelRegistry = {
+    getAvailable: () => [
+      {provider: "openai-codex", id: "gpt-6.1-sol"},
+      {provider: "opencode-go", id: "deepseek-v4.1-flash"},
+    ],
+  };
+  let count = 0;
+  const {calls, execute} = await fixture(t, {launch: () => {
+    count++;
+    if (count === 1) return {...ok, code: 1, stderr: "User location is not supported"};
+    if (count === 2) return {...ok, code: 1, stderr: "429 rate limit exceeded"};
+    return {...ok, stdout: "edited"};
+  }});
+
+  await assert.rejects(execute(undefined, false, modelRegistry), /location restriction.*resumeWithFallback for opencode-go\/deepseek-v4\.1-flash \(high\)/);
+  assert.equal(count, 1);
+  const agyArgs = calls.find(([, args]) => args.includes('--print'))[1];
+  assert.equal(agyArgs[agyArgs.indexOf('--model') + 1], 'gemini-4-hydrogen-high');
+  assert.equal(agyArgs[agyArgs.indexOf('--effort') + 1], 'high');
+
+  await assert.rejects(execute(undefined, true, modelRegistry), /rate or quota limit.*resumeWithFallback for openai-codex\/gpt-6\.1-sol \(medium\)/);
+  assert.equal(count, 2);
+  const flashArgs = calls.filter(([, args]) => args.includes('--no-fork')).at(-1)[1];
+  assertRestrictedWriterArgs(flashArgs, agentDir, 'opencode-go/deepseek-v4.1-flash', 'high');
+
+  const resumed = await execute(undefined, true, modelRegistry);
+  assert.equal(count, 3);
+  assert.equal(resumed.details.model, "openai-codex/gpt-6.1-sol");
+  assert.equal(resumed.details.effort, "medium");
+  const solArgs = calls.filter(([, args]) => args.includes('--no-fork')).at(-1)[1];
+  assertRestrictedWriterArgs(solArgs, agentDir, 'openai-codex/gpt-6.1-sol', 'medium');
+
+  assert.equal(heartbeatCalls(calls).length, 3);
+  await assert.rejects(execute(undefined, true, modelRegistry), /No pending/);
+});
+
+test('team stops without bouncing back to Flash when Sol writer also hits a routing issue', async t => {
+  await withTempAgentDir(t);
+  const modelRegistry = {
+    getAvailable: () => [
+      {provider: "openai-codex", id: "gpt-6.1-sol"},
+      {provider: "opencode-go", id: "deepseek-v4.1-flash"},
+    ],
+  };
+  let count = 0;
+  const {execute} = await fixture(t, {launch: () => {
+    count++;
+    return {...ok, code: 1, stderr: "503 Service Unavailable"};
+  }});
+
+  await assert.rejects(execute(undefined, false, modelRegistry), /opencode-go\/deepseek-v4\.1-flash \(high\)/);
+  await assert.rejects(execute(undefined, true, modelRegistry), /openai-codex\/gpt-6\.1-sol \(medium\)/);
+  await assert.rejects(execute(undefined, true, modelRegistry), /No approved fallback remains/);
+  assert.equal(count, 3);
   await assert.rejects(execute(undefined, true, modelRegistry), /No pending/);
 });
 
