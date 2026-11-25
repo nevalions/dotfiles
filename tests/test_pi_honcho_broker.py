@@ -606,3 +606,204 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(stderr, b'')
         self.assertFalse(self.recall_marker.exists())
         self.assertTrue(stat.S_ISFIFO(dest.lstat().st_mode))
+
+
+class RecallScopesTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name).resolve()
+
+    def load_recall_scopes(self):
+        spec = importlib.util.spec_from_file_location('recall_scopes', DIR / 'recall-scopes.py')
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def init_repo(self, rel, origin=None, *, commit=False):
+        repo = self.home / rel
+        repo.mkdir(parents=True, exist_ok=True)
+        subprocess.run(['/usr/bin/git', 'init', str(repo)], check=True, capture_output=True)
+        if origin is not None:
+            subprocess.run(
+                ['/usr/bin/git', '-C', str(repo), 'remote', 'add', 'origin', origin],
+                check=True,
+                capture_output=True,
+            )
+        if commit:
+            subprocess.run(
+                [
+                    '/usr/bin/git',
+                    '-C',
+                    str(repo),
+                    '-c',
+                    'user.name=Test',
+                    '-c',
+                    'user.email=test@example.com',
+                    'commit',
+                    '--allow-empty',
+                    '-m',
+                    'init',
+                ],
+                check=True,
+                capture_output=True,
+            )
+        return repo
+
+    def run_cli(self, cwd):
+        proc = subprocess.run(
+            [sys.executable, '-I', str(DIR / 'recall-scopes.py')],
+            cwd=cwd,
+            env={'HOME': str(self.home), 'PATH': '/usr/bin:/bin'},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return json.loads(proc.stdout)
+
+    def test_identity_aliases_positive_cli_and_url_forms(self):
+        recall_scopes = self.load_recall_scopes()
+        cases = (
+            ('code/purpleflow', 'nevalions/hermes-flow', 'hermes-flow'),
+            ('code/portals/videooperator.su', 'nevalions/videooperator.su', 'videooperator-su'),
+            ('code/portals/ochistka-musoroprovoda.ru', 'nevalions/ochistka-musoroprovoda.ru', 'ochistka-musoroprovoda-ru'),
+            ('code/portals/portal-contact', 'nevalions/portal-contact', 'portal-contact'),
+        )
+        templates = (
+            'ssh://git@git.butakov.su:2222/{path}.git',
+            'ssh://git@git.butakov.su:2222/{path}',
+            'ssh://git.butakov.su:2222/{path}.git',
+            'ssh://git.butakov.su:2222/{path}',
+            'git@git.butakov.su:{path}.git',
+            'git@git.butakov.su:{path}',
+            'git.butakov.su:{path}.git',
+            'git.butakov.su:{path}',
+            'https://git.butakov.su/{path}.git',
+            'https://git.butakov.su/{path}',
+        )
+        for rel, repo_path, peer in cases:
+            repo = self.init_repo(rel, templates[0].format(path=repo_path))
+            self.assertEqual(self.run_cli(repo), [peer, 'code-wide'], rel)
+            with patch.object(recall_scopes, 'HOME', self.home):
+                for template in templates:
+                    url = template.format(path=repo_path)
+                    subprocess.run(
+                        ['/usr/bin/git', '-C', str(repo), 'remote', 'set-url', 'origin', url],
+                        check=True,
+                        capture_output=True,
+                    )
+                    self.assertEqual(recall_scopes.targets(repo / '.git'), [peer, 'code-wide'], (rel, url))
+
+    def test_identity_aliases_fail_closed_on_invalid_missing_ambiguous_or_rewrites(self):
+        recall_scopes = self.load_recall_scopes()
+        repo = self.init_repo('code/purpleflow')
+        self.assertEqual(self.run_cli(repo), [])
+
+        bad_origins = (
+            'ssh://git@github.com:2222/nevalions/hermes-flow.git',
+            'ssh://git@git.butakov.su.evil.test:2222/nevalions/hermes-flow.git',
+            'https://git.butakov.su.evil.test/nevalions/hermes-flow.git',
+            'ssh://git@git.butakov.su:2222/other/hermes-flow.git',
+            'ssh://git@git.butakov.su:2222/nevalions/purpleflow.git',
+            'ssh://git@git.butakov.su:2222/nevalions/hermes-flow/extra.git',
+            'https://git.butakov.su/nevalions/hermes-flow.git/',
+            'ssh://git@git.butakov.su/nevalions/hermes-flow.git',
+            'ssh://git@git.butakov.su:22/nevalions/hermes-flow.git',
+            'http://git.butakov.su/nevalions/hermes-flow.git',
+            'https://git.butakov.su:8443/nevalions/hermes-flow.git',
+            'https://user:pass@git.butakov.su/nevalions/hermes-flow.git',
+            'https://token@git.butakov.su/nevalions/hermes-flow.git',
+            'https://git@git.butakov.su/nevalions/hermes-flow.git',
+            'ssh://other@git.butakov.su:2222/nevalions/hermes-flow.git',
+            'ssh://git:pass@git.butakov.su:2222/nevalions/hermes-flow.git',
+            'other@git.butakov.su:nevalions/hermes-flow.git',
+            'https://git.butakov.su/nevalions/hermes-flow.git?foo=1',
+            'https://git.butakov.su/nevalions/hermes-flow.git#frag',
+            'https://git.butakov.su/nevalions/hermes-flow.git\n',
+            'https://git.butakov.su/nevalions/hermes-flow.git' + 'a' * 256,
+            '',
+        )
+        config = repo / '.git/config'
+        with patch.object(recall_scopes, 'HOME', self.home):
+            for url in bad_origins:
+                subprocess.run(
+                    ['/usr/bin/git', 'config', '--file', str(config), 'remote.origin.url', url],
+                    check=True,
+                    capture_output=True,
+                )
+                self.assertEqual(recall_scopes.targets(repo / '.git'), [], repr(url))
+
+        config.write_text(
+            '[remote "origin"]\n\turl = "https://git.butakov.su/nevalions/hermes-flow.git\\n"\n',
+            encoding='utf-8',
+        )
+        self.assertEqual(self.run_cli(repo), [])
+
+        config.write_text(
+            '[remote "origin"]\n'
+            '\turl = https://git.butakov.su/nevalions/hermes-flow.git\n'
+            '\turl = ssh://git@git.butakov.su:2222/nevalions/hermes-flow.git\n',
+            encoding='utf-8',
+        )
+        self.assertEqual(self.run_cli(repo), [])
+
+        included = self.home / 'included.gitconfig'
+        included.write_text('[remote "origin"]\n\turl = https://git.butakov.su/nevalions/hermes-flow.git\n', encoding='utf-8')
+        config.write_text(f'[include]\n\tpath = {included}\n', encoding='utf-8')
+        self.assertEqual(self.run_cli(repo), [])
+
+        (self.home / '.gitconfig').write_text(
+            '[url "https://git.butakov.su/nevalions/hermes-flow.git"]\n\tinsteadOf = alias:\n',
+            encoding='utf-8',
+        )
+        config.write_text('[remote "origin"]\n\turl = alias:\n', encoding='utf-8')
+        self.assertEqual(self.run_cli(repo), [])
+
+        portal = self.init_repo('code/portals/portal-contact', 'ssh://git@git.butakov.su:2222/nevalions/videooperator.su.git')
+        self.assertEqual(self.run_cli(portal), [])
+
+    def test_linked_worktree_cli_uses_common_config(self):
+        repo = self.init_repo(
+            'code/purpleflow',
+            'ssh://git@git.butakov.su:2222/nevalions/hermes-flow.git',
+            commit=True,
+        )
+        wt = self.home / 'worktrees/purpleflow-wt'
+        wt.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ['/usr/bin/git', '-C', str(repo), 'worktree', 'add', str(wt), '-b', 'wt-test'],
+            check=True,
+            capture_output=True,
+        )
+        self.assertEqual(self.run_cli(wt), ['hermes-flow', 'code-wide'])
+
+        subprocess.run(
+            ['/usr/bin/git', '-C', str(repo), 'remote', 'set-url', 'origin', 'https://git.butakov.su/nevalions/purpleflow.git'],
+            check=True,
+            capture_output=True,
+        )
+        self.assertEqual(self.run_cli(wt), [])
+
+    def test_unrelated_and_legacy_routes_unchanged(self):
+        expected = (
+            ('code/hermes-flow', ['hermes-flow', 'code-wide']),
+            ('code/portal-contact', ['portal-contact', 'code-wide']),
+            ('code/stoma science', ['stoma_science', 'code-wide']),
+            ('code/ochistka-musoroprovoda.ru', ['ochistka-musoroprovoda-ru', 'code-wide']),
+            ('code/videooperator.su', ['videooperator-su', 'code-wide']),
+            ('code/portals/videosemka.su', ['portals--videosemka-su', 'code-wide']),
+            ('code/portals/other', ['portals--other', 'code-wide']),
+            ('code/kube-lvl47', ['kube-lvl47', 'project-cluster-infra', 'code-wide']),
+            ('ansible', ['ansible', 'project-cluster-infra', 'code-wide']),
+            ('dotfiles', ['dotfiles', 'code-wide']),
+            ('code/videooperator-su', []),
+            ('code/ochistka-musoroprovoda-ru', []),
+            ('code/portals--videosemka-su', []),
+            ('code/linroot', []),
+            ('code/project-demo', []),
+            ('code/foo--bar', []),
+        )
+        for rel, want in expected:
+            repo = self.init_repo(rel)
+            self.assertEqual(self.run_cli(repo), want, rel)
