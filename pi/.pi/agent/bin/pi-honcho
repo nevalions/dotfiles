@@ -3,8 +3,41 @@ set -eu
 agent=$HOME/.pi/agent
 case "${1-}" in
   pi|pi-team) launcher=$1; shift ;;
-  *) printf '%s\n' 'Usage: pi-honcho {pi|pi-team} /absolute/path/to/grant.json [Pi args...]' >&2; exit 2 ;;
+  *)
+    printf '%s\n' 'Usage: pi-honcho {pi|pi-team} /absolute/path/to/grant.json [Pi args...]' >&2
+    printf '%s\n' '       pi-honcho {pi|pi-team} --batch /absolute/private/manifest.json' >&2
+    exit 2
+    ;;
 esac
+if [ -n "${PI_OFFLINE+x}" ]; then
+  printf '%s\n' 'pi-honcho: cannot run while PI_OFFLINE is set.' >&2
+  exit 2
+fi
+if [ "${1-}" = "--batch" ]; then
+  shift
+  case "${1-}" in
+    /*) manifest=$1; shift ;;
+    *) printf '%s\n' 'pi-honcho: supply an absolute manifest path.' >&2; exit 2 ;;
+  esac
+  if [ "$#" -gt 0 ]; then
+    printf '%s\n' 'pi-honcho: batch mode does not accept extra Pi arguments.' >&2
+    exit 2
+  fi
+  if [ ! -t 0 ] || [ ! -t 1 ]; then
+    printf '%s\n' 'pi-honcho: batch mode requires an interactive TTY on stdin and stdout.' >&2
+    exit 2
+  fi
+  if [ -n "${PI_HONCHO_NESTED+x}" ] || [ -n "${PI_HONCHO_PUBLISH_GRANT+x}" ] || [ -n "${PI_HONCHO_BATCH_MANIFEST+x}" ]; then
+    printf '%s\n' 'pi-honcho: batch mode cannot run inside an existing or nested Honcho launch.' >&2
+    exit 2
+  fi
+  if [ -L "$manifest" ] || [ ! -f "$manifest" ] || [ ! -r "$manifest" ]; then
+    printf '%s\n' 'pi-honcho: manifest file must be a readable regular file.' >&2
+    exit 1
+  fi
+  export PI_HONCHO_BATCH_MANIFEST=$manifest
+  exec "$agent/bin/$launcher" --extension "$agent/honcho-cli/batch-command.ts"
+fi
 case "${1-}" in
   /*) PI_HONCHO_PUBLISH_GRANT=$1; shift ;;
   *) printf '%s\n' 'pi-honcho: supply an absolute grant path.' >&2; exit 2 ;;
@@ -13,5 +46,6 @@ if [ ! -r "$PI_HONCHO_PUBLISH_GRANT" ]; then
   printf '%s\n' 'pi-honcho: grant file is missing or unreadable.' >&2
   exit 1
 fi
+unset PI_HONCHO_BATCH_MANIFEST
 export PI_HONCHO_PUBLISH_GRANT
 exec "$agent/bin/$launcher" --extension "$agent/honcho-cli/publisher.ts" "$@"

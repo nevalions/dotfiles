@@ -50,8 +50,24 @@ def require_tailnet_route():
         raise Denied("Honcho tailnet HTTP requires an active route through tailscale0.")
 
 
-def load_grant(path):
-    data = json.loads(private_text(path))
+def _reject_constant(value):
+    raise ValueError(f"invalid JSON constant: {value}")
+
+
+def parse_json_unique(text):
+    def _pairs(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError("duplicate JSON key")
+            obj[key] = value
+        return obj
+
+    return json.loads(text, object_pairs_hook=_pairs, parse_constant=_reject_constant)
+
+
+def parse_grant_descriptor(raw_text):
+    data = parse_json_unique(raw_text)
     required = {"url", "token_file", "scope"}
     if not isinstance(data, dict) or not required <= data.keys() <= required | {"allow_tailnet_http"}:
         raise ValueError("invalid grant")
@@ -59,19 +75,50 @@ def load_grant(path):
     if not isinstance(tailnet, bool) or (tailnet and data["url"] != TAILNET_URL):
         raise ValueError("invalid tailnet HTTP opt-in")
     scope = data["scope"]
-    if set(scope) != set(SCOPE) or not all(isinstance(v, str) and ID.fullmatch(v) for v in scope.values()):
+    if (not isinstance(scope, dict) or set(scope) != set(SCOPE)
+            or not all(isinstance(v, str) and ID.fullmatch(v) for v in scope.values())):
         raise ValueError("invalid scope")
-    url = urlsplit(data["url"])
+    raw_url = data["url"]
+    if not isinstance(raw_url, str):
+        raise ValueError("invalid url")
+    url = urlsplit(raw_url)
     if (not url.hostname or url.username or url.password or url.fragment or url.query
             or not (url.scheme == "https" or
                     (url.scheme == "http" and url.hostname in {"127.0.0.1", "::1"}) or tailnet)):
         raise ValueError("Honcho needs HTTPS, loopback HTTP, or explicit tailnet HTTP opt-in")
-    if tailnet:
+    token_file = data["token_file"]
+    if not isinstance(token_file, str) or not os.path.isabs(token_file):
+        raise ValueError("private file path must be absolute")
+    return {
+        "url": raw_url,
+        "token_file": token_file,
+        "scope": dict(scope),
+        "allow_tailnet_http": tailnet,
+    }
+
+
+def load_grant_descriptor(path):
+    raw = private_text(path)
+    return raw, parse_grant_descriptor(raw)
+
+
+def open_grant_client(descriptor):
+    if descriptor["allow_tailnet_http"]:
         require_tailnet_route()
-    token = private_text(data["token_file"]).strip()
+    token = private_text(descriptor["token_file"]).strip()
     if not re.fullmatch(r"[!-~]{1,4096}", token):
         raise ValueError("invalid bearer token")
-    return scope, Honcho(data["url"], token, scope["workspace_id"], tailnet=tailnet)
+    return Honcho(
+        descriptor["url"],
+        token,
+        descriptor["scope"]["workspace_id"],
+        tailnet=descriptor["allow_tailnet_http"],
+    )
+
+
+def load_grant(path):
+    _, descriptor = load_grant_descriptor(path)
+    return descriptor["scope"], open_grant_client(descriptor)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -168,6 +215,22 @@ def content(value):
     return {"content": [{"type": "text", "text": value}]}
 
 
+def bound_scope(scope):
+    return {key: scope[key] for key in SCOPE if key != "task"}
+
+
+def format_note(scope, evidence):
+    if not isinstance(evidence, dict) or not set(FIELDS) <= evidence.keys():
+        raise Denied("Unexpected or missing arguments.")
+    for key, length in FIELDS.items():
+        value = evidence[key]
+        if (not isinstance(value, str) or not value.strip() or len(value) > length
+                or not value.isprintable()):
+            raise Denied(f"Invalid {key}: supply nonempty, bounded, single-line evidence.")
+    return (f"{evidence['conclusion']} [Task: {scope['task']}; Candidate/source: {evidence['candidate']}; "
+            f"Checks: {evidence['checks']}; Verification: {evidence['verification']}]")
+
+
 def call(name, args, scope, upstream):
     if name == "get_grant" and args == {}:
         return content(json.dumps(scope))
@@ -178,16 +241,10 @@ def call(name, args, scope, upstream):
         raise Denied("Outside the approved Honcho grant.")
     if set(args) != {"scope", *fields}:
         raise Denied("Unexpected or missing arguments.")
-    bound = {key: scope[key] for key in SCOPE if key != "task"}
+    bound = bound_scope(scope)
     if name == "readback":
         return upstream.call("list_conclusions", {**bound, "size": 10})
-    for key, length in fields.items():
-        value = args[key]
-        if (not isinstance(value, str) or not value.strip() or len(value) > length
-                or not value.isprintable()):
-            raise Denied(f"Invalid {key}: supply nonempty, bounded, single-line evidence.")
-    note = (f"{args['conclusion']} [Task: {scope['task']}; Candidate/source: {args['candidate']}; "
-            f"Checks: {args['checks']}; Verification: {args['verification']}]")
+    note = format_note(scope, args)
     upstream.call("create_conclusions", {**bound, "conclusions": [note]})
     return content("Honcho accepted the append. Use readback to confirm the conclusion.")
 
