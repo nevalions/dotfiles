@@ -4,13 +4,13 @@
 
 ## Rollout plan
 
-1. **This release:** the interactive coordinator uses the local ledger and exact-revision Forgejo polling after publishing. Use the same canonical repository key across linked worktrees. The optional journal watcher is separate from polling.
+1. **This release:** the interactive coordinator drives pre-plan knowledge lookup, local ledger tracking, exact-revision Forgejo polling after publishing, and shared closeout (`honcho`/`wiki` disposition) after verified delivery—this is interactive coordinator policy, not a daemon or `pi-team-run` CLI default. A scoped interactive Honcho publisher (`honcho_publish`) is already available for some mapped repositories with an operator grant; automated wiki publishing remains disabled. Use the same canonical repository key across linked worktrees. The optional journal watcher is separate from polling.
 2. **Next:** pilot read-only rollout receipts, additional CI providers, and coordinator restart recovery on explicitly authorized tasks. Evaluate Jev in shadow mode only, on sanitized ambiguous cases; deterministic rules own routing and permissions.
-3. **Later:** consider a dedicated isolated runner and explicit cross-host ownership handoff. Add authorized Honcho/wiki publishing with independently verified receipts, not as retries of delivery.
+3. **Later:** consider a dedicated isolated runner and explicit cross-host ownership handoff, plus any gated wiki automation only where an explicit allowlist and standing ingest authorization exist, with independently verified receipts rather than retries of delivery.
 
 ## Boundaries and Guarantees
 
-- **Interactive continuation**: the coordinator starts `monitor` immediately after publishing and continues authorized work on success. `monitor` queries Forgejo and records a successful PR CI checkpoint when attached to a run. Add `--queue` to the same command to register a durable PR wait on git.butakov.su and return immediately. The enabled systemd user watcher polls that wait independently of Pi and records success against its exact generation and SHA. Neither command merges, deploys, or starts a coordinator after exit. Post-merge monitoring remains interactive. Use only sanitized locators and reminders: never include tokens, raw logs, or private transcripts in command arguments, state, or journal notices.
+- **Interactive continuation**: the coordinator starts `monitor` immediately after publishing and continues authorized work on success. `monitor` queries Forgejo and records a successful PR CI checkpoint when attached to a run. Add `--queue` to the same command to register a durable PR wait on git.butakov.su and return immediately. The enabled systemd user watcher polls that wait independently of Pi and records success against its exact generation and SHA. Neither command merges, deploys, starts or resumes a coordinator, or performs Honcho/wiki publication. Post-merge monitoring remains interactive. Use only sanitized locators and reminders: never include tokens, raw logs, or private transcripts in command arguments, state, or journal notices.
 - **Local private XDG state**: State is stored in `${XDG_STATE_HOME:-~/.local/state}/pi-team-run/state.db` (`0700` directory, `0600` database file), gated by `PRAGMA user_version = 1`. Unknown schema versions are rejected.
 - **One active run per repository**: Enforced transactionally via SQLite (`BEGIN IMMEDIATE` + partial unique index on `repo_key` for `active`/`waiting` runs). Terminal runs (`completed`, `cancelled`) free the repository key.
 - **No remote state sync or cross-host takeover**: State belongs strictly to the local host and XDG user state directory. There is no automatic authority transfer or distributed lock.
@@ -35,7 +35,7 @@
 12. `honcho` *(optional)* — Honcho disposition (enabled via `--with-honcho` at `start`, or explicitly `--skip`)
 13. `wiki` *(optional)* — Wiki disposition (enabled via `--with-wiki` at `start`, or explicitly `--skip`)
 
-Optional stages (`deploy`, `honcho`, `wiki`) are omitted unless opted in at `start`. Required stages cannot be skipped mid-run. `start --commit-only` stops after the commit checkpoint; `start --no-ci` omits CI only for a repo with an explicit no-CI policy. Neither flag grants authority. Before `beads_close`, verify everything in scope; record a truthful not-applicable or pending disposition rather than claiming an external write you did not perform.
+Optional stages (`deploy`, `honcho`, `wiki`) are omitted by the CLI unless opted in at `start`; the interactive coordinator automatically selects `--with-honcho`/`--with-wiki` when applicable by policy (honoring opt-outs) to bookkeep closeout disposition. Required stages cannot be skipped mid-run. `start --commit-only` stops delivery after the `commit` checkpoint, rejects `--no-ci` and `--with-deploy`, and may combine with `--with-honcho` and/or `--with-wiki` to append those closeout stages after `commit`. `start --no-ci` omits CI only for a repo with an explicit no-CI policy. None of these flags grant authority. Before `beads_close`, verify everything in scope; incomplete delivery is never marked done to reach closeout. At `honcho` and `wiki`, record verified authorized receipts or `--skip` with a nonsecret typed reason (`skip:not-applicable:...`, `skip:draft:...`/`skip:denied:...`, or `skip:deferred:...`; these prefixes are a coordinator convention and not CLI-enforced).
 
 ## Delivery profile pilot: frontend-angular-signals
 
@@ -59,7 +59,8 @@ For a deployment in scope, use the application's `docs/release-checklist.md`: ti
 ## Common Commands
 
 ```bash
-# Start a run (add --with-deploy / --with-honcho / --with-wiki as needed)
+# Start a run (add --with-deploy / --with-honcho / --with-wiki as needed;
+# --commit-only may combine with --with-honcho and/or --with-wiki)
 pi-team-run start /path/to/repo
 
 # Inspect status or read-only next step
@@ -87,8 +88,8 @@ pi-team-run monitor owner/repo --pr 47 --run-id RUN_ID \
 pi-team-run wait RUN_ID ci --target ci --rev 0123456789abcdef0123456789abcdef01234567 --deadline 2026-11-22T18:00:00Z
 pi-team-run checkpoint RUN_ID ci --rev 0123456789abcdef0123456789abcdef01234567 --evidence ci:run-987
 
-# Explicitly skip an opted-in optional stage
-pi-team-run checkpoint RUN_ID honcho --skip --evidence skip:no-memory-update
+# Explicitly skip an opted-in optional stage with a nonsecret typed reason
+pi-team-run checkpoint RUN_ID honcho --skip --evidence skip:not-applicable:no-eligible-fact
 
 # Emit deduped JSON notices for pending user/coordinator or overdue CI waits
 pi-team-run watch

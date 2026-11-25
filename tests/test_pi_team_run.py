@@ -331,13 +331,77 @@ class PiTeamRunTests(unittest.TestCase):
 
     def test_delivery_scope_selected_at_start(self) -> None:
         local = self.run_json('start', 'local-only', '--commit-only')
-        self.assertEqual(local['active_stages'][-1], 'commit')
+        self.assertEqual(local['active_stages'], ['admit', 'implement', 'check', 'review', 'commit'])
         for stage in local['active_stages']:
             done = self.run_json('checkpoint', local['run_id'], stage, '--evidence', 'ev:receipt')
         self.assertEqual(done['status'], 'completed')
         no_ci = self.run_json('start', 'no-ci-repo', '--no-ci')
         self.assertNotIn('ci', no_ci['active_stages'])
         self.assertIn('integrate', no_ci['active_stages'])
+
+    def test_commit_only_closeout_opt_ins_and_rejections(self) -> None:
+        for bad_flags in (
+            ('--no-ci',),
+            ('--with-deploy',),
+            ('--with-honcho', '--no-ci'),
+            ('--with-wiki', '--with-deploy'),
+        ):
+            bad = self.run_cli('start', 'bad-commit-only', '--commit-only', *bad_flags)
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertIn('--commit-only', bad.stderr)
+
+        honcho_only = self.run_json('start', 'repo-honcho', '--commit-only', '--with-honcho')
+        self.assertEqual(
+            honcho_only['active_stages'],
+            ['admit', 'implement', 'check', 'review', 'commit', 'honcho'],
+        )
+        for stage in ('admit', 'implement', 'check', 'review'):
+            self.run_json('checkpoint', honcho_only['run_id'], stage, '--evidence', f'ev:{stage}')
+        premature = self.run_cli('checkpoint', honcho_only['run_id'], 'honcho', '--evidence', 'honcho:early')
+        self.assertNotEqual(premature.returncode, 0)
+        after_commit = self.run_json('checkpoint', honcho_only['run_id'], 'commit', '--evidence', 'git:commit-1')
+        self.assertEqual(after_commit['status'], 'active')
+        self.assertEqual(after_commit['current_stage'], 'honcho')
+        done_honcho = self.run_json('checkpoint', honcho_only['run_id'], 'honcho', '--evidence', 'honcho:conclusion-1')
+        self.assertEqual(done_honcho['status'], 'completed')
+        self.assertIsNone(done_honcho['current_stage'])
+        self.assertEqual(done_honcho['checkpoints'][-1]['disposition'], 'completed')
+
+        wiki_only = self.run_json('start', 'repo-wiki', '--commit-only', '--with-wiki')
+        self.assertEqual(
+            wiki_only['active_stages'],
+            ['admit', 'implement', 'check', 'review', 'commit', 'wiki'],
+        )
+        for stage in ('admit', 'implement', 'check', 'review', 'commit'):
+            after = self.run_json('checkpoint', wiki_only['run_id'], stage, '--evidence', f'ev:{stage}')
+        self.assertEqual(after['status'], 'active')
+        self.assertEqual(after['current_stage'], 'wiki')
+        done_wiki = self.run_json(
+            'checkpoint', wiki_only['run_id'], 'wiki', '--skip', '--evidence', 'skip:draft:no-wiki-auth',
+        )
+        self.assertEqual(done_wiki['status'], 'completed')
+        self.assertIsNone(done_wiki['current_stage'])
+        self.assertEqual(done_wiki['checkpoints'][-1]['disposition'], 'skipped')
+
+        both = self.run_json('start', 'repo-both', '--commit-only', '--with-honcho', '--with-wiki')
+        self.assertEqual(
+            both['active_stages'],
+            ['admit', 'implement', 'check', 'review', 'commit', 'honcho', 'wiki'],
+        )
+        for stage in ('admit', 'implement', 'check', 'review', 'commit'):
+            state = self.run_json('checkpoint', both['run_id'], stage, '--evidence', f'ev:{stage}')
+        self.assertEqual(state['status'], 'active')
+        self.assertEqual(state['current_stage'], 'honcho')
+        out_of_order = self.run_cli('checkpoint', both['run_id'], 'wiki', '--evidence', 'wiki:early')
+        self.assertNotEqual(out_of_order.returncode, 0)
+        mid = self.run_json(
+            'checkpoint', both['run_id'], 'honcho', '--skip', '--evidence', 'skip:not-applicable:no-facts',
+        )
+        self.assertEqual(mid['status'], 'active')
+        self.assertEqual(mid['current_stage'], 'wiki')
+        done_both = self.run_json('checkpoint', both['run_id'], 'wiki', '--evidence', 'wiki:commit-abc')
+        self.assertEqual(done_both['status'], 'completed')
+        self.assertIsNone(done_both['current_stage'])
 
     def test_cancel_requires_current_stage_and_frees_repo_key(self) -> None:
         run_id = self.run_json('start', str(self.repo_dir))['run_id']

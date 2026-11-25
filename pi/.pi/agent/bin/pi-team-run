@@ -288,7 +288,11 @@ def active_stages_for_run(run: sqlite3.Row) -> list[str]:
         'wiki': bool(run['with_wiki']),
     }
     if run['commit_only']:
-        return list(STAGES[:STAGES.index('commit') + 1])
+        stages = list(STAGES[:STAGES.index('commit') + 1])
+        for stage in ('honcho', 'wiki'):
+            if enabled[stage]:
+                stages.append(stage)
+        return stages
     return [
         stage for stage in STAGES
         if (stage not in OPTIONAL_STAGES or enabled[stage]) and not (stage == 'ci' and run['no_ci'])
@@ -453,8 +457,8 @@ def compute_next_step(run: sqlite3.Row, active_wait: sqlite3.Row | None, now: da
 
 def cmd_start(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     """Start a new active pipeline run for a repository."""
-    if args.commit_only and (args.no_ci or args.with_deploy or args.with_honcho or args.with_wiki):
-        raise CliError('--commit-only cannot be combined with delivery or publication options')
+    if args.commit_only and (args.no_ci or args.with_deploy):
+        raise CliError('--commit-only cannot be combined with --no-ci or --with-deploy')
     repo_key = canonicalize_repo(args.repo)
     now = format_utc(utc_now())
     run_id = args.run_id or f'run-{utc_now().strftime("%Y%m%dT%H%M%SZ")}-{secrets.token_hex(4)}'
@@ -1008,7 +1012,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_start = sub.add_parser('start', parents=[common], help='Start a pipeline run for a repo')
     p_start.add_argument('repo', help='Repository path or identifier')
     p_start.add_argument('--run-id', help='Optional explicit run identifier')
-    p_start.add_argument('--commit-only', action='store_true', help='Stop after the local commit checkpoint')
+    p_start.add_argument(
+        '--commit-only',
+        action='store_true',
+        help='Stop delivery after the local commit checkpoint (optional closeout stages may follow)',
+    )
     p_start.add_argument('--no-ci', action='store_true', help='Omit CI only where repository policy explicitly has none')
     p_start.add_argument('--with-deploy', action='store_true', help='Opt in to optional deploy stage')
     p_start.add_argument('--with-honcho', action='store_true', help='Opt in to optional honcho stage')

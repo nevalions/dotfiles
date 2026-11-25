@@ -31,6 +31,6 @@
 
 ## Deferred
 
-- Honcho stays recall-only. Pass only relevant, provenance-labeled context; live issue and repository evidence take precedence.
+- For the unattended factory, Honcho stays recall-only (the interactive coordinator uses a separate exact-grant policy). Pass only relevant, provenance-labeled context; live issue and repository evidence take precedence.
 - Wiki is a separate authorized flow: verified outcome, sanitized draft, source validation, then permitted wiki update. No raw transcript ingestion.
 - Evaluate Jev shadow-mode routing after the pilot. It may recommend more scrutiny, never waive review, authorize a transition, or bypass deterministic checks.
