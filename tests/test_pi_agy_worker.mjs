@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, readdir, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, readdir, symlink, writeFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -134,8 +134,148 @@ test('bubblewrap allows worktree writes but blocks sibling and symlink writes', 
 });
 
 test('denials are classified before exit status without leaking contents', async t => {
-  const actions = [{ action: 'command', command: 'secret' }, { toolName: 'apply_patch' }, { name: 'secret' }];
-  assert.equal(denialSummary(actions), '3 denied (shell, file edit, unrecognized tool)');
-  const { execute } = await fixture(t, { launch: async () => ({ code: 1, stdout: JSON.stringify({ denied_actions: actions }) }) });
-  await assert.rejects(execute(), error => /3 denied \(shell, file edit, unrecognized tool\)/.test(error.message) && !error.message.includes('secret'));
+  const actions = [
+    { action: 'command', command: 'secret', path: '/etc/passwd' },
+    { toolName: 'apply_patch' },
+    { action: 'LIST_DIR' },
+    { action: 'grep_search' },
+    { action: 'find_files' },
+    { action: 'read_file' },
+    { action: 'read_file' },
+    { name: 'secret_tool', path: 'inside.txt' },
+  ];
+  assert.equal(
+    await denialSummary(actions),
+    '8 denied (shell: command; file edit: apply_patch [target scope unavailable]; file read/search: list_dir [target scope unavailable]; file read/search: grep_search [target scope unavailable]; file read/search: find_files [target scope unavailable]; file read/search: read_file [target scope unavailable] x2; unrecognized tool: unknown)',
+  );
+  const { execute } = await fixture(t, { launch: async () => ({ code: 1, stderr: 'secret stderr', stdout: JSON.stringify({ denied_actions: actions }) }) });
+  await assert.rejects(execute(), error => (
+    /8 denied \(shell: command; file edit: apply_patch \[target scope unavailable\];/.test(error.message)
+    && /print mode cannot request interactive approval/.test(error.message)
+    && /omit target scope and denial reason/.test(error.message)
+    && !error.message.includes('secret')
+    && !error.message.includes('/etc/passwd')
+  ));
+});
+
+test('observed AGY action+display_name shape stops even on exit 0 SUCCESS without echoing display_name', async t => {
+  const actions = [{ action: 'read_file', display_name: 'Read /home/user/.ssh/secret_key' }];
+  const { execute } = await fixture(t, {
+    launch: async () => ({
+      code: 0,
+      stderr: 'secret stderr',
+      stdout: JSON.stringify({ status: 'SUCCESS', response: 'completed', denied_actions: actions }),
+    }),
+  });
+  await assert.rejects(execute(), error => (
+    /1 denied \(file read\/search: read_file \[target scope unavailable\]\)/.test(error.message)
+    && !error.message.includes('secret_key')
+    && !error.message.includes('.ssh')
+    && !error.message.includes('stderr')
+  ));
+});
+
+test('denial target scope classifies worktree boundary, symlinks, .., globs, URLs, and malformed payloads conservatively', async t => {
+  const { cwd } = await fixture(t);
+  const outsideRoot = await mkdtemp(join(tmpdir(), 'pi-agy-outside-'));
+  const siblingPrefixDir = `${cwd}-sibling`;
+  await mkdir(siblingPrefixDir, { recursive: true });
+  t.after(() => rm(outsideRoot, { recursive: true, force: true }));
+  t.after(() => rm(siblingPrefixDir, { recursive: true, force: true }));
+
+  const subDir = join(cwd, 'src');
+  const insideFile = join(subDir, 'target.ts');
+  const outsideFile = join(outsideRoot, 'secret-outside.txt');
+  const siblingFile = join(siblingPrefixDir, 'secret-sibling.txt');
+  const outsideLink = join(cwd, 'escape-link');
+  const insideLink = join(cwd, 'inside-link');
+  const dirLink = join(cwd, 'dir-link');
+  const danglingLink = join(cwd, 'dangling-link');
+  await mkdir(subDir);
+  await writeFile(insideFile, 'ok\n');
+  await writeFile(outsideFile, 'secret\n');
+  await writeFile(siblingFile, 'secret\n');
+  await symlink(outsideFile, outsideLink);
+  await symlink(insideFile, insideLink);
+  await symlink(subDir, dirLink);
+  await symlink(join(outsideRoot, 'missing-target.txt'), danglingLink);
+
+  assert.equal(await denialSummary([{ action: 'read_file', path: 'src/target.ts' }], cwd), '1 denied (file read/search: read_file [existing in-worktree regular file])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: insideFile }], cwd), '1 denied (file read/search: read_file [existing in-worktree regular file])');
+  assert.equal(await denialSummary([{ action: 'list_dir', target: 'src' }], cwd), '1 denied (file read/search: list_dir [other existing in-worktree path])');
+  assert.equal(await denialSummary([{ action: 'write_file', path: 'src/new-file.ts' }], cwd), '1 denied (file edit: write_file [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'write_file', target_file: 'src/target.ts' }], cwd), '1 denied (file edit: write_file [target scope unavailable])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: outsideFile }], cwd), '1 denied (file read/search: read_file [outside worktree path])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: siblingFile }], cwd), '1 denied (file read/search: read_file [outside worktree path])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: join(outsideRoot, 'nonexistent-outside.txt') }], cwd), '1 denied (file read/search: read_file [outside worktree path])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: 'escape-link' }], cwd), '1 denied (file read/search: read_file [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: 'inside-link' }], cwd), '1 denied (file read/search: read_file [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: 'dangling-link' }], cwd), '1 denied (file read/search: read_file [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: 'dir-link/target.ts' }], cwd), '1 denied (file read/search: read_file [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: 'dir-link/../src/target.ts' }], cwd), '1 denied (file read/search: read_file [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: 'src/../src/target.ts' }], cwd), '1 denied (file read/search: read_file [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: '../outside.txt' }], cwd), '1 denied (file read/search: read_file [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: '~/secret' }], cwd), '1 denied (file read/search: read_file [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'glob', path: 'src/**/*.ts' }], cwd), '1 denied (file read/search: glob [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: 'https://secret.example/token' }], cwd), '1 denied (file read/search: read_file [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: 'file:///etc/passwd' }], cwd), '1 denied (file read/search: read_file [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: 'a.ts', target: 'b.ts' }], cwd), '1 denied (file read/search: read_file [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: 'bad\0secret' }], cwd), '1 denied (file read/search: read_file [target scope unknown])');
+  assert.equal(await denialSummary([{ action: 'read_file', path: 42 }], cwd), '1 denied (file read/search: read_file [target scope unknown])');
+
+  assert.equal(await denialSummary([{ action: 'read_file', decision: 'ask', reason_code: 'deny' }], cwd), '1 denied (file read/search: read_file [target scope unavailable])');
+  assert.equal(await denialSummary([{ action: 'read_file', decision: 'ask', reason_code: 'custom_rule' }], cwd), '1 denied (file read/search: read_file [target scope unavailable])');
+  assert.equal(await denialSummary([{ action: 'read_file', reason: 'ask' }], cwd), '1 denied (file read/search: read_file [target scope unavailable])');
+  assert.equal(await denialSummary([{ action: 'read_file', reason: 'denied by policy' }], cwd), '1 denied (file read/search: read_file [target scope unavailable])');
+  assert.equal(await denialSummary([{ action: 'read_file', reason_code: 'policy_denied' }], cwd), '1 denied (file read/search: read_file [target scope unavailable, denied by policy])');
+
+  const leaky = [
+    { action: 'read_file', path: outsideFile, display_name: 'secret-display', reason: 'secret rule detail', decision: 'ask' },
+  ];
+  const summary = await denialSummary(leaky, cwd);
+  assert.equal(summary, '1 denied (file read/search: read_file [outside worktree path, requires approval])');
+  assert.ok(!summary.includes('secret'));
+  assert.ok(!summary.includes(outsideFile));
+});
+
+test('denial diagnostics bound distinct path probes, path depth, and unique descriptors', async t => {
+  const { cwd } = await fixture(t);
+  const files = [];
+  for (let i = 1; i <= 9; i++) {
+    const name = `f${i}.txt`;
+    await writeFile(join(cwd, name), `${i}\n`);
+    files.push(name);
+  }
+  const boundedActions = [
+    ...Array.from({ length: 10 }, (_, i) => ({ action: 'read_file', path: `/outside-nominal-${i}/secret.txt` })),
+    ...files.map(path => ({ action: 'read_file', path })),
+    { action: 'read_file', path: 'f1.txt' },
+    { action: 'read_file', path: 'a/b/c/d/e/f/g/h/i/j/k/l/m.txt' },
+  ];
+  assert.equal(
+    await denialSummary(boundedActions, cwd),
+    '21 denied (file read/search: read_file [outside worktree path] x10; file read/search: read_file [existing in-worktree regular file] x9; file read/search: read_file [target scope unknown] x2)',
+  );
+
+  const manyActions = [
+    'command', 'bash', 'sh', 'zsh', 'shell', 'terminal', 'run_command',
+    'edit', 'edit_file', 'write', 'write_file', 'apply_patch', 'read', 'read_file',
+  ].map(action => ({ action }));
+  const capped = await denialSummary(manyActions, cwd);
+  assert.match(capped, /^14 denied \(.+\+2 more\)$/);
+});
+
+test('worker brief prefers exact worktree paths, scopes search, and keeps native-tool/no-terminal instructions', async t => {
+  const { calls, execute } = await fixture(t);
+  await execute();
+  const agyCall = calls.find(([, args]) => args.includes('--print'));
+  assert.ok(agyCall);
+  const prompt = agyCall[1].at(-1);
+  assert.match(prompt, /native file tools/i);
+  assert.match(prompt, /exact named paths in the current worktree/i);
+  assert.match(prompt, /only search when explicitly scoped/i);
+  assert.match(prompt, /Do not probe outside the worktree or normally protected data/i);
+  assert.match(prompt, /stop and ask the coordinator/i);
+  assert.match(prompt, /coordinator handles discovery and checks/i);
+  assert.match(prompt, /Do not invoke terminal tools/i);
 });

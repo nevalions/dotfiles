@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { truncateHead } from "@earendil-works/pi-coding-agent";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import type { Stats } from "node:fs";
+import { lstat, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { activityLease, alternate, routeIssue, warn } from "../team/team-health.mjs";
@@ -17,18 +18,235 @@ export const namespaceArgs = (cwd: string, privateAgentDir?: string) => [
   "--dev", "/dev", "--proc", "/proc", "--",
 ];
 
-export function denialSummary(actions: unknown[]): string {
-  const kinds = new Set<string>();
-  for (const action of actions) {
-    const entry = action && typeof action === "object" ? action as Record<string, unknown> : {};
-    const name = typeof action === "string" ? action : entry.action ?? entry.tool_name ?? entry.toolName ?? entry.name;
-    const kind = typeof name === "string" ? name.toLowerCase() : "";
-    if (["command", "bash", "shell", "terminal", "run_command", "execute_command"].includes(kind)) kinds.add("shell");
-    else if (["edit", "write", "write_to_file", "replace_file_content", "multi_replace_file_content", "apply_patch"].includes(kind)) kinds.add("file edit");
-    else if (["read", "read_file", "view_file", "list_dir", "grep_search"].includes(kind)) kinds.add("file read/search");
-    else kinds.add("unrecognized tool");
+type DenialCategory = "shell" | "file edit" | "file read/search";
+type TargetScope =
+  | "existing in-worktree regular file"
+  | "other existing in-worktree path"
+  | "outside worktree path"
+  | "target scope unavailable"
+  | "target scope unknown";
+
+const actionGroups: Record<DenialCategory, readonly string[]> = {
+  shell: [
+    "command", "bash", "sh", "zsh", "shell", "terminal",
+    "run_command", "execute_command", "exec_command", "command_execution",
+  ],
+  "file edit": [
+    "edit", "edit_file", "write", "write_file", "write_to_file", "create_file",
+    "delete_file", "remove_file", "move_file", "rename_file",
+    "replace_file_content", "multi_replace_file_content",
+    "apply_patch", "patch", "str_replace", "str_replace_editor",
+  ],
+  "file read/search": [
+    "read", "read_file", "view_file", "view_file_outline", "view_code_item", "read_many_files",
+    "ls", "list", "list_dir", "list_directory", "list_files",
+    "grep", "grep_search", "search", "search_files", "search_content", "ripgrep", "rg",
+    "find", "find_files", "find_by_name", "glob",
+  ],
+};
+const actionCategory = new Map<string, DenialCategory>(
+  (Object.entries(actionGroups) as [DenialCategory, readonly string[]][])
+    .flatMap(([category, names]) => names.map(name => [name, category])),
+);
+
+const pathFields = ["path", "target"] as const;
+const reasonFields = ["decision", "reason_code"] as const;
+const knownReasons: Record<string, string> = {
+  ask: "requires approval",
+  requires_approval: "requires approval",
+  approval_required: "requires approval",
+  user_approval_required: "requires approval",
+  interactive_approval_required: "requires approval",
+  deny: "denied by policy",
+  denied: "denied by policy",
+  explicit_deny: "denied by policy",
+  policy_deny: "denied by policy",
+  policy_denied: "denied by policy",
+  denied_by_policy: "denied by policy",
+};
+const maxScopeProbes = 8;
+const maxPathDepth = 12;
+const scopeTimeoutMs = 250;
+const maxUniqueDescriptors = 12;
+
+function extractTargetField(entry: Record<string, unknown>): { present: boolean; value?: string } {
+  let present = false;
+  let value: string | undefined;
+  for (const field of pathFields) {
+    if (!Object.hasOwn(entry, field) || entry[field] === undefined) continue;
+    present = true;
+    const raw = entry[field];
+    if (typeof raw !== "string") return { present: true };
+    if (value !== undefined && value !== raw) return { present: true };
+    value = raw;
   }
-  return `${actions.length} denied (${[...kinds].join(", ")})`;
+  return { present, value };
+}
+
+function extractKnownReason(entry: Record<string, unknown>): string | undefined {
+  let matched: string | undefined;
+  for (const field of reasonFields) {
+    if (!Object.hasOwn(entry, field) || entry[field] === undefined) continue;
+    const raw = entry[field];
+    if (typeof raw !== "string") return undefined;
+    const normalized = raw.trim().toLowerCase();
+    if (!Object.hasOwn(knownReasons, normalized)) return undefined;
+    const label = knownReasons[normalized];
+    if (matched !== undefined && matched !== label) return undefined;
+    matched = label;
+  }
+  return matched;
+}
+
+function parseCandidatePath(rawPath: string): { absolute: boolean; parts: string[] } | undefined {
+  if (!rawPath || rawPath.length > 4096 || rawPath.trim() !== rawPath) return undefined;
+  if (/[\x00-\x1f\x7f]/.test(rawPath) || rawPath.includes("\\")) return undefined;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(rawPath) || /^(?:data|mailto|about|javascript|blob|file):/i.test(rawPath)) return undefined;
+  if (/^[A-Za-z]:(?:\/|$)/.test(rawPath) || /^~(?:[^/]*)(?:\/|$)/.test(rawPath)) return undefined;
+  if (/[*?]|\[[^\]]*\]|\{[^}]*,[^}]*\}/.test(rawPath)) return undefined;
+
+  const segments = rawPath.split("/");
+  if (segments.includes("..")) return undefined;
+  return {
+    absolute: isAbsolute(rawPath),
+    parts: segments.filter(s => s !== "" && s !== "."),
+  };
+}
+
+export async function denialSummary(actions: unknown[], cwd?: string): Promise<string> {
+  const counts = new Map<string, number>();
+  const scopeCache = new Map<string, TargetScope>();
+  const lstatCache = new Map<string, Stats | null>();
+  let fsProbes = 0;
+  let realCwd: string | undefined;
+  let cwdParts: string[] | undefined;
+  let cwdResolved = false;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  let timeoutPromise: Promise<null> | undefined;
+
+  const ensureTimeout = () => {
+    if (!timeoutPromise) {
+      timeoutPromise = new Promise<null>(resolve => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          resolve(null);
+        }, scopeTimeoutMs);
+        timer.unref?.();
+      });
+    }
+    return timeoutPromise;
+  };
+
+  const withTimeout = <T>(promise: Promise<T>): Promise<T | null> => (
+    timedOut ? Promise.resolve(null) : Promise.race([promise.catch(() => null), ensureTimeout()])
+  );
+
+  const ensureCwd = async (): Promise<boolean> => {
+    if (cwdResolved) return realCwd !== undefined;
+    cwdResolved = true;
+    if (!cwd) return false;
+    const resolved = await withTimeout(realpath(cwd));
+    if (typeof resolved !== "string" || !resolved) return false;
+    realCwd = resolved;
+    cwdParts = resolved.split("/").filter(Boolean);
+    return true;
+  };
+
+  const probeLstat = async (targetPath: string): Promise<Stats | null> => {
+    if (timedOut) return null;
+    if (lstatCache.has(targetPath)) return lstatCache.get(targetPath)!;
+    const st = await withTimeout(lstat(targetPath));
+    lstatCache.set(targetPath, st);
+    return st;
+  };
+
+  const classifyPathScope = async (rawPath: string): Promise<TargetScope> => {
+    const parsed = parseCandidatePath(rawPath);
+    if (!parsed) return "target scope unknown";
+    if (!(await ensureCwd()) || !realCwd || !cwdParts) return "target scope unknown";
+
+    let relParts: string[];
+    if (parsed.absolute) {
+      const inCwd = parsed.parts.length >= cwdParts.length &&
+        cwdParts.every((seg, idx) => parsed.parts[idx] === seg);
+      if (!inCwd) return "outside worktree path";
+      relParts = parsed.parts.slice(cwdParts.length);
+    } else {
+      relParts = parsed.parts;
+    }
+
+    if (relParts.length > maxPathDepth || timedOut || fsProbes >= maxScopeProbes) return "target scope unknown";
+    fsProbes++;
+
+    if (relParts.length === 0) {
+      const st = await probeLstat(realCwd);
+      if (!st || st.isSymbolicLink()) return "target scope unknown";
+      return st.isFile() ? "existing in-worktree regular file" : "other existing in-worktree path";
+    }
+
+    let cur = realCwd;
+    for (let i = 0; i < relParts.length; i++) {
+      cur = join(cur, relParts[i]);
+      const st = await probeLstat(cur);
+      if (!st || st.isSymbolicLink()) return "target scope unknown";
+      if (i < relParts.length - 1) {
+        if (!st.isDirectory()) return "target scope unknown";
+      } else {
+        return st.isFile() ? "existing in-worktree regular file" : "other existing in-worktree path";
+      }
+    }
+    return "target scope unknown";
+  };
+
+  try {
+    for (const action of actions) {
+      const entry = action && typeof action === "object" && !Array.isArray(action) ? action as Record<string, unknown> : {};
+      const rawName = typeof action === "string"
+        ? action
+        : [entry.action, entry.tool_name, entry.toolName, entry.name, entry.tool].find(v => typeof v === "string");
+      const kind = typeof rawName === "string" ? rawName.trim().toLowerCase() : "";
+      const category = actionCategory.get(kind) ?? "unrecognized tool";
+      const canonical = actionCategory.has(kind) ? kind : "unknown";
+      const reason = extractKnownReason(entry);
+
+      const details: string[] = [];
+      if (category === "file edit" || category === "file read/search") {
+        const target = extractTargetField(entry);
+        let scope: TargetScope;
+        if (!target.present) {
+          scope = "target scope unavailable";
+        } else if (target.value === undefined) {
+          scope = "target scope unknown";
+        } else if (scopeCache.has(target.value)) {
+          scope = scopeCache.get(target.value)!;
+        } else {
+          scope = await classifyPathScope(target.value);
+          if (scopeCache.size < 256) scopeCache.set(target.value, scope);
+        }
+        details.push(scope);
+      }
+      if (reason) details.push(reason);
+
+      const descriptor = details.length > 0
+        ? `${category}: ${canonical} [${details.join(", ")}]`
+        : `${category}: ${canonical}`;
+      counts.set(descriptor, (counts.get(descriptor) ?? 0) + 1);
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+
+  const parts: string[] = [];
+  let shown = 0;
+  for (const [descriptor, count] of counts) {
+    if (shown >= maxUniqueDescriptors) break;
+    parts.push(count > 1 ? `${descriptor} x${count}` : descriptor);
+    shown++;
+  }
+  if (counts.size > maxUniqueDescriptors) parts.push(`+${counts.size - maxUniqueDescriptors} more`);
+  return `${actions.length} denied (${parts.join("; ")})`;
 }
 const defaultModel = "gemini-4-hydrogen-high";
 const defaultEffort = "high";
@@ -117,8 +335,9 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       onUpdate?.({ content: [{ type: "text", text: `Running ${launch}…` }], details });
       const prompt = [
         "Work only on the assignment below in the current directory. Do not commit, push, deploy, change tracker state, or delegate.",
-        "Use native file tools to inspect and edit. Do not invoke terminal tools; the coordinator runs checks.",
-        "Report files changed and any blockers. Do not include credentials or raw logs.",
+        "Use native file tools to inspect and edit exact named paths in the current worktree; only search when explicitly scoped in the assignment.",
+        "Do not probe outside the worktree or normally protected data; if required context is missing, stop and ask the coordinator. The coordinator handles discovery and checks.",
+        "Do not invoke terminal tools. Report files changed and any blockers. Do not include credentials or raw logs.",
         "",
         task.trim(),
       ].join("\n");
@@ -198,7 +417,11 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       if (resumeWithFallback) report = {status: result.code === 0 ? "SUCCESS" : "ERROR", response: result.stdout};
       else try { report = JSON.parse(result.stdout); } catch { /* Empty or non-JSON CLI diagnostic. */ }
       if (Array.isArray(report?.denied_actions) && report.denied_actions.length > 0) {
-        throw new Error(`AGY non-interactive permission: ${denialSummary(report.denied_actions)}. Inspect partial edits. Run shell checks in the coordinator; do not infer a filesystem write denial.`);
+        throw new Error(
+          `AGY non-interactive permission: ${await denialSummary(report.denied_actions, cwd)}. ` +
+          "AGY print mode cannot request interactive approval, and the current CLI can omit target scope and denial reason. " +
+          "Inspect partial edits and run shell checks in the coordinator; do not guess the underlying rule or infer a filesystem write denial."
+        );
       }
       if (result.code === 73 && !result.stdout) throw new Error("The worktree lock is busy or AGY exited before reporting; check for an active writer before retrying.");
       if (team && (result.code !== 0 || (report?.status && report.status !== "SUCCESS"))) {
