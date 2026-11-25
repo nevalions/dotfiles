@@ -8,7 +8,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const release = process.env.PI_TEST_RELEASE_PACKAGE;
 if (process.argv.includes("--no-session")) {
-  if (process.argv.includes("Task: isolation")) {
+  if (process.argv.includes("Task: progressing")) {
+    const tick = setInterval(() => console.log(JSON.stringify({type:"tool_execution_end"})), 25);
+    setTimeout(() => {
+      clearInterval(tick);
+      console.log(JSON.stringify({type:"message_end", message:{role:"assistant",stopReason:"stop",
+        content:[{type:"text",text:"finished with extra time"}],usage:{cost:{total:0}}}}));
+      console.log(JSON.stringify({type:"agent_end"}));
+    }, 800);
+  } else if (process.argv.includes("Task: isolation")) {
     assert.ok(process.argv.includes("--no-extensions"));
     assert.ok(process.argv.includes("--no-mcp"));
     assert.ok(process.argv.includes("--tools"));
@@ -50,15 +58,27 @@ if (process.argv.includes("--no-session")) {
       const loaded = await loadExtensions([generated], root);
       assert.deepEqual(loaded.errors, []);
       const tool = loaded.extensions[0].tools.get("subagent");
+      const decisions = [];
+      const modelRegistry = {
+        getModelOfType: () => ({}),
+        classify: async (_, {state}) => {
+          decisions.push(state);
+          return {stopReason:"stop", answers:{progress:{type:"bool",probability:state.toolEvents > 0 ? 0.9 : 0.05}}};
+        },
+      };
       const execute = (task, cwd) => tool.definition.execute("fixture", {
         agent: "fixture", agentScope: "project", task, cwd,
-      }, undefined, undefined, { cwd: root, hasUI: false });
+      }, undefined, undefined, { cwd: root, hasUI: false, modelRegistry });
 
       process.env.PI_TEAM_SUBAGENT_TIMEOUT_MS = "500";
       const running = await execute("hang");
       assert.equal(running.details.results[0].status, "failed");
       assert.match(running.content[0].text, /timed out after 500 ms before its turn ended/);
 
+      const progressing = await execute("progressing");
+      assert.equal(progressing.details.results[0].status, "completed");
+      assert.match(progressing.content[0].text, /finished with extra time/);
+      assert.ok(decisions.some(state => state.toolEvents > 0));
       process.env.PI_TEAM_SUBAGENT_TIMEOUT_MS = "18000";
       const closing = await execute("finish");
       assert.equal(closing.details.results[0].status, "failed");

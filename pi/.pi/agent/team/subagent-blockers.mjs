@@ -1,3 +1,4 @@
+import { routeIssue, installCoordinatorRecovery, warn } from "./team-health.mjs";
 import { statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
@@ -21,12 +22,8 @@ export function childBlocker(result, outcome) {
   const last = result.messages.findLast((message) => message.role === "assistant");
   const diagnostics = `${last?.stopReason === "error" ? last.errorMessage ?? "" : ""}\n${result.stderr}`;
   if (result.status === "failed") {
-    if (/\b(?:429|RESOURCE_EXHAUSTED|insufficient_quota|rate.limit.exceeded)\b|\b(?:rate limit|quota|usage limit) (?:exceeded|reached)\b/i.test(diagnostics)) {
-      return "Subagent provider rate or quota limit. Check the assigned model's quota before retrying.";
-    }
-    if (!last && /\bno (?:api key|models? found)|\b(?:unknown|unavailable) model\b/i.test(diagnostics)) {
-      return "Subagent model or credentials unavailable in the child CLI. Check the pinned model and provider login.";
-    }
+    result.routeIssue = routeIssue(diagnostics);
+    if (result.routeIssue) return `Subagent ${result.routeIssue}. Check the assigned model and provider.`;
     return;
   }
   if (last?.stopReason === "length") return "Subagent exceeded its output limit before completing the assignment.";
@@ -45,6 +42,7 @@ function failureSummary(result) {
 }
 
 export function installBlockerGuard(pi) {
+  installCoordinatorRecovery(pi);
   let blocker;
   pi.on("agent_start", () => { blocker = undefined; });
   pi.on("tool_call", (event) => {
@@ -55,10 +53,11 @@ export function installBlockerGuard(pi) {
     };
   });
   pi.on("tool_execution_end", (event, ctx) => {
-    if (blocker || event.toolName !== "subagent" || !event.isError || ctx.signal?.aborted) return;
+    if (blocker || !["subagent", "agy_worker"].includes(event.toolName) || !event.isError || ctx.signal?.aborted) return;
     const results = event.result?.details?.results;
     if (results?.length && results.every((item) => item.status === "aborted")) return;
-    blocker = failureSummary(event.result ?? {});
+    blocker = event.toolName === "agy_worker" ? "Worker failed. Inspect partial edits and the failed tool result before resuming." : failureSummary(event.result ?? {});
     if (ctx.hasUI) ctx.ui.notify(`Pi team blocked: ${blocker}`, "error");
+    else warn(ctx, `Pi team blocked: ${blocker}`);
   });
 }

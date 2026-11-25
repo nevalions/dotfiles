@@ -55,9 +55,18 @@ def render(source, cache):
             raise ValueError(f"unsupported bundled subagent layout (anchor: {old.splitlines()[0].strip()})")
         text = text.replace(old, new)
 
+    health = watchdog.with_name("team-health.mjs")
+    replace("async function runSingleAgent(", "async function runSingleAttempt(")
+    details_param = "makeDetails: (results: SingleResult[]) => SubagentDetails,"
+    replace(details_param, details_param + ' ctx: import("@earendil-works/pi-coding-agent").ExtensionContext,')
+    replace("const discovery = discoverAgents(ctx.cwd, agentScope);", """const runSingleAgent = (defaults, resolved, name, task, step, signal, update, details) =>
+                readOnlyAttempt(ctx, resolved, signal, candidate =>
+                    runSingleAttempt(defaults, candidate, name, task, step, signal, update, details, ctx));
+            const discovery = discoverAgents(ctx.cwd, agentScope);""")
     replace('from "./agents.ts";', f"from {json.dumps(str(source.with_name('agents.ts')))};")
     replace('import { spawn } from "node:child_process";',
             'import { spawn } from "node:child_process";\n'
+            f'import {{ readOnlyAttempt, warn }} from {json.dumps(str(health))};\n'
             f'import {{ subagentTimeout, watchSubagent }} from {json.dumps(str(watchdog))};\n'
             f'import {{ childBlocker, cwdBlocker, installBlockerGuard }} from {json.dumps(str(blockers))};')
     replace('\terrorMessage?: string;\n\tterminationSignal?', '\terrorMessage?: string;\n\tblocker?: string;\n\tterminationSignal?')
@@ -78,6 +87,7 @@ def render(source, cache):
     replace('\t\t\tlet exited = false;\n\t\t\tlet closed = false;\n\t\t\tlet killTimer: ReturnType<typeof setTimeout> | undefined;',
             '\t\t\tconst hardMs = subagentTimeout();\n\t\t\tlet watchdog: ReturnType<typeof watchSubagent> | undefined;')
     replace('\t\t\t\tif (event.type !== "message_end") return;',
+            '\t\t\t\twatchdog?.observe(event);\n'
             '\t\t\t\tif (event.type === "agent_end") watchdog?.endTurn();\n'
             '\t\t\t\tif (event.type !== "message_end") return;')
     replace('\t\t\t\tclosed = true;\n\t\t\t\tif (killTimer) clearTimeout(killTimer);',
@@ -92,7 +102,7 @@ def render(source, cache):
 \t\t\t\twasAborted = true;
 \t\t\t\twatchdog?.cancel();''')
     replace('\t\t\tproc.stdout?.on("data", (data) => {',
-            '\t\t\twatchdog = watchSubagent(proc, () => finish({ code: proc.exitCode, signal: proc.signalCode }), { hardMs });\n'
+            '\t\t\twatchdog = watchSubagent(proc, () => finish({ code: proc.exitCode, signal: proc.signalCode }), { hardMs, registry: ctx.modelRegistry, label: agentName, notify: message => warn(ctx, message) });\n'
             '\t\t\tproc.stdout?.on("data", (data) => {')
     replace('\t\t\tproc.on("exit", () => {\n\t\t\t\texited = true;\n\t\t\t});\n', '')
     replace('\t\tif (wasAborted) {',

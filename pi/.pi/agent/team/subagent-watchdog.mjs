@@ -1,3 +1,5 @@
+import { activityLease } from "./team-health.mjs";
+
 const hardTimeoutDefault = 300_000;
 const exitTimeoutDefault = 10_000;
 const killGraceDefault = 5_000;
@@ -11,7 +13,7 @@ export function subagentTimeout(value = process.env.PI_TEAM_SUBAGENT_TIMEOUT_MS)
 }
 
 export function watchSubagent(child, onForcedClose, {
-  hardMs = subagentTimeout(), exitMs = exitTimeoutDefault, graceMs = killGraceDefault,
+  hardMs = subagentTimeout(), exitMs = exitTimeoutDefault, graceMs = killGraceDefault, registry, notify = () => {}, label = "Subagent",
 } = {}) {
   let turnEnded = false;
   let stopping = false;
@@ -19,15 +21,15 @@ export function watchSubagent(child, onForcedClose, {
   let error;
   let exitTimer;
   let killTimer;
-  const hardTimer = setTimeout(() => stop(turnEnded
-    ? `Subagent timed out after its turn ended; the process did not close within the ${hardMs} ms total limit.`
-    : `Subagent timed out after ${hardMs} ms before its turn ended.`), hardMs);
+  const lease = activityLease({windowMs: hardMs, registry, notify, label,
+    expire: reason => stop(`Subagent timed out after ${hardMs} ms before its turn ended (${reason}).`),
+  });
 
   function stop(reason) {
     if (stopping || disposed) return;
     stopping = true;
     error = reason;
-    clearTimeout(hardTimer);
+    lease.dispose();
     clearTimeout(exitTimer);
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
     killTimer = setTimeout(() => {
@@ -39,16 +41,21 @@ export function watchSubagent(child, onForcedClose, {
   }
 
   return {
+    observe(event) {
+      if (event.type === "message_update" && /^(text|thinking|toolcall)_delta$/.test(event.assistantMessageEvent?.type)) lease.record("outputEvents");
+      if (event.type === "tool_execution_end") lease.record("toolEvents");
+    },
     get error() { return error; },
     endTurn() {
       if (turnEnded || stopping || disposed) return;
       turnEnded = true;
+      lease.dispose();
       exitTimer = setTimeout(() => stop(`Subagent timed out after its turn ended; the process did not close within ${exitMs} ms.`), exitMs);
     },
     cancel() { stop(); },
     dispose() {
       disposed = true;
-      clearTimeout(hardTimer);
+      lease.dispose();
       clearTimeout(exitTimer);
       clearTimeout(killTimer);
     },
