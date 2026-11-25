@@ -1,7 +1,7 @@
 ---
 name: reviewer-quick
 description: Independent review for low-risk, localized changes only
-model: openai-codex/gpt-6.1-sol:low
+model: opencode-go/deepseek-v4.1-flash:high
 tools: [read, grep, find, ls]
 ---
 

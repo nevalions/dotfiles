@@ -1,7 +1,7 @@
 ---
 name: planner-quick
 description: Read-only implementation planning for ordinary multi-file changes.
-model: openai-codex/gpt-6.1-sol:low
+model: opencode-go/deepseek-v4.1-flash:high
 tools: [read, grep, find, ls]
 ---
 
