@@ -2,12 +2,50 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 
+MAX_SOURCE_BYTES = 1024 * 1024
 
-def prepare(source, cache):
-    text = source.read_text(encoding="utf-8")
+
+def _read_regular_bytes(path, max_bytes):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"expected a regular file: {path}")
+        if info.st_size > max_bytes:
+            raise ValueError(f"file exceeds {max_bytes} bytes: {path}")
+        data = stream.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError(f"file exceeds {max_bytes} bytes: {path}")
+    return data
+
+
+def _matches_cached_file(dest, expected):
+    try:
+        fd = os.open(dest, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return False
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"cache entry is not a regular file: {dest}")
+        if info.st_size != len(expected):
+            return False
+        return stream.read(len(expected) + 1) == expected
+
+
+def render(source, cache):
+    source = Path(source).resolve(strict=True)
+    cache = Path(cache).resolve()
+    text = (
+        _read_regular_bytes(source, MAX_SOURCE_BYTES)
+        .decode("utf-8")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
     watchdog = Path(__file__).resolve().with_name("subagent-watchdog.mjs")
     blockers = watchdog.with_name("subagent-blockers.mjs")
 
@@ -68,10 +106,16 @@ def prepare(source, cache):
             '\t\t}\n\t\treturn currentResult;\n\t} finally {')
 
     data = text.encode("utf-8")
-    cache.mkdir(mode=0o700, parents=True, exist_ok=True)
     dest = cache / f"subagent-{hashlib.sha256(data).hexdigest()}.ts"
-    if not dest.is_file() or dest.read_bytes() != data:
-        with tempfile.NamedTemporaryFile(dir=cache, delete=False) as temp:
+    return dest, data
+
+
+def prepare(source, cache):
+    dest, data = render(source, cache)
+    cache_dir = dest.parent
+    cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not _matches_cached_file(dest, data):
+        with tempfile.NamedTemporaryFile(dir=cache_dir, delete=False) as temp:
             try:
                 temp.write(data)
                 temp.close()

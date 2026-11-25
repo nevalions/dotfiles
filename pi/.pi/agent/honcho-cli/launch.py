@@ -1,10 +1,12 @@
 #!/usr/bin/python3 -I
 """Top-level interactive launcher; the publisher is never globally registered."""
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import socket
+import stat
 import subprocess
 import threading
 import sys
@@ -19,20 +21,83 @@ from broker import serve, upstream
 
 SPACE = 'hermes-personal'
 OBSERVER = 'pi-coordinator'
-TEAM = AGENT / 'team/workflow.md'
+TEAM = Path(__file__).resolve().parent.parent / 'team/workflow.md'
+VERSION_RE = re.compile(r'[0-9A-Za-z._+-]+', re.ASCII)
+MAX_VERSION_BYTES = 256
+MAX_CACHE_BYTES = 2 * 1024 * 1024
+
+
+def _read_regular_bytes(path, max_bytes, *, follow_symlinks=False):
+    flags = os.O_RDONLY | os.O_NONBLOCK
+    if not follow_symlinks:
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags)
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > max_bytes:
+            raise ValueError('expected bounded regular file')
+        data = stream.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError('file exceeds size limit')
+    return data
+
+
+def _read_version(path):
+    raw = _read_regular_bytes(path, MAX_VERSION_BYTES, follow_symlinks=True)
+    if b'\n' not in raw:
+        return None
+    version = raw.split(b'\n', 1)[0].decode('ascii')
+    if version in ('', '.', '..') or not VERSION_RE.fullmatch(version):
+        return None
+    return version
+
+
+def _load_prepare_subagent(path):
+    spec = importlib.util.spec_from_file_location('prepare_subagent', path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f'Cannot load {path}')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def plain(args):
+    args = list(args)
     if args[-1:] in (['-r'], ['--resume'], ['-c'], ['--continue']):
         args = args[:-1]
-    elif len(args) >= 2 and args[-2] in ('--session', '--session-id') and not args[-1].startswith('-'):
+    elif len(args) >= 2 and args[-2] in ('--session', '--session-id') and args[-1] and not args[-1].startswith('-'):
         args = args[:-2]
     if not args:
         return True
-    version = (AGENT / 'install/current-version').read_text().strip()
-    examples = AGENT / 'install/releases' / version / 'node_modules/@earendil-works/pi-coding-agent/examples/extensions'
-    return args == ['--extension', str(examples / 'subagent/index.ts'), '--extension', str(examples / 'todo.ts'),
-                    '--append-system-prompt', str(TEAM), '--agy-team']
+    if len(args) != 7 or args[0] != '--extension' or args[2] != '--extension' or args[4] != '--append-system-prompt' or args[6] != '--agy-team':
+        return False
+    _, subagent_arg, _, todo_arg, _, workflow_arg, _ = args
+    try:
+        version = _read_version(AGENT / 'install/current-version')
+        if version is None:
+            return False
+        examples = AGENT / 'install/releases' / version / 'node_modules/@earendil-works/pi-coding-agent/examples/extensions'
+        todo = examples / 'todo.ts'
+        if todo_arg != str(todo) or not stat.S_ISREG(os.lstat(todo).st_mode):
+            return False
+        base_dir = Path(__file__).resolve().parent.parent
+        bin_dir = base_dir / 'bin'
+        team_dir = base_dir / 'team'
+        pi_team = (AGENT / 'bin/pi-team').resolve(strict=True)
+        if pi_team.parent != bin_dir or pi_team.name != 'pi-team':
+            return False
+        if workflow_arg != f'{pi_team.parent}/../team/workflow.md':
+            return False
+        workflow_file = team_dir / 'workflow.md'
+        if team_dir.is_symlink() or not stat.S_ISREG(os.lstat(workflow_file).st_mode):
+            return False
+        prepare_subagent = _load_prepare_subagent(team_dir / 'prepare-subagent.py')
+        dest, expected = prepare_subagent.render(examples / 'subagent/index.ts', AGENT / 'install/team-cache')
+        if subagent_arg != str(dest) or len(expected) > MAX_CACHE_BYTES:
+            return False
+        return _read_regular_bytes(dest, len(expected), follow_symlinks=False) == expected
+    except (OSError, ValueError, ImportError, SyntaxError, RuntimeError):
+        return False
 
 
 def choose(routes, selection):
