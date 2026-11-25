@@ -4,12 +4,14 @@ import os
 from pathlib import Path
 import pty
 import shutil
+import signal
 import socket
 import stat
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -136,6 +138,216 @@ class BrokerTests(unittest.TestCase):
                         self.assertIn('verified [Task:', result['content'][0]['text'])
                 coordinator.stdin.close()
                 self.assertEqual(coordinator.wait(timeout=3), 0)
+
+    def test_relay_disconnect_closes_remote_session(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import gateway
+
+        deletes = []
+        active = set()
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                return
+
+            def do_POST(self):
+                req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                method = req["method"]
+                if method == "initialize":
+                    active.add("broker-sess-1")
+                    result = {"protocolVersion": "2025-06-18", "capabilities": {}}
+                elif method == "notifications/initialized":
+                    self.send_response(202)
+                    self.end_headers()
+                    return
+                elif method == "tools/call":
+                    result = {"content": [{"type": "text", "text": "[]"}]}
+                else:
+                    result = {}
+                payload = json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}).encode()
+                self.send_response(200)
+                self.send_header("Mcp-Session-Id", "broker-sess-1")
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def do_DELETE(self):
+                sid = self.headers.get("Mcp-Session-Id")
+                deletes.append({
+                    "session_id": sid,
+                    "protocol": self.headers.get("MCP-Protocol-Version"),
+                    "auth": self.headers.get("Authorization"),
+                    "workspace": self.headers.get("X-Honcho-Workspace-ID"),
+                })
+                active.discard(sid)
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+        scope = dict(workspace_id='w', peer_id='pi-coordinator', target_peer_id='kube-lvl47', session_id='test', task='test')
+        with tempfile.TemporaryDirectory() as tmp, \
+                ThreadingHTTPServer(("127.0.0.1", 0), Handler) as http_srv, \
+                socket.socket(socket.AF_UNIX) as server:
+            http_thread = threading.Thread(target=http_srv.serve_forever, daemon=True)
+            http_thread.start()
+            try:
+                url = f"http://127.0.0.1:{http_srv.server_port}/mcp"
+                path = tmp + '/rpc'
+                server.bind(path)
+                server.listen()
+                server.settimeout(0.2)
+                driver = 'import sys,subprocess; subprocess.run(sys.argv[1:],stdin=sys.stdin,check=True)'
+                with subprocess.Popen(
+                    [sys.executable, '-c', driver, sys.executable, '-I', str(DIR / 'broker.py'), path, 'test'],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                ) as relay_proc:
+                    def bind(sid):
+                        self.assertEqual(sid, scope['session_id'])
+                        return scope, gateway.Honcho(url, 'broker-token', scope['workspace_id'])
+
+                    thread = threading.Thread(target=broker.serve, args=(server, relay_proc, bind), daemon=True)
+                    thread.start()
+                    relay_proc.stdin.write(
+                        json.dumps(dict(id=1, method='tools/call', params=dict(name='readback', arguments=dict(scope=scope)))).encode() + b'\n'
+                    )
+                    relay_proc.stdin.flush()
+                    reply = json.loads(relay_proc.stdout.readline())
+                    self.assertFalse(reply['result'].get('isError'))
+                    self.assertEqual(active, {'broker-sess-1'})
+                    relay_proc.stdin.close()
+                    self.assertEqual(relay_proc.wait(timeout=3), 0)
+                    thread.join(timeout=3)
+                self.assertEqual(active, set())
+                self.assertEqual(deletes, [{
+                    "session_id": "broker-sess-1",
+                    "protocol": "2025-06-18",
+                    "auth": "Bearer broker-token",
+                    "workspace": "w",
+                }])
+            finally:
+                http_srv.shutdown()
+                http_thread.join(timeout=2)
+
+    def test_malformed_upstream_append_correlated_does_not_drop_broker(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import gateway
+
+        scope = dict(workspace_id='w', peer_id='pi-coordinator', target_peer_id='kube-lvl47', session_id='test', task='test')
+        evidence = dict(candidate='rev', checks='pass', verification='review', conclusion='verified')
+        cases = (
+            ('application/json', b'null'),
+            ('text/event-stream', b'event: message\ndata: []\n\n'),
+        )
+        for content_type, bad_body in cases:
+            with self.subTest(content_type=content_type, bad_body=bad_body):
+                deletes = []
+                active = set()
+                tool_calls = []
+
+                class Handler(BaseHTTPRequestHandler):
+                    def log_message(self, *args):
+                        return
+
+                    def do_POST(self):
+                        req = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                        method = req['method']
+                        if method == 'initialize':
+                            active.add('broker-sess-malformed')
+                            result = {'protocolVersion': '2025-06-18', 'capabilities': {}}
+                        elif method == 'notifications/initialized':
+                            self.send_response(202)
+                            self.end_headers()
+                            return
+                        elif method == 'tools/call':
+                            name = req['params']['name']
+                            tool_calls.append(name)
+                            if name == 'create_conclusions':
+                                self.send_response(200)
+                                self.send_header('Content-Type', content_type)
+                                self.send_header('Content-Length', str(len(bad_body)))
+                                self.end_headers()
+                                self.wfile.write(bad_body)
+                                return
+                            if name == 'list_conclusions':
+                                result = {'content': [{'type': 'text', 'text': '[]'}]}
+                            else:
+                                self.send_response(403)
+                                self.end_headers()
+                                return
+                        else:
+                            result = {}
+                        payload = json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': result}).encode()
+                        self.send_response(200)
+                        self.send_header('Mcp-Session-Id', 'broker-sess-malformed')
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Content-Length', str(len(payload)))
+                        self.end_headers()
+                        self.wfile.write(payload)
+
+                    def do_DELETE(self):
+                        sid = self.headers.get('Mcp-Session-Id')
+                        deletes.append(sid)
+                        active.discard(sid)
+                        self.send_response(200)
+                        self.send_header('Content-Length', '0')
+                        self.end_headers()
+
+                with tempfile.TemporaryDirectory() as tmp, \
+                        ThreadingHTTPServer(('127.0.0.1', 0), Handler) as http_srv, \
+                        socket.socket(socket.AF_UNIX) as server:
+                    http_thread = threading.Thread(target=http_srv.serve_forever, daemon=True)
+                    http_thread.start()
+                    try:
+                        url = f'http://127.0.0.1:{http_srv.server_port}/mcp'
+                        path = tmp + '/rpc'
+                        server.bind(path)
+                        server.listen()
+                        server.settimeout(0.2)
+                        driver = 'import sys,subprocess; subprocess.run(sys.argv[1:],stdin=sys.stdin,check=True)'
+                        with subprocess.Popen(
+                            [sys.executable, '-c', driver, sys.executable, '-I', str(DIR / 'broker.py'), path, 'test'],
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                        ) as relay_proc:
+                            def bind(sid):
+                                self.assertEqual(sid, scope['session_id'])
+                                return scope, gateway.Honcho(url, 'broker-token', scope['workspace_id'])
+
+                            thread = threading.Thread(target=broker.serve, args=(server, relay_proc, bind), daemon=True)
+                            thread.start()
+                            relay_proc.stdin.write(json.dumps({
+                                'id': 11,
+                                'method': 'tools/call',
+                                'params': {'name': 'publish_verified', 'arguments': {'scope': scope, **evidence}},
+                            }).encode() + b'\n')
+                            relay_proc.stdin.flush()
+                            reply = json.loads(relay_proc.stdout.readline())
+                            self.assertEqual(reply['id'], 11)
+                            self.assertTrue(reply['result']['isError'])
+                            self.assertIn('read back before retrying', reply['result']['content'][0]['text'])
+                            self.assertEqual(tool_calls, ['create_conclusions'])
+
+                            relay_proc.stdin.write(json.dumps({
+                                'id': 12,
+                                'method': 'tools/call',
+                                'params': {'name': 'readback', 'arguments': {'scope': scope}},
+                            }).encode() + b'\n')
+                            relay_proc.stdin.flush()
+                            readback = json.loads(relay_proc.stdout.readline())
+                            self.assertEqual(readback['id'], 12)
+                            self.assertFalse(readback['result'].get('isError'))
+                            self.assertEqual(json.loads(readback['result']['content'][0]['text']), [])
+
+                            relay_proc.stdin.close()
+                            self.assertEqual(relay_proc.wait(timeout=3), 0)
+                            thread.join(timeout=3)
+                        self.assertEqual(active, set())
+                        self.assertEqual(deletes, ['broker-sess-malformed'])
+                    finally:
+                        http_srv.shutdown()
+                        http_thread.join(timeout=2)
 
 
 class LauncherTests(unittest.TestCase):
@@ -606,6 +818,175 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(stderr, b'')
         self.assertFalse(self.recall_marker.exists())
         self.assertTrue(stat.S_ISFIFO(dest.lstat().st_mode))
+
+    def test_run_coordinator_waits_for_ordinary_relay_close_within_timeout(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import gateway
+        import launch
+
+        scope = dict(workspace_id='w', peer_id='pi-coordinator', target_peer_id='kube-lvl47', session_id='test', task='test')
+        active = set()
+        deletes = []
+        events = []
+        lock = threading.Lock()
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                return
+
+            def do_POST(self):
+                req = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                method = req['method']
+                if method == 'initialize':
+                    with lock:
+                        active.add('launch-sess-1')
+                        events.append('initialized')
+                    result = {'protocolVersion': '2025-06-18', 'capabilities': {}}
+                elif method == 'notifications/initialized':
+                    self.send_response(202)
+                    self.end_headers()
+                    return
+                elif method == 'tools/call':
+                    result = {'content': [{'type': 'text', 'text': '[]'}]}
+                else:
+                    result = {}
+                payload = json.dumps({'jsonrpc': '2.0', 'id': req['id'], 'result': result}).encode()
+                self.send_response(200)
+                self.send_header('Mcp-Session-Id', 'launch-sess-1')
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def do_DELETE(self):
+                time.sleep(0.25)
+                sid = self.headers.get('Mcp-Session-Id')
+                with lock:
+                    deletes.append(sid)
+                    active.discard(sid)
+                    events.append('deleted')
+                self.send_response(200)
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+
+        coordinator_script = (
+            'import json, subprocess, sys\n'
+            'relay = subprocess.Popen([sys.executable, "-I", sys.argv[1], sys.argv[2], "test"], '
+            'stdin=subprocess.PIPE, stdout=subprocess.PIPE)\n'
+            'req = {"id": 1, "method": "tools/call", "params": {"name": "readback", "arguments": {"scope": json.loads(sys.argv[3])}}}\n'
+            'relay.stdin.write(json.dumps(req).encode() + b"\\n")\n'
+            'relay.stdin.flush()\n'
+            'reply = json.loads(relay.stdout.readline())\n'
+            'assert not reply["result"].get("isError")\n'
+            'relay.stdin.close()\n'
+            'relay.stdout.close()\n'
+            'sys.exit(7)\n'
+        )
+
+        with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as http_srv, socket.socket(socket.AF_UNIX) as listener:
+            http_thread = threading.Thread(target=http_srv.serve_forever, daemon=True)
+            http_thread.start()
+            try:
+                url = f'http://127.0.0.1:{http_srv.server_port}/mcp'
+                sock_path = str(self.base / 'launch-close.rpc')
+                listener.bind(sock_path)
+                listener.listen(4)
+                listener.settimeout(0.2)
+
+                def bind(sid):
+                    self.assertEqual(sid, scope['session_id'])
+                    return scope, gateway.Honcho(url, 'launch-token', scope['workspace_id'])
+
+                rc = launch.run_coordinator(
+                    [sys.executable, '-c', coordinator_script, str(DIR / 'broker.py'), sock_path, json.dumps(scope)],
+                    os.environ,
+                    listener,
+                    bind,
+                )
+                self.assertEqual(rc, 7)
+                self.assertEqual(active, set())
+                self.assertEqual(deletes, ['launch-sess-1'])
+                self.assertEqual(events, ['initialized', 'deleted'])
+            finally:
+                http_srv.shutdown()
+                http_thread.join(timeout=2)
+
+    def test_run_coordinator_bounds_stuck_relay_shutdown(self):
+        import launch
+
+        blocker = threading.Event()
+        entered = threading.Event()
+
+        def stuck_serve(*_args):
+            entered.set()
+            blocker.wait(5)
+
+        try:
+            with socket.socket(socket.AF_UNIX) as listener:
+                with patch.object(launch, 'serve', side_effect=stuck_serve):
+                    t0 = time.monotonic()
+                    rc = launch.run_coordinator(
+                        [sys.executable, '-c', 'import sys; sys.exit(5)'],
+                        os.environ,
+                        listener,
+                        lambda _sid: None,
+                        shutdown_timeout=0.15,
+                    )
+                    elapsed = time.monotonic() - t0
+                self.assertEqual(rc, 5)
+                self.assertTrue(entered.is_set())
+                self.assertLess(elapsed, 1.0)
+        finally:
+            blocker.set()
+
+        pid_file = self.base / 'stuck-relay.pid'
+        child_script = (
+            'import json, os, pathlib, socket, sys, time\n'
+            'pathlib.Path(sys.argv[2]).write_text(str(os.getpid()))\n'
+            'with socket.socket(socket.AF_UNIX) as conn:\n'
+            '    conn.connect(sys.argv[1])\n'
+            '    conn.sendall(b"test\\n")\n'
+            '    conn.sendall((json.dumps({"id": 1, "method": "ping"}) + "\\n").encode())\n'
+            '    line = b""\n'
+            '    while not line.endswith(b"\\n"):\n'
+            '        chunk = conn.recv(1024)\n'
+            '        if not chunk:\n'
+            '            break\n'
+            '        line += chunk\n'
+            '    sys.stdout.write("ready\\n")\n'
+            '    sys.stdout.flush()\n'
+            '    time.sleep(10)\n'
+        )
+        coordinator_script = (
+            'import subprocess, sys\n'
+            'child = subprocess.Popen([sys.executable, "-c", sys.argv[1], sys.argv[2], sys.argv[3]], stdout=subprocess.PIPE)\n'
+            'assert child.stdout.readline() == b"ready\\n"\n'
+            'sys.exit(9)\n'
+        )
+        scope = dict(workspace_id='w', peer_id='pi-coordinator', target_peer_id='kube-lvl47', session_id='test', task='test')
+        sock_path = str(self.base / 'stuck.rpc')
+        try:
+            with socket.socket(socket.AF_UNIX) as listener:
+                listener.bind(sock_path)
+                listener.listen(4)
+                listener.settimeout(0.1)
+                t0 = time.monotonic()
+                rc = launch.run_coordinator(
+                    [sys.executable, '-c', coordinator_script, child_script, sock_path, str(pid_file)],
+                    os.environ,
+                    listener,
+                    lambda _sid: (scope, object()),
+                    shutdown_timeout=0.2,
+                )
+                elapsed = time.monotonic() - t0
+            self.assertEqual(rc, 9)
+            self.assertLess(elapsed, 1.0)
+        finally:
+            if pid_file.exists():
+                try:
+                    os.kill(int(pid_file.read_text()), signal.SIGKILL)
+                except (OSError, ValueError):
+                    pass
 
 
 class RecallScopesTests(unittest.TestCase):

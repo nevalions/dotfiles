@@ -41,7 +41,8 @@ def upstream(scope):
         if missing and page >= peers['pages']:
             raise Denied('Unconfirmed peer')
         page += 1
-    if request('/sessions', {'id': scope['session_id'], 'peers': {p: {} for p in (scope['peer_id'], scope['target_peer_id'])}}).get('id') != scope['session_id']:
+    session = request('/sessions', {'id': scope['session_id'], 'peers': {p: {} for p in (scope['peer_id'], scope['target_peer_id'])}})
+    if not isinstance(session, dict) or session.get('id') != scope['session_id']:
         raise Denied('Unconfirmed session')
     return Honcho(TAILNET_URL, raw, scope['workspace_id'], tailnet=True)
 
@@ -59,6 +60,7 @@ def serve(listener, coordinator, bind):
         except OSError:
             return
         with conn:
+            remote = None
             try:
                 pid, uid, _ = struct.unpack('3i', conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
                 if uid != os.getuid() or parent(pid) != coordinator.pid:
@@ -72,7 +74,7 @@ def serve(listener, coordinator, bind):
                         if len(line) > LIMIT:
                             break
                         req = json.loads(line)
-                        if 'id' not in req:
+                        if not isinstance(req, dict) or 'id' not in req:
                             continue
                         result = dispatch(req, scope, remote)
                         reply = {'jsonrpc': '2.0', 'id': req['id']}
@@ -83,6 +85,14 @@ def serve(listener, coordinator, bind):
                         stream.write(json.dumps(reply).encode() + b'\n')
             except (Denied, OSError, ValueError, TypeError, KeyError, AttributeError):
                 continue
+            finally:
+                if remote is not None:
+                    close_remote = getattr(remote, 'close', None)
+                    if callable(close_remote):
+                        try:
+                            close_remote()
+                        except Exception:
+                            pass
 
 
 def relay(path, sid):

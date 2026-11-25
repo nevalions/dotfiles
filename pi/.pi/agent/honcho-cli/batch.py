@@ -672,6 +672,7 @@ def apply_item(item, dir_fd, *, client_factory=None):
         return _result(item.repo, "blocked", "unable to open session lock")
 
     lock_acquired = False
+    client = None
     try:
         try:
             info = os.fstat(lock_fd)
@@ -704,6 +705,8 @@ def apply_item(item, dir_fd, *, client_factory=None):
                 return _result(item.repo, "blocked", "different conclusion pending for upstream session")
             try:
                 existing = readback_conclusions(client, item.scope)
+            except gateway.UpstreamHTTPStatus as exc:
+                return _result(item.repo, "blocked", f"pending conclusion readback failed ({exc.reason})")
             except UPSTREAM_ERRORS:
                 return _result(item.repo, "blocked", "pending conclusion readback failed or inconclusive")
             if any(entry == item.note for entry in existing):
@@ -716,6 +719,8 @@ def apply_item(item, dir_fd, *, client_factory=None):
 
         try:
             existing = readback_conclusions(client, item.scope)
+        except gateway.UpstreamHTTPStatus as exc:
+            return _result(item.repo, "blocked", f"pre-read failed ({exc.reason})")
         except UPSTREAM_ERRORS:
             return _result(item.repo, "blocked", "pre-read failed or unproven")
 
@@ -731,14 +736,30 @@ def apply_item(item, dir_fd, *, client_factory=None):
             return _result(item.repo, "blocked", str(exc))
 
         append_failed = False
+        append_status_reason = None
         try:
             client.call("create_conclusions", {**bound, "conclusions": [item.note]})
+        except gateway.UpstreamHTTPStatus as exc:
+            append_failed = True
+            append_status_reason = exc.reason
         except UPSTREAM_ERRORS:
             append_failed = True
 
         try:
             after = readback_conclusions(client, item.scope)
+        except gateway.UpstreamHTTPStatus as exc:
+            return _result(
+                item.repo,
+                "blocked",
+                f"post-append readback failed ({exc.reason}); pending marker retained",
+            )
         except UPSTREAM_ERRORS:
+            if append_status_reason is not None:
+                return _result(
+                    item.repo,
+                    "blocked",
+                    f"post-append readback failed after {append_status_reason}; pending marker retained",
+                )
             return _result(item.repo, "blocked", "post-append readback failed or unproven; pending marker retained")
 
         if any(entry == item.note for entry in after):
@@ -750,17 +771,32 @@ def apply_item(item, dir_fd, *, client_factory=None):
                 return _result(item.repo, "verified", "recovered pending conclusion via readback")
             return _result(item.repo, "verified", "conclusion verified via readback")
 
+        if append_status_reason is not None:
+            return _result(
+                item.repo,
+                "blocked",
+                f"conclusion absent on readback after {append_status_reason}; pending marker retained",
+            )
         return _result(item.repo, "blocked", "conclusion absent on readback; pending marker retained")
     finally:
-        if lock_acquired:
+        try:
+            if client is not None:
+                close_client = getattr(client, "close", None)
+                if callable(close_client):
+                    try:
+                        close_client()
+                    except Exception:
+                        pass
+        finally:
+            if lock_acquired:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
             try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
             except OSError:
                 pass
-        try:
-            os.close(lock_fd)
-        except OSError:
-            pass
 
 
 def apply(manifest_path, pi_session_id, approved_sha256, *, state_dir=None, route_resolver=None, client_factory=None):

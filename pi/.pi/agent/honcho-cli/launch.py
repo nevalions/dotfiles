@@ -25,6 +25,7 @@ TEAM = Path(__file__).resolve().parent.parent / 'team/workflow.md'
 VERSION_RE = re.compile(r'[0-9A-Za-z._+-]+', re.ASCII)
 MAX_VERSION_BYTES = 256
 MAX_CACHE_BYTES = 2 * 1024 * 1024
+BROKER_SHUTDOWN_TIMEOUT = 6
 
 
 def _read_regular_bytes(path, max_bytes, *, follow_symlinks=False):
@@ -123,6 +124,18 @@ def prepare(directory):
     return ext
 
 
+def run_coordinator(command, env, listener, bind, *, banner=None, shutdown_timeout=BROKER_SHUTDOWN_TIMEOUT):
+    """Run coordinator process alongside the broker thread with bounded shutdown join."""
+    with subprocess.Popen(command, env=env) as proc:
+        broker_thread = threading.Thread(target=serve, args=(listener, proc, bind), daemon=True)
+        broker_thread.start()
+        if banner is not None:
+            print(banner, flush=True)
+        rc = proc.wait()
+        broker_thread.join(timeout=shutdown_timeout)
+        return rc
+
+
 def main():
     args = sys.argv[1:]
     original = str(AGENT / 'bin/pi.managed')
@@ -149,10 +162,13 @@ def main():
                         listener.listen(4)
                         listener.settimeout(1)
                         os.umask(old)
-                        with subprocess.Popen([original, *args, '--extension', str(ext)], env=env) as proc:
-                            threading.Thread(target=serve, args=(listener, proc, bind), daemon=True).start()
-                            print(f'Honcho: scoped publisher for {SPACE}/{target}.', flush=True)
-                            return proc.wait()
+                        return run_coordinator(
+                            [original, *args, '--extension', str(ext)],
+                            env,
+                            listener,
+                            bind,
+                            banner=f'Honcho: scoped publisher for {SPACE}/{target}.',
+                        )
         except (Denied, OSError, ValueError, subprocess.SubprocessError) as exc:
             reason = str(exc) if isinstance(exc, Denied) else type(exc).__name__
             print(f'Honcho: setup failed ({reason}); recall only.', file=sys.stderr)

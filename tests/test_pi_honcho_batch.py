@@ -1264,5 +1264,477 @@ class BatchCLISubprocessTests(unittest.TestCase):
         self.assertNotIn(str(subdir), sub_proc.stderr)
 
 
+class CapacityLimitedMCPServer:
+    def __init__(self, remote, *, max_active_sessions=1, expected_workspace="hermes-personal",
+                 valid_tokens=None, stateless=False):
+        self.remote = remote
+        self.max_active_sessions = max_active_sessions
+        self.expected_workspace = expected_workspace
+        self.valid_tokens = set(valid_tokens or [])
+        self.stateless = stateless
+        self.lock = threading.Lock()
+        self.next_session_num = 0
+        self.active_sessions = {}
+        self.post_requests = []
+        self.delete_requests = []
+        self.pre_init_response = None
+        self.tool_http_error_hook = None
+        self.delete_status = 200
+        self.delete_delay = 0.0
+        self.delete_completed = threading.Event()
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                return
+
+            def _send_raw(self, status, body, content_type="application/json"):
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if body:
+                    self.wfile.write(body)
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length).decode("utf-8"))
+                auth = self.headers.get("Authorization")
+                workspace = self.headers.get("X-Honcho-Workspace-ID")
+                sid = self.headers.get("Mcp-Session-Id")
+                proto = self.headers.get("MCP-Protocol-Version")
+                method = body.get("method")
+                with outer.lock:
+                    outer.post_requests.append({
+                        "method": method,
+                        "auth": auth,
+                        "workspace": workspace,
+                        "session_id": sid,
+                        "protocol": proto,
+                    })
+
+                expected_auth_ok = (
+                    isinstance(auth, str)
+                    and auth.startswith("Bearer ")
+                    and (not outer.valid_tokens or auth[7:] in outer.valid_tokens)
+                )
+                if not expected_auth_ok or workspace != outer.expected_workspace:
+                    self._send_raw(403, b"forbidden")
+                    return
+
+                if method == "initialize":
+                    if outer.pre_init_response is not None:
+                        status, err_body = outer.pre_init_response
+                        self._send_raw(status, err_body)
+                        return
+                    with outer.lock:
+                        if len(outer.active_sessions) >= outer.max_active_sessions:
+                            self._send_raw(503, b'{"error":"too many active sessions"}')
+                            return
+                        issued_sid = None
+                        if not outer.stateless:
+                            outer.next_session_num += 1
+                            issued_sid = f"cap-sess-{outer.next_session_num}"
+                            outer.active_sessions[issued_sid] = {
+                                "auth": auth,
+                                "workspace": workspace,
+                                "protocol": "2025-03-26",
+                            }
+                    payload = json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": body["id"],
+                        "result": {"protocolVersion": "2025-03-26", "capabilities": {}},
+                    }).encode("utf-8")
+                    self.send_response(200)
+                    if issued_sid is not None:
+                        self.send_header("Mcp-Session-Id", issued_sid)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
+
+                if not outer.stateless:
+                    with outer.lock:
+                        session = outer.active_sessions.get(sid)
+                    if (session is None or session["auth"] != auth
+                            or session["workspace"] != workspace
+                            or session["protocol"] != proto):
+                        self._send_raw(403, b"invalid session")
+                        return
+
+                if method == "notifications/initialized":
+                    self.send_response(202)
+                    self.end_headers()
+                    return
+
+                if method == "tools/call":
+                    params = body["params"]
+                    if outer.tool_http_error_hook is not None:
+                        err = outer.tool_http_error_hook(params["name"], params["arguments"])
+                        if err is not None:
+                            self._send_raw(err[0], err[1])
+                            return
+                    result = outer.remote.call(params["name"], params["arguments"])
+                else:
+                    result = {}
+
+                payload = json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": result}).encode("utf-8")
+                self._send_raw(200, payload)
+
+            def do_DELETE(self):
+                auth = self.headers.get("Authorization")
+                workspace = self.headers.get("X-Honcho-Workspace-ID")
+                sid = self.headers.get("Mcp-Session-Id")
+                proto = self.headers.get("MCP-Protocol-Version")
+                delay = outer.delete_delay
+                if delay > 0:
+                    time.sleep(delay)
+                try:
+                    with outer.lock:
+                        outer.delete_requests.append({
+                            "auth": auth,
+                            "workspace": workspace,
+                            "session_id": sid,
+                            "protocol": proto,
+                        })
+                        session = outer.active_sessions.get(sid)
+                        valid = (
+                            session is not None
+                            and session["auth"] == auth
+                            and session["workspace"] == workspace
+                            and session["protocol"] == proto
+                        )
+                        if valid and outer.delete_status in (200, 202, 204):
+                            del outer.active_sessions[sid]
+                    try:
+                        if outer.delete_status not in (200, 202, 204):
+                            self._send_raw(outer.delete_status, b"delete status")
+                            return
+                        if not valid:
+                            self._send_raw(404, b"unknown session")
+                            return
+                        self._send_raw(outer.delete_status, b"")
+                    except (BrokenPipeError, ConnectionResetError):
+                        if delay <= 0:
+                            raise
+                finally:
+                    outer.delete_completed.set()
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/mcp"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+
+class BatchCapacityAndCleanupTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.private = self.root / "private"
+        self.private.mkdir(mode=0o700)
+        self.state_dir = self.root / "state"
+        self.checkouts = self.root / "checkouts"
+        self.checkouts.mkdir()
+        self.routes = {}
+
+    def _checkout(self, name, route):
+        path = self.checkouts / name
+        path.mkdir(parents=True, exist_ok=True)
+        self.routes[str(path)] = route
+        return path
+
+    def _route_resolver(self, checkout):
+        return self.routes[checkout]
+
+    def _grant(self, name, scope, url, token):
+        token_path = _write_private(self.private / f"{name}.token", token + "\n")
+        grant_path = _write_private(self.private / f"{name}.grant.json", json.dumps({
+            "url": url,
+            "token_file": str(token_path),
+            "scope": dict(scope),
+        }))
+        return grant_path, token_path
+
+    def _manifest(self, items, name="manifest.json"):
+        path = self.private / name
+        _write_private(path, json.dumps({"items": items}))
+        return path
+
+    def _pending_files(self):
+        if not self.state_dir.exists():
+            return []
+        return sorted(p.name for p in self.state_dir.iterdir() if p.name.endswith(".pending.json"))
+
+    def test_capacity_limited_server_enforces_single_session_across_sequential_batch(self):
+        remote = FakeRemote()
+        tokens = [f"tok-repo-{idx}" for idx in range(5)]
+        server = CapacityLimitedMCPServer(remote, max_active_sessions=1, valid_tokens=tokens)
+        self.addCleanup(server.close)
+
+        items = []
+        for idx in range(5):
+            repo = f"repo-{idx}"
+            scope = _make_scope(repo, session_id=f"sess-{idx}", task=f"task-{idx}")
+            checkout = self._checkout(repo, repo)
+            grant, _ = self._grant(repo, scope, server.url, tokens[idx])
+            item = _make_item(checkout, grant, scope, conclusion=f"Verified {repo}.")
+            items.append(item)
+            if idx == 1:
+                remote.add_row(scope, "existing-1", gateway.format_note(scope, item))
+
+        def fail_repo2_readback(args):
+            if args["target_peer_id"] == "repo-2":
+                return {"content": [{"type": "text", "text": "{bad"}]}
+            return None
+
+        remote.list_hook = fail_repo2_readback
+        manifest = self._manifest(items)
+        digest = batch.preview(str(manifest), "pi-sess-cap", route_resolver=self._route_resolver)["digest"]
+
+        out = batch.apply(
+            str(manifest),
+            "pi-sess-cap",
+            digest,
+            state_dir=self.state_dir,
+            route_resolver=self._route_resolver,
+        )
+        statuses = [(r["repo"], r["status"]) for r in out["results"]]
+        self.assertEqual(statuses, [
+            ("repo-0", "verified"),
+            ("repo-1", "already present"),
+            ("repo-2", "blocked"),
+            ("repo-3", "verified"),
+            ("repo-4", "verified"),
+        ])
+        self.assertEqual(server.active_sessions, {})
+        self.assertEqual(len(server.delete_requests), 5)
+        for idx, delete_req in enumerate(server.delete_requests):
+            self.assertEqual(delete_req["auth"], f"Bearer {tokens[idx]}")
+            self.assertEqual(delete_req["workspace"], batch.REQUIRED_WORKSPACE)
+            self.assertEqual(delete_req["protocol"], "2025-03-26")
+            self.assertTrue(delete_req["session_id"].startswith("cap-sess-"))
+        self.assertEqual(len({req["session_id"] for req in server.delete_requests}), 5)
+        serialized = json.dumps(out)
+        for token in tokens:
+            self.assertNotIn(token, serialized)
+
+    def test_capacity_503_generic_503_and_429_block_before_append_without_retry(self):
+        remote = FakeRemote()
+        server = CapacityLimitedMCPServer(remote, max_active_sessions=1, valid_tokens={"tok-a"})
+        self.addCleanup(server.close)
+
+        scope = _make_scope("repo-alpha", session_id="sess-cap-err")
+        checkout = self._checkout("repo-alpha", "repo-alpha")
+        grant, token_path = self._grant("alpha", scope, server.url, "tok-a")
+        manifest = self._manifest([_make_item(checkout, grant, scope)])
+        digest = batch.preview(str(manifest), "pi-sess-err", route_resolver=self._route_resolver)["digest"]
+
+        with server.lock:
+            server.active_sessions["held-elsewhere"] = {
+                "auth": "Bearer other",
+                "workspace": batch.REQUIRED_WORKSPACE,
+                "protocol": "2025-03-26",
+            }
+        out_cap = batch.apply(
+            str(manifest),
+            "pi-sess-err",
+            digest,
+            state_dir=self.state_dir,
+            route_resolver=self._route_resolver,
+        )
+        self.assertEqual(out_cap["results"][0]["status"], "blocked")
+        self.assertIn("too many active sessions", out_cap["results"][0]["reason"])
+        self.assertIn("503", out_cap["results"][0]["reason"])
+        self.assertEqual(len(server.post_requests), 1)
+        self.assertEqual(server.delete_requests, [])
+        self.assertEqual(remote.calls, [])
+        self.assertEqual(self._pending_files(), [])
+
+        with server.lock:
+            server.active_sessions.clear()
+        server.post_requests.clear()
+        server.pre_init_response = (503, b"RAW_GATEWAY_503_BODY /secret/path")
+        out_503 = batch.apply(
+            str(manifest),
+            "pi-sess-err",
+            digest,
+            state_dir=self.state_dir,
+            route_resolver=self._route_resolver,
+        )
+        self.assertEqual(out_503["results"][0]["status"], "blocked")
+        self.assertIn("503", out_503["results"][0]["reason"])
+        self.assertNotIn("too many active sessions", out_503["results"][0]["reason"])
+        serialized_503 = json.dumps(out_503)
+        self.assertNotIn("RAW_GATEWAY_503_BODY", serialized_503)
+        self.assertNotIn("/secret/path", serialized_503)
+        self.assertNotIn(str(token_path), serialized_503)
+        self.assertEqual(len(server.post_requests), 1)
+        self.assertEqual(self._pending_files(), [])
+
+        server.post_requests.clear()
+        server.pre_init_response = (429, b"RAW_RATE_LIMIT_BODY secret-quota")
+        out_429 = batch.apply(
+            str(manifest),
+            "pi-sess-err",
+            digest,
+            state_dir=self.state_dir,
+            route_resolver=self._route_resolver,
+        )
+        self.assertEqual(out_429["results"][0]["status"], "blocked")
+        self.assertIn("429", out_429["results"][0]["reason"])
+        serialized_429 = json.dumps(out_429)
+        self.assertNotIn("RAW_RATE_LIMIT_BODY", serialized_429)
+        self.assertNotIn("secret-quota", serialized_429)
+        self.assertEqual(len(server.post_requests), 1)
+        self.assertEqual(self._pending_files(), [])
+
+    def test_ambiguous_503_retains_pending_marker_cleans_session_and_never_retries(self):
+        remote = FakeRemote()
+        server = CapacityLimitedMCPServer(remote, max_active_sessions=1, valid_tokens={"tok-amb"})
+        self.addCleanup(server.close)
+
+        scope = _make_scope("repo-alpha", session_id="sess-amb-503")
+        checkout = self._checkout("repo-alpha", "repo-alpha")
+        grant, _ = self._grant("alpha", scope, server.url, "tok-amb")
+        item = _make_item(checkout, grant, scope)
+        manifest = self._manifest([item])
+        digest = batch.preview(str(manifest), "pi-sess-amb", route_resolver=self._route_resolver)["digest"]
+
+        def fail_create_with_503(name, _args):
+            if name == "create_conclusions":
+                return (503, b"too many active sessions")
+            return None
+
+        server.tool_http_error_hook = fail_create_with_503
+        out1 = batch.apply(
+            str(manifest),
+            "pi-sess-amb",
+            digest,
+            state_dir=self.state_dir,
+            route_resolver=self._route_resolver,
+        )
+        self.assertEqual(out1["results"][0]["status"], "blocked")
+        self.assertIn("too many active sessions", out1["results"][0]["reason"])
+        self.assertIn("pending marker retained", out1["results"][0]["reason"])
+        self.assertEqual(len(self._pending_files()), 1)
+        self.assertEqual(server.active_sessions, {})
+        self.assertEqual(len(server.delete_requests), 1)
+
+        server.tool_http_error_hook = None
+        remote.calls.clear()
+        out2 = batch.apply(
+            str(manifest),
+            "pi-sess-amb",
+            digest,
+            state_dir=self.state_dir,
+            route_resolver=self._route_resolver,
+        )
+        self.assertEqual(out2["results"][0]["status"], "blocked")
+        self.assertEqual(out2["results"][0]["reason"], "pending conclusion absent on readback; automatic retry disabled")
+        self.assertFalse(any(name == "create_conclusions" for name, _ in remote.calls))
+        self.assertEqual(len(self._pending_files()), 1)
+        self.assertEqual(server.active_sessions, {})
+        self.assertEqual(len(server.delete_requests), 2)
+
+        remote.add_row(scope, "recovered-1", gateway.format_note(scope, item))
+        remote.calls.clear()
+        out3 = batch.apply(
+            str(manifest),
+            "pi-sess-amb",
+            digest,
+            state_dir=self.state_dir,
+            route_resolver=self._route_resolver,
+        )
+        self.assertEqual(out3["results"][0]["status"], "verified")
+        self.assertFalse(any(name == "create_conclusions" for name, _ in remote.calls))
+        self.assertEqual(self._pending_files(), [])
+        self.assertEqual(server.active_sessions, {})
+        self.assertEqual(len(server.delete_requests), 3)
+
+    def test_stateless_405_and_timeout_cleanup_nonfatal_and_releases_lock(self):
+        remote = FakeRemote()
+        server_405 = CapacityLimitedMCPServer(remote, max_active_sessions=1, valid_tokens={"tok-405"})
+        server_405.delete_status = 405
+        self.addCleanup(server_405.close)
+
+        scope = _make_scope("repo-alpha", session_id="sess-405")
+        checkout = self._checkout("repo-alpha", "repo-alpha")
+        grant, _ = self._grant("alpha-405", scope, server_405.url, "tok-405")
+        manifest = self._manifest([_make_item(checkout, grant, scope)], "m405.json")
+        digest = batch.preview(str(manifest), "pi-sess-nf", route_resolver=self._route_resolver)["digest"]
+
+        out_405 = batch.apply(
+            str(manifest),
+            "pi-sess-nf",
+            digest,
+            state_dir=self.state_dir,
+            route_resolver=self._route_resolver,
+        )
+        self.assertEqual(out_405["results"][0]["status"], "verified")
+        self.assertEqual(len(server_405.delete_requests), 1)
+        self.assertEqual(self._pending_files(), [])
+
+        server_stateless = CapacityLimitedMCPServer(
+            FakeRemote(), max_active_sessions=1, valid_tokens={"tok-sl"}, stateless=True
+        )
+        self.addCleanup(server_stateless.close)
+        scope_sl = _make_scope("repo-beta", session_id="sess-sl")
+        co_sl = self._checkout("repo-beta", "repo-beta")
+        gr_sl, _ = self._grant("beta-sl", scope_sl, server_stateless.url, "tok-sl")
+        m_sl = self._manifest([_make_item(co_sl, gr_sl, scope_sl)], "msl.json")
+        d_sl = batch.preview(str(m_sl), "pi-sess-nf", route_resolver=self._route_resolver)["digest"]
+        out_sl = batch.apply(
+            str(m_sl),
+            "pi-sess-nf",
+            d_sl,
+            state_dir=self.state_dir,
+            route_resolver=self._route_resolver,
+        )
+        self.assertEqual(out_sl["results"][0]["status"], "verified")
+        self.assertEqual(server_stateless.delete_requests, [])
+
+        server_slow = CapacityLimitedMCPServer(FakeRemote(), max_active_sessions=1, valid_tokens={"tok-slow"})
+        server_slow.delete_delay = 0.25
+        self.addCleanup(server_slow.close)
+        scope_slow = _make_scope("repo-gamma", session_id="sess-slow")
+        co_slow = self._checkout("repo-gamma", "repo-gamma")
+        gr_slow, _ = self._grant("gamma-slow", scope_slow, server_slow.url, "tok-slow")
+        m_slow = self._manifest([_make_item(co_slow, gr_slow, scope_slow)], "mslow.json")
+        d_slow = batch.preview(str(m_slow), "pi-sess-nf", route_resolver=self._route_resolver)["digest"]
+
+        with mock.patch.object(gateway, "CLOSE_TIMEOUT", 0.05):
+            out_slow = batch.apply(
+                str(m_slow),
+                "pi-sess-nf",
+                d_slow,
+                state_dir=self.state_dir,
+                route_resolver=self._route_resolver,
+            )
+        self.assertEqual(out_slow["results"][0]["status"], "verified")
+        self.assertEqual(self._pending_files(), [])
+        self.assertTrue(server_slow.delete_completed.wait(timeout=2.0))
+        self.assertEqual(server_slow.active_sessions, {})
+
+        server_slow.delete_delay = 0.0
+        server_slow.delete_completed.clear()
+        out_rerun = batch.apply(
+            str(m_slow),
+            "pi-sess-nf",
+            d_slow,
+            state_dir=self.state_dir,
+            route_resolver=self._route_resolver,
+        )
+        self.assertEqual(out_rerun["results"][0]["status"], "already present")
+        self.assertTrue(server_slow.delete_completed.wait(timeout=2.0))
+        self.assertEqual(server_slow.active_sessions, {})
+
+
 if __name__ == "__main__":
     unittest.main()
