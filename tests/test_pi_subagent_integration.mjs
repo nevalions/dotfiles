@@ -82,6 +82,7 @@ if (process.argv.includes("--no-session")) {
       process.env.PI_TEAM_SUBAGENT_TIMEOUT_MS = "18000";
       const closing = await execute("finish");
       assert.equal(closing.details.results[0].status, "failed");
+      assert.equal(closing.details.results[0].reviewInterruption, "watchdog timeout");
       assert.match(closing.content[0].text, /after its turn ended.*within 10000 ms/);
 
       const isolated = await execute("isolation");
@@ -92,7 +93,9 @@ if (process.argv.includes("--no-session")) {
       assert.equal(invalid.details.results[0].exitCode, null);
       assert.match(invalid.details.results[0].blocker, /not an accessible directory/);
       assert.match((await execute("hang", ".")).details.results[0].blocker, /absolute path/);
-      assert.match((await execute("empty")).details.results[0].blocker, /without a final assistant response/);
+      const empty = (await execute("empty")).details.results[0];
+      assert.match(empty.blocker, /without a final assistant response/);
+      assert.equal(empty.reviewInterruption, "missing final response");
       assert.match((await execute("quota")).details.results[0].blocker, /provider rate or quota limit/);
     } finally {
       if (previousLimit === undefined) delete process.env.PI_TEAM_SUBAGENT_TIMEOUT_MS;

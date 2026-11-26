@@ -15,7 +15,11 @@ export function cwdBlocker(requested, effective) {
 }
 
 export function childBlocker(result, outcome) {
-  if (outcome.timeoutError || result.status === "aborted") return;
+  if (result.status === "aborted") return;
+  if (outcome.timeoutError) {
+    result.reviewInterruption = "watchdog timeout";
+    return;
+  }
   if (outcome.spawnError) {
     return "Subagent CLI could not start. Check the managed Pi installation and the requested cwd.";
   }
@@ -28,6 +32,7 @@ export function childBlocker(result, outcome) {
   }
   if (last?.stopReason === "length") return "Subagent exceeded its output limit before completing the assignment.";
   if (!last?.content.some((part) => part.type === "text" && part.text.trim())) {
+    result.reviewInterruption = "missing final response";
     return "Subagent CLI exited without a final assistant response. Check the child CLI and its provider configuration.";
   }
 }

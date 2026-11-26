@@ -79,10 +79,15 @@ export function installCoordinatorRecovery(pi) {
 
 export async function readOnlyAttempt(ctx, resolved, signal, attempt) {
   const result = await attempt(resolved);
-  if (!result.routeIssue || signal?.aborted) return result;
+  if (signal?.aborted || (!result.reviewInterruption && !result.routeIssue)) return result;
   const role = resolved.agent;
   if (role?.source !== "user" || !["scout", "planner", "planner-quick", "reviewer", "reviewer-quick"].includes(role.name) ||
       !role.tools?.length || !role.tools.every(t => ["read", "grep", "find", "ls"].includes(t))) return result;
+  if (result.reviewInterruption) {
+    if (!["reviewer", "reviewer-quick"].includes(role.name)) return result;
+    warn(ctx, `${role.name}: ${result.reviewInterruption}; retrying the same read-only review once.`);
+    return attempt(resolved);
+  }
   const next = alternate(ctx.modelRegistry, result.model);
   if (!next) return result;
   const effort = role.model?.match(/:(low|medium|high|xhigh|max)$/)?.[0] ?? "";

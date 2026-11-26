@@ -47,6 +47,31 @@ test("only read-only team roles retry a routing failure, exactly once with the s
   assert.deepEqual(thirdCalls[1],{...thirdRole,model:"openai-codex/gpt-6.1-sol:medium"});
 });
 
+test("an interrupted user reviewer gets one fresh attempt; verdicts, cancellations and other roles do not", async () => {
+  const role = {name:"reviewer",source:"user",tools:["read","grep"],model:"openai-codex/gpt-6.1-sol:high"};
+  const timeout = {status:"failed", reviewInterruption:"watchdog timeout"};
+  const empty = {status:"failed", reviewInterruption:"missing final response"};
+  const verdict = {status:"completed", content:"changes requested"};
+  const aborted = AbortSignal.abort();
+  for (const [agent, first, signal, second] of [
+    [role, timeout, undefined, verdict],
+    [{...role,name:"reviewer-quick"}, empty, undefined, timeout],
+    [role, timeout, undefined, {status:"failed",routeIssue:"quota"}],
+    [role, verdict], [role, timeout, aborted], [role, {status:"failed"}],
+    [{...role,name:"planner"}, timeout], [{...role,source:"project"}, empty],
+    [{...role,tools:["edit"]}, timeout],
+  ]) {
+    const resolved = {agent, cwd:"/checkout"};
+    const attempts = [];
+    const result = await readOnlyAttempt(ctx, resolved, signal, async request => {
+      attempts.push(request);
+      return attempts.length === 1 ? first : second;
+    });
+    assert.deepEqual(attempts, second ? [resolved,resolved] : [resolved]);
+    assert.equal(result, second ?? first);
+  }
+});
+
 test("routing decisions distinguish unavailable providers from task and permission failures", () => {
   for (const [text, reason] of [
     ["You have exhausted your capacity on this model", "provider rate or quota limit"],
