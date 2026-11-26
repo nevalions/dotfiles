@@ -1,6 +1,7 @@
-const routes = ["openai-codex/gpt-6.1-sol", "opencode-go/deepseek-v4.1-flash"];
+export const flashWriterModel = "opencode-go/deepseek-v4.1-flash";
+const routes = ["openai-codex/gpt-6.1-sol", flashWriterModel];
 const writeRoutes = [
-  {ref: "opencode-go/deepseek-v4.1-flash"},
+  {ref: flashWriterModel},
   {ref: "openai-codex/gpt-6.1-sol", thinking: "medium"},
 ];
 

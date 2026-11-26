@@ -4,7 +4,7 @@ import type { Stats } from "node:fs";
 import { lstat, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
-import { activityLease, routeIssue, warn, writeAlternate } from "../team/team-health.mjs";
+import { activityLease, flashWriterModel, routeIssue, warn, writeAlternate } from "../team/team-health.mjs";
 import { runAgyStream } from "../team/agy-stream.mjs";
 import { worktreeSampler } from "../team/worktree-activity.mjs";
 import { Type } from "typebox";
@@ -258,7 +258,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
   pi.on("before_agent_start", () => { interrupted = undefined; offeredTimeout = false; });
   pi.registerFlag("agy-model", { type: "string", default: defaultModel, description: "Plain Pi worker model ID from agy models" });
   pi.registerFlag("agy-effort", { type: "string", default: defaultEffort, description: "Plain Pi worker effort: low, medium, high, xhigh, or max" });
-  pi.registerFlag("agy-team", { type: "boolean", default: false, description: "Require a linked task worktree and pin the team worker to Hydrogen High" });
+  pi.registerFlag("agy-team", { type: "boolean", default: false, description: "Require a linked task worktree and enable the scoped team writers" });
 
   pi.registerTool({
     name: "agy_worker",
@@ -270,6 +270,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
     ],
     executionMode: "sequential",
     parameters: Type.Object({
+      flashFirst: Type.Optional(Type.Boolean({ description: "Team only: prefer the restricted DeepSeek Flash writer for a fresh, testable edit; if not configured, start AGY instead. Omit for AGY or recovery." })),
       resumeAfterTimeout: Type.Optional(Type.Boolean({ description: "Team only: use the one offered continuation after inspecting the partial diff, with a brief for remaining work only." })),
       resumeWithFallback: Type.Optional(Type.Boolean({ description: "Team only: after a routing failure and inspection of partial edits, resume with the offered restricted Pi writer." })),
       task: Type.String({ minLength: 1, maxLength: 16000 }),
@@ -277,7 +278,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       issue: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", description: "Existing Beads issue claimed by the coordinator (pi-team only)" })),
       actor: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9:._-]{0,159}$", description: "Exact unique Beads claim actor (pi-team only)" })),
     }, { additionalProperties: false }),
-    async execute(_id, { task, cwd: worktree, issue, actor, resumeWithFallback, resumeAfterTimeout }, signal, onUpdate, ctx) {
+    async execute(_id, { task, cwd: worktree, issue, actor, flashFirst, resumeWithFallback, resumeAfterTimeout }, signal, onUpdate, ctx) {
       const team = pi.getFlag("agy-team") === true;
       let model = team ? defaultModel : pi.getFlag("agy-model");
       let effort = team ? defaultEffort : pi.getFlag("agy-effort");
@@ -300,10 +301,21 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
         if (git.code !== 0 || root !== cwd || !gitDir || !commonDir || gitDir === commonDir) {
           throw new Error("AGY team worker requires the root of a linked Git worktree, not the primary checkout.");
         }
-      } else if (resumeAfterTimeout !== undefined || resumeWithFallback !== undefined || worktree !== undefined || issue !== undefined || actor !== undefined) {
+      } else if (flashFirst !== undefined || resumeAfterTimeout !== undefined || resumeWithFallback !== undefined || worktree !== undefined || issue !== undefined || actor !== undefined) {
         throw new Error("Start plain Pi in the desired workspace and omit cwd, issue and actor.");
       }
       const key = JSON.stringify([cwd, issue, actor]);
+      if (flashFirst) {
+        if (interrupted || recovery?.key === key || resumeAfterTimeout || resumeWithFallback) {
+          throw new Error("Flash-first is for fresh assignments, not recovery. Inspect partial edits and follow the offered recovery path.");
+        }
+        if (ctx.modelRegistry?.getAvailable().some(m => `${m.provider}/${m.id}` === flashWriterModel)) {
+          model = flashWriterModel;
+        } else {
+          warn(ctx, "Flash-first model not configured; starting the standard AGY writer instead.");
+        }
+      }
+      const restricted = Boolean((flashFirst && model === flashWriterModel) || resumeWithFallback);
       if (interrupted || resumeAfterTimeout) {
         if (!resumeAfterTimeout || !interrupted || interrupted.key !== key || resumeWithFallback ||
             task.trim() === interrupted.task) {
@@ -315,7 +327,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       if (cwd === "/" || (homeFromWorkspace !== ".." && !homeFromWorkspace.startsWith("../"))) {
         throw new Error("AGY requires a workspace that does not contain your home directory. Start Pi in the project directory.");
       }
-      const sandbox = namespaceArgs(cwd, resumeWithFallback ? await realpath(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi/agent")) : undefined);
+      const sandbox = namespaceArgs(cwd, restricted ? await realpath(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi/agent")) : undefined);
       const isolation = await pi.exec("bwrap", [...sandbox, "true"], { cwd, signal, timeout: 5000, maxBuffer: 4096 });
       signal?.throwIfAborted();
       if (isolation.code !== 0) throw new Error("AGY requires working bubblewrap PID isolation; no worker was started.");
@@ -342,8 +354,9 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
         for (const provider of recovery.excluded) attempted.add(provider);
         attempted.add(model.split("/")[0]);
       }
+      if (flashFirst && restricted) attempted.add(flashWriterModel.split("/")[0]);
       const details = { model, effort, cwd };
-      const launch = `${resumeWithFallback ? "restricted Pi writer" : "agy"} (${model}, ${effort}) in ${cwd}`;
+      const launch = `${restricted ? "restricted Pi writer" : "agy"} (${model}, ${effort}) in ${cwd}`;
       onUpdate?.({ content: [{ type: "text", text: `Running ${launch}…` }], details });
       const prompt = [
         "Work only on the assignment below in the current directory. Do not commit, push, deploy, change tracker state, or delegate.",
@@ -390,7 +403,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       let sampling: Promise<void> | undefined;
       const tick = () => sampling ??= sample().catch(() => {}).finally(() => { sampling = undefined; });
       let samplingTimer;
-      const writerArgs = resumeWithFallback
+      const writerArgs = restricted
         ? [join(homedir(), ".pi/agent/bin/pi.managed"), "--mode", "text", "-p", "--no-approve", "--no-session", "--no-extensions",
           "--no-mcp", "--no-skills", "--tools", "read,grep,find,ls,edit,write", "--model", model, "--thinking", effort, prompt]
         : ["agy", "--model", model, "--effort", effort, "--mode", "accept-edits",
@@ -405,7 +418,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
           }
           runningSignal.throwIfAborted();
           const args = ["--no-fork", "--nonblock", "--conflict-exit-code", "73", cwd, "bwrap", ...sandbox, ...writerArgs];
-          if (resumeWithFallback) return await pi.exec("flock", args, { cwd, signal: runningSignal, maxBuffer: 256 * 1024 });
+          if (restricted) return await pi.exec("flock", args, { cwd, signal: runningSignal, maxBuffer: 256 * 1024 });
           return await stream("flock", args, {
             cwd, signal: runningSignal, timeout: team ? undefined : timeoutMs,
             onProgress: onUpdate && ((summary: string) => onUpdate({ content: [{ type: "text", text: `AGY · ${summary}` }], details })),
@@ -424,7 +437,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       if (signal?.aborted) throw new Error("AGY was cancelled; inspect the workspace for partial changes.");
       if (result.truncated) throw new Error("AGY exceeded its output limit; inspect the workspace for partial changes.");
       let report: { status?: unknown; response?: unknown; denied_actions?: unknown; error?: unknown } | null = null;
-      if (resumeWithFallback) report = {status: result.code === 0 ? "SUCCESS" : "ERROR", response: result.stdout};
+      if (restricted) report = {status: result.code === 0 ? "SUCCESS" : "ERROR", response: result.stdout};
       else try { report = JSON.parse(result.stdout); } catch { /* Empty or non-JSON CLI diagnostic. */ }
       if (Array.isArray(report?.denied_actions) && report.denied_actions.length > 0) {
         throw new Error(
@@ -435,7 +448,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       }
       if (result.code === 73 && !result.stdout) throw new Error("The worktree lock is busy or AGY exited before reporting; check for an active writer before retrying.");
       if (expiry) {
-        if (team && !resumeWithFallback && !offeredTimeout && result.killed && !result.stdout &&
+        if (team && !restricted && !offeredTimeout && result.killed && !result.stdout &&
             "protocolError" in result && !result.protocolError && !result.diagnosticIssue && !routeIssue(result.stderr)) {
           const idle = await pi.exec("flock", ["--nonblock", cwd, "true"], { cwd, signal, timeout: 5000, maxBuffer: 4096 });
           signal?.throwIfAborted();
@@ -450,11 +463,11 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       if (result.killed && !("protocolError" in result && result.protocolError)) throw new Error("AGY exceeded its 10-minute timeout; inspect the workspace for partial changes.");
       if (team && (result.code !== 0 || (report?.status && report.status !== "SUCCESS"))) {
         const diagnostic = [result.stderr, report?.error && JSON.stringify(report.error),
-          !resumeWithFallback && (report ? report.response : result.stdout)].filter(Boolean).join("\n");
+          !restricted && (report ? report.response : result.stdout)].filter(Boolean).join("\n");
         const problem = /bwrap: execvp .*: (?:No such file or directory|Permission denied)/i.test(result.stderr)
           ? "CLI unavailable" : ("diagnosticIssue" in result && result.diagnosticIssue) || routeIssue(diagnostic);
         if (problem) {
-          const next = writeAlternate(ctx.modelRegistry, resumeWithFallback ? model : undefined, attempted);
+          const next = writeAlternate(ctx.modelRegistry, restricted ? model : undefined, attempted);
           if (next) recovery = {key, model: next.ref, thinking: next.thinking, excluded: attempted};
           const nextEffort = next ? next.thinking ?? defaultEffort : undefined;
           const message = `${launch}: ${problem}. Inspect partial edits and revalidate the claim. ${next

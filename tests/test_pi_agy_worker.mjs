@@ -187,6 +187,49 @@ function assertRestrictedWriterArgs(args, agentDir, model, thinking) {
   assert.equal(args[args.indexOf('--thinking') + 1], thinking);
 }
 
+const flashModel = {provider: "opencode-go", id: "deepseek-v4.1-flash"};
+const flashRegistry = {getAvailable: () => [flashModel, {provider: "openai-codex", id: "gpt-6.1-sol"}]};
+const freshFlash = execute => execute(undefined, undefined, flashRegistry, undefined, {flashFirst: true});
+
+test('Flash-first launches only the pinned restricted writer under the claim and lock', async t => {
+  const dir = await withTempAgentDir(t);
+  const {calls, execute} = await fixture(t, {launch: () => ({...ok, stdout: 'edited'})});
+  const result = await freshFlash(execute);
+  const launches = calls.filter(([,args]) => args.includes('--no-fork'));
+  assert.equal(launches.length, 1);
+  assert.equal(heartbeatCalls(calls).length, 1);
+  assertRestrictedWriterArgs(launches[0][1], dir, 'opencode-go/deepseek-v4.1-flash', 'high');
+  assert.match(result.content[0].text, /restricted Pi writer.*edited/s);
+});
+
+test('Flash-first fails before launch without team mode or claim', async t => {
+  await withTempAgentDir(t);
+  const plain = await fixture(t, {team:false});
+  await assert.rejects(freshFlash(plain.execute), /plain Pi/);
+  const f = await fixture(t, {heartbeat: async () => ({...ok, code:1})});
+  await assert.rejects(freshFlash(f.execute), /Cannot renew/);
+  assert.equal([...plain.calls, ...f.calls].filter(([,args]) => args.includes('--no-fork')).length, 0);
+});
+
+test('Flash-first uses the ordinary AGY path when Flash is not configured, before any edits', async t => {
+  const {calls, execute} = await fixture(t);
+  const result = await execute(undefined, undefined, {getAvailable: () => []}, undefined, {flashFirst:true});
+  assert.equal(result.details.model, 'gemini-4-hydrogen-high');
+  assert.equal(calls.filter(([,args]) => args.includes('--no-fork')).length, 1);
+  assert.equal(heartbeatCalls(calls).length, 1);
+});
+
+test('Flash-first offers Sol on provider failure only after inspection, and never loops back to Flash', async t => {
+  const dir = await withTempAgentDir(t);
+  const {calls, execute} = await fixture(t, {launch: () => ({...ok, code:1, stderr:'429 rate limit exceeded'})});
+  await assert.rejects(freshFlash(execute), /resumeWithFallback for openai-codex.*sol .*medium/);
+  await assert.rejects(freshFlash(execute), /fresh assignments/);
+  assert.equal(heartbeatCalls(calls).length, 1);
+  await assert.rejects(execute(undefined, true, flashRegistry), /No approved fallback remains/);
+  assertRestrictedWriterArgs(calls.filter(([,args]) => args.includes('--no-fork')).at(-1)[1], dir, 'openai-codex/gpt-6.1-sol', 'medium');
+  await assert.rejects(execute(undefined, true, flashRegistry), /No pending/);
+});
+
 test('team offers a scoped fallback without replaying a writer; resumed writer retains isolation', async t => {
   const agentDir = await withTempAgentDir(t);
   const modelRegistry = {getAvailable: () => [{provider: "openai-codex", id: "gpt-6.1-sol"}]};
