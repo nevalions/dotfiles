@@ -42,6 +42,17 @@ TERMINAL_STATUSES = frozenset({'completed', 'cancelled'})
 
 REV_RE = re.compile(r'^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$')
 SECRET_PREFIXES = ('-----BEGIN ', 'Bearer ', 'ghp_', 'github_pat_', 'sk-', 'AKIA')
+GIT_ENV_OVERRIDES = (
+    'GIT_DIR',
+    'GIT_WORK_TREE',
+    'GIT_COMMON_DIR',
+    'GIT_INDEX_FILE',
+    'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+    'GIT_CONFIG',
+    'GIT_CONFIG_PARAMETERS',
+    'GIT_CONFIG_COUNT',
+)
 
 SCHEMA_STATEMENTS = (
     """
@@ -189,14 +200,71 @@ def validate_evidence(evidence: str) -> str:
     return text
 
 
+def _clean_git_env() -> dict[str, str]:
+    """Return a clean environment for read-only Git identity queries."""
+    env = {k: v for k, v in os.environ.items() if k not in GIT_ENV_OVERRIDES}
+    env['GIT_CONFIG_NOSYSTEM'] = '1'
+    env['GIT_CONFIG_GLOBAL'] = '/dev/null'
+    env['GIT_TERMINAL_PROMPT'] = '0'
+    return env
+
+
+def _has_purported_git_metadata(path: Path) -> bool:
+    """Return True if path or any ancestor carries Git repository metadata."""
+    for cur in (path, *path.parents):
+        if os.path.lexists(cur / '.git') or cur.name == '.git':
+            return True
+    return (path / 'HEAD').is_file() and (path / 'objects').is_dir()
+
+
 def canonicalize_repo(repo: str) -> str:
-    """Canonicalize a repository path or identifier without running subprocesses."""
+    """Canonicalize a repository path via real Git common-dir, failing closed on lookup errors."""
     raw = repo.strip()
     if not raw:
         raise CliError('repository argument must not be empty')
     expanded = os.path.expanduser(raw)
-    if raw in ('.', '..') or raw.startswith(('/', './', '../', '~/')) or os.path.exists(expanded):
-        return os.path.realpath(expanded)
+    is_path = (
+        raw in ('.', '..')
+        or raw.startswith(('/', './', '../', '~/'))
+        or os.path.exists(expanded)
+        or os.path.lexists(expanded)
+    )
+    if is_path:
+        if not os.path.exists(expanded):
+            raise CliError(f'repository path does not exist or is unresolvable: {repo!r}')
+        real = os.path.realpath(expanded)
+        probe = real if os.path.isdir(real) else os.path.dirname(real)
+        if not probe or not os.path.isdir(probe):
+            raise CliError(f'unable to resolve repository directory: {repo!r}')
+        try:
+            proc = subprocess.run(
+                ['git', '-C', probe, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                env=_clean_git_env(),
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise CliError(f'git repository identity lookup failed for {repo!r}: {exc}') from None
+        if proc.returncode == 0:
+            if '\x00' in proc.stdout:
+                raise CliError(f'malformed git common-dir output for {repo!r}')
+            lines = proc.stdout.splitlines()
+            if len(lines) != 1:
+                raise CliError(f'malformed git common-dir output for {repo!r}')
+            common_dir = lines[0].strip()
+            if not common_dir or not os.path.isabs(common_dir) or not os.path.isdir(common_dir):
+                raise CliError(f'unresolvable git common-dir output for {repo!r}')
+            return os.path.realpath(common_dir)
+        is_confirmed_nonrepo = (
+            proc.returncode == 128
+            and 'not a git repository' in proc.stderr.lower()
+            and not _has_purported_git_metadata(Path(probe))
+        )
+        if not is_confirmed_nonrepo:
+            raise CliError(f'unable to resolve git repository identity for {repo!r} (exit {proc.returncode})')
+        return real
     cleaned = raw.rstrip('/')
     if not cleaned:
         raise CliError(f'invalid repository identifier: {repo!r}')
@@ -316,6 +384,24 @@ def fetch_run(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row:
     return row
 
 
+def is_dispatcher_owned(conn: sqlite3.Connection, run_id: str) -> bool:
+    """Return True if run_id is reserved and owned by pi-team-dispatch."""
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='dispatch_runs'"
+    ).fetchone()
+    if has_table is None:
+        return False
+    return conn.execute('SELECT 1 FROM dispatch_runs WHERE run_id = ?', (run_id,)).fetchone() is not None
+
+
+def require_interactive_run(conn: sqlite3.Connection, run_id: str) -> None:
+    """Refuse interactive mutations against dispatcher-owned reservation rows."""
+    if is_dispatcher_owned(conn, run_id):
+        raise CliError(
+            f'run {run_id} is owned by pi-team-dispatch; interactive wait/checkpoint/cancel refused'
+        )
+
+
 def fetch_active_wait(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row | None:
     """Fetch the unresolved wait for a run if one exists."""
     return conn.execute(
@@ -379,7 +465,13 @@ def build_run_dict(conn: sqlite3.Connection, run: sqlite3.Row) -> dict:
     }
 
 
-def compute_next_step(run: sqlite3.Row, active_wait: sqlite3.Row | None, now: datetime) -> dict:
+def compute_next_step(
+    run: sqlite3.Row,
+    active_wait: sqlite3.Row | None,
+    now: datetime,
+    *,
+    dispatcher_owned: bool = False,
+) -> dict:
     """Compute the read-only resume guidance for a run without mutating state."""
     run_id = run['run_id']
     if run['status'] in TERMINAL_STATUSES:
@@ -390,6 +482,15 @@ def compute_next_step(run: sqlite3.Row, active_wait: sqlite3.Row | None, now: da
             'action': 'none',
             'authorized': False,
             'message': f'Run {run_id} is terminal ({run["status"]}); no further action.',
+        }
+    if dispatcher_owned:
+        return {
+            'run_id': run_id,
+            'status': run['status'],
+            'current_stage': run['current_stage'],
+            'action': 'dispatcher_managed',
+            'authorized': False,
+            'message': f'Run {run_id} is managed by pi-team-dispatch; interactive actions are disabled.',
         }
     stage = run['current_stage']
     if active_wait is not None:
@@ -463,14 +564,14 @@ def cmd_start(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     now = format_utc(utc_now())
     run_id = args.run_id or f'run-{utc_now().strftime("%Y%m%dT%H%M%SZ")}-{secrets.token_hex(4)}'
     with open_write_tx(db_path) as conn:
-        existing = conn.execute(
-            "SELECT run_id, status FROM runs WHERE repo_key = ? AND status IN ('active', 'waiting')",
-            (repo_key,),
-        ).fetchone()
-        if existing is not None:
-            raise CliError(
-                f'active run already exists for {repo_key}: {existing["run_id"]} ({existing["status"]})'
-            )
+        active_rows = conn.execute(
+            "SELECT run_id, repo_key, status FROM runs WHERE status IN ('active', 'waiting')"
+        ).fetchall()
+        for existing in active_rows:
+            if existing['repo_key'] == repo_key or canonicalize_repo(existing['repo_key']) == repo_key:
+                raise CliError(
+                    f'active run already exists for {repo_key}: {existing["run_id"]} ({existing["status"]})'
+                )
         try:
             conn.execute(
                 """
@@ -530,7 +631,9 @@ def cmd_resume(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     with open_read_only(db_path) as conn:
         run = fetch_run(conn, args.run_id)
         active_wait = fetch_active_wait(conn, run['run_id'])
-        return 0, compute_next_step(run, active_wait, now)
+        return 0, compute_next_step(
+            run, active_wait, now, dispatcher_owned=is_dispatcher_owned(conn, run['run_id'])
+        )
 
 
 def cmd_wait(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
@@ -559,6 +662,7 @@ def cmd_wait(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     now = format_utc(utc_now())
     with open_write_tx(db_path) as conn:
         run = fetch_run(conn, args.run_id)
+        require_interactive_run(conn, run['run_id'])
         require_writable_stage(run, stage)
         active_wait = fetch_active_wait(conn, run['run_id'])
         if active_wait is not None:
@@ -605,6 +709,7 @@ def cmd_checkpoint(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
 
     with open_write_tx(db_path) as conn:
         run = fetch_run(conn, args.run_id)
+        require_interactive_run(conn, run['run_id'])
         require_writable_stage(run, stage)
         active_wait = fetch_active_wait(conn, run['run_id'])
         generation = getattr(args, 'generation', None)
@@ -770,6 +875,7 @@ def cmd_monitor(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
             raise CliError('ledger CI monitoring requires --pr; post-merge monitoring is read-only')
         with open_read_only(db_path) as conn:
             run = fetch_run(conn, args.run_id)
+            require_interactive_run(conn, run['run_id'])
             require_writable_stage(run, 'ci')
             existing = fetch_active_wait(conn, args.run_id)
         watch_generation = getattr(args, 'watch_generation', None)
@@ -841,6 +947,7 @@ def cmd_cancel(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     now = format_utc(utc_now())
     with open_write_tx(db_path) as conn:
         run = fetch_run(conn, args.run_id)
+        require_interactive_run(conn, run['run_id'])
         require_writable_stage(run, stage)
         active_wait = fetch_active_wait(conn, run['run_id'])
         if active_wait is not None:
@@ -925,13 +1032,22 @@ def cmd_watch(args: argparse.Namespace, db_path: Path) -> tuple[int, list[dict]]
     now_dt = utc_now()
     now_iso = format_utc(now_dt)
     with open_write_tx(db_path) as conn:
+        has_dispatch = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='dispatch_runs'"
+        ).fetchone() is not None
+        dispatch_filter = (
+            ' AND NOT EXISTS (SELECT 1 FROM dispatch_runs d WHERE d.run_id = r.run_id)'
+            if has_dispatch
+            else ''
+        )
         pending = conn.execute(
-            """
+            f"""
             SELECT w.*, r.repo_key, r.current_stage
             FROM waits w
             JOIN runs r ON r.run_id = w.run_id
             WHERE r.status = 'waiting'
               AND w.resolved_at IS NULL
+              {dispatch_filter}
               AND NOT EXISTS (
                   SELECT 1 FROM notices n
                   WHERE n.run_id = w.run_id AND n.wait_generation = w.generation

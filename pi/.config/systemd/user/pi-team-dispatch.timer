@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll Pi Team unattended dispatcher periodically (opt-in)
+
+[Timer]
+OnStartupSec=2m
+OnUnitInactiveSec=5m
+AccuracySec=15s
+Unit=pi-team-dispatch.service
+
+[Install]
+WantedBy=timers.target

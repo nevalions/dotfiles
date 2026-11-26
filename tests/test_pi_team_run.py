@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
 import runpy
@@ -175,7 +176,7 @@ class PiTeamRunTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(state_dir.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE(db_path.stat().st_mode), 0o600)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(sqlite3.connect(str(db_path))) as conn, conn:
             version = conn.execute('PRAGMA user_version').fetchone()[0]
             self.assertEqual(version, 1)
             conn.execute('PRAGMA user_version = 99')
@@ -420,6 +421,71 @@ class PiTeamRunTests(unittest.TestCase):
 
         restarted = self.run_json('start', str(self.repo_dir))
         self.assertEqual(restarted['status'], 'active')
+
+    def test_canonicalize_repo_fails_closed_on_timeout_error_and_malformed_git_identity(self) -> None:
+        git_repo = Path(self.tmp.name) / 'git-repo'
+        worktree = Path(self.tmp.name) / 'git-wt'
+        git_repo.mkdir()
+        git_env = {
+            'PATH': os.environ.get('PATH', '/usr/bin:/bin'),
+            'HOME': '/nonexistent',
+            'LANG': 'C.UTF-8',
+            'LC_ALL': 'C.UTF-8',
+            'GIT_CONFIG_NOSYSTEM': '1',
+            'GIT_CONFIG_GLOBAL': '/dev/null',
+            'GIT_TERMINAL_PROMPT': '0',
+        }
+        subprocess.run(['git', '-C', str(git_repo), 'init', '-b', 'main'], env=git_env, check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(git_repo), 'config', 'user.name', 'Test'], env=git_env, check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(git_repo), 'config', 'user.email', 'test@local.invalid'], env=git_env, check=True, capture_output=True)
+        (git_repo / 'README.md').write_text('hello\n', encoding='utf-8')
+        subprocess.run(['git', '-C', str(git_repo), 'add', 'README.md'], env=git_env, check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(git_repo), 'commit', '-m', 'init'], env=git_env, check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(git_repo), 'worktree', 'add', str(worktree), '-b', 'wt'], env=git_env, check=True, capture_output=True)
+
+        started = self.run_json('start', str(git_repo))
+        self.assertEqual(started['repo_key'], str((git_repo / '.git').resolve()))
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_start = script['cmd_start']
+        canonicalize = script['canonicalize_repo']
+        parser = script['build_parser']()
+        db_path = self.xdg_state / 'pi-team-run' / 'state.db'
+
+        with patch.dict(canonicalize.__globals__, {'subprocess': type('Sub', (), {
+            'TimeoutExpired': subprocess.TimeoutExpired,
+            'run': staticmethod(lambda *a, **kw: (_ for _ in ()).throw(subprocess.TimeoutExpired(['git'], 5))),
+        })()}):
+            with self.assertRaisesRegex(script['CliError'], 'identity lookup failed'):
+                cmd_start(parser.parse_args(['start', str(worktree)]), db_path)
+
+        with patch.dict(canonicalize.__globals__, {'subprocess': type('Sub', (), {
+            'TimeoutExpired': subprocess.TimeoutExpired,
+            'run': staticmethod(lambda *a, **kw: (_ for _ in ()).throw(OSError('git unavailable'))),
+        })()}):
+            with self.assertRaisesRegex(script['CliError'], 'identity lookup failed'):
+                cmd_start(parser.parse_args(['start', str(worktree)]), db_path)
+
+        bad_out = subprocess.CompletedProcess(['git'], 0, stdout='relative/path\n', stderr='')
+        with patch.dict(canonicalize.__globals__, {'subprocess': type('Sub', (), {
+            'TimeoutExpired': subprocess.TimeoutExpired,
+            'run': staticmethod(lambda *a, **kw: bad_out),
+        })()}):
+            with self.assertRaisesRegex(script['CliError'], 'unresolvable git common-dir'):
+                canonicalize(str(worktree))
+
+        broken_wt = Path(self.tmp.name) / 'broken-wt'
+        broken_wt.mkdir()
+        (broken_wt / '.git').write_text('gitdir: /nonexistent/gitdir\n', encoding='utf-8')
+        with self.assertRaisesRegex(script['CliError'], 'unable to resolve git repository identity'):
+            canonicalize(str(broken_wt))
+
+        active = self.run_json('status')
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]['run_id'], started['run_id'])
+
+        self.assertEqual(canonicalize(str(self.repo_dir)), str(self.repo_dir.resolve()))
+        self.assertEqual(canonicalize('opaque-id'), 'opaque-id')
 
 
 if __name__ == '__main__':
