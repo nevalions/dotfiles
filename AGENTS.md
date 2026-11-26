@@ -81,6 +81,12 @@ plugins answer `worktree.created`, and that absence is what keeps them apart.
 - Maintain backward compatibility when possible
 - Test changes locally before committing
 
+## Pi Team release notes (standing wiki authorization)
+
+For this Dotfiles repository only, the top-level interactive Pi session (plain Pi or Pi Team coordinator) has standing authorization for **batch ingest without a separate content-confirmation prompt** at shared closeout. After verifying a material Pi Team behavior change on `origin/main` and the last authorized delivery gate, compare the shipped behavior with the current wiki note. If already covered or not material, skip the write. Respect explicit opt-outs, draft, local-only and no-push requests. A local candidate, CI notification, watcher or dispatcher tick is not a trigger.
+
+The destination is `/home/linroot/vault/linroot-wiki-code` only. Update `RW/sources/pi-team-review-continuation-2026-11-26.md`, a scoped `RW/raw-evidence/pi-team-*.md` receipt, and `RW/index.md` and `RW/log.md` as needed. Cite the immutable Dotfiles revision, actual checks and limits. Do not include secrets or raw transcripts, or claim live execution, rollout or savings without evidence. Follow `wiki-skill` and the vault's worktree, lint, commit-record, push and remote verification rules. Report wiki delivery separately. If the update needs another page or repo, or publication is blocked, report that boundary rather than widening it. This grant does not cover `RO/`, other wiki content, Honcho, or unattended publication.
+
 ## Merging and cleanup
 
 An unqualified `push` or `commit and push` includes local squash integration
