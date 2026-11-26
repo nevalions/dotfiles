@@ -16,21 +16,24 @@ const { default: extension, denialSummary, namespaceArgs } = await import(`data:
 const ok = { code: 0, stdout: '', stderr: '' };
 const success = { ...ok, stdout: JSON.stringify({ status: 'SUCCESS', response: 'edited' }) };
 
-async function fixture(t, { team = true, heartbeat = async () => ok, launch = async () => success } = {}) {
+async function fixture(t, { team = true, heartbeat = async () => ok, idle = ok, launch = async () => success } = {}) {
   const cwd = await mkdtemp(join(tmpdir(), 'pi-agy-test-'));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   const flags = new Map();
   const calls = [];
   let tool;
+  const hooks = {};
   extension({
+    on(name, callback) { hooks[name] = callback; },
     registerFlag(name, options) { flags.set(name, options.default); },
     getFlag(name) { return name === 'agy-team' ? team : flags.get(name); },
     registerTool(value) { tool = value; },
     async exec(command, args, options) {
       calls.push([command, args, options.cwd]);
       if (command === 'git' && args.includes('ls-files')) return ok;
-      if (command === 'git') return { ...ok, stdout: `${cwd}\n/git/worktrees/test\n/git\n` };
+      if (command === 'git') return { ...ok, stdout: `${options.cwd}\n/git/worktrees/test\n/git\n` };
       if (command === 'bd') return heartbeat();
+      if (command === 'flock' && args.at(-1) === 'true') return idle;
       if (command === 'flock' && args.includes('--no-fork')) return launch(options.signal);
       return ok;
     },
@@ -39,10 +42,10 @@ async function fixture(t, { team = true, heartbeat = async () => ok, launch = as
     assert.ok(args.includes("stream-json"));
     return launch(options.signal, options);
   });
-  const execute = (signal, resumeWithFallback, modelRegistry, onUpdate) => tool.execute('tool', {
-    task: 'Edit the test file', resumeWithFallback, ...(team ? { cwd, issue: 'SBB-demo', actor: 'pi:test' } : {}),
+  const execute = (signal, resumeWithFallback, modelRegistry, onUpdate, overrides) => tool.execute('tool', {
+    task: 'Edit the test file', resumeWithFallback, ...(team ? { cwd, issue: 'SBB-demo', actor: 'pi:test' } : {}), ...overrides,
   }, signal, onUpdate, { cwd, modelRegistry });
-  return { calls, cwd, execute };
+  return { calls, cwd, execute, hooks };
 }
 
 const heartbeatCalls = calls => calls.filter(([command]) => command === 'bd');
@@ -95,6 +98,76 @@ test('team renews during delegation, aborts on failure and stops renewing', asyn
   await rejected;
   t.mock.timers.tick(300_000);
   assert.equal(heartbeatCalls(calls).length, 3);
+});
+
+async function deadlineFixture(t, { result, idle, heartbeat } = {}) {
+  t.mock.timers.enable({apis:['setTimeout']});
+  let started, finish;
+  const f = await fixture(t, {idle, heartbeat, launch: signal => new Promise(resolve => {
+    finish = () => resolve(success);
+    signal.addEventListener('abort', () => resolve({ ...ok, code:143, killed:true, protocolError:false, ...result }), { once:true });
+    started();
+  })});
+  return { ...f, async run(params, timeout = true) {
+    const ready = new Promise(resolve => { started = resolve; });
+    const work = f.execute(undefined, undefined, undefined, undefined, params);
+    await ready;
+    if (timeout) t.mock.timers.tick(600_000);
+    else finish();
+    return work;
+  }};
+}
+
+test('a clean team deadline offers one inspected continuation, not a replay or an authorization change', async t => {
+  const f = await deadlineFixture(t);
+  const offer = await f.run();
+  assert.equal(offer.isError, true);
+  assert.equal(offer.details.recoveryKind, 'inspect-worker-timeout');
+  const resume = { resumeAfterTimeout:true, task:'Finish only the missing test' };
+  const other = join(f.cwd, 'other');
+  await mkdir(other);
+  for (const args of [{}, {...resume, task:'Edit the test file'}, {...resume, actor:'pi:other'}, {...resume, cwd:other},
+    {...resume, issue:'other'}, {...resume, resumeWithFallback:true}]) {
+    await assert.rejects(f.execute(undefined, undefined, undefined, undefined, args), /Timeout continuation/);
+  }
+  assert.equal(heartbeatCalls(f.calls).length, 1);
+  const repaired = await f.run(resume, false);
+  assert.match(repaired.content[0].text, /edited/);
+  assert.equal(heartbeatCalls(f.calls).length, 2);
+  await assert.rejects(f.run({task:'A later repair'}), /no continuation offered/);
+  f.hooks.before_agent_start();
+  await assert.rejects(f.execute(undefined, undefined, undefined, undefined, resume), /Timeout continuation/);
+});
+
+test('a timeout offer never bypasses a fresh claim check', async t => {
+  let calls = 0;
+  const f = await deadlineFixture(t, {heartbeat:async () => ++calls === 1 ? ok : {...ok, code:1}});
+  await f.run();
+  await assert.rejects(f.execute(undefined, undefined, undefined, undefined,
+    {resumeAfterTimeout:true, task:'Only complete remaining edits'}), /Cannot renew/);
+  assert.equal(f.calls.filter(([,args]) => args.includes('--no-fork')).length, 1);
+});
+
+for (const [label, options, expected] of [
+  ['busy worktree', {idle:{...ok,code:1}}, /lock is free/],
+  ['denial', {result:{stdout:JSON.stringify({denied_actions:['read_file']})}}, /permission/],
+  ['output limit', {result:{truncated:true}}, /output limit/],
+  ['protocol error', {result:{protocolError:true}}, /no continuation offered/],
+  ['provider error', {result:{stderr:'429 rate limit exceeded'}}, /no continuation offered/],
+]) test('deadline does not offer recovery for ' + label, async t => {
+  const f = await deadlineFixture(t, options);
+  await assert.rejects(f.run(), expected);
+});
+
+test('operator cancellation is not a recoverable work deadline', async t => {
+  const stop = new AbortController();
+  const f = await fixture(t, {launch:async () => {
+    stop.abort();
+    return {...ok, code:143, killed:true, protocolError:false};
+  }});
+  await assert.rejects(f.execute(stop.signal), /cancelled/);
+  await assert.rejects(f.execute(undefined, undefined, undefined, undefined,
+    {resumeAfterTimeout:true, task:'Finish the missing edit'}), /requires an offer/);
 });
 
 async function withTempAgentDir(t) {

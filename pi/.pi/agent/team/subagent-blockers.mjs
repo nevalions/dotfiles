@@ -46,19 +46,60 @@ function failureSummary(result) {
   return "Subagent call did not complete. See the failed tool result for details.";
 }
 
+function installReviewTiming(pi) {
+  const active = new Map();
+  const totals = new Map();
+  pi.on("before_agent_start", () => { active.clear(); totals.clear(); });
+  pi.on("tool_execution_start", event => {
+    const role = event.toolName === "agy_worker" ? "worker" : event.toolName === "subagent" &&
+      ({scout:"scout", planner:"planner", "planner-quick":"planner", reviewer:"reviewer", "reviewer-quick":"reviewer"})[event.args?.agent];
+    if (typeof role === "string") active.set(event.toolCallId, {role, start:performance.now()});
+  });
+  pi.on("tool_result", event => {
+    const current = active.get(event.toolCallId);
+    if (current?.role !== "reviewer" || event.isError) return;
+    const snapshot = new Map(totals);
+    snapshot.set("reviewer", (snapshot.get("reviewer") ?? 0) + performance.now() - current.start);
+    const times = [...snapshot].map(([role, ms]) => `${role} ${Math.round(ms / 1000)}s`).join(", ");
+    return { content: [...event.content, {type:"text", text:`Coordinator timing (this prompt, single-role calls; excludes checks): ${times}.`}] };
+  });
+  pi.on("tool_execution_end", event => {
+    const current = active.get(event.toolCallId);
+    active.delete(event.toolCallId);
+    if (current && Number.isFinite(event.durationMs)) {
+      totals.set(current.role, (totals.get(current.role) ?? 0) + event.durationMs);
+    }
+  });
+}
+
 export function installBlockerGuard(pi) {
   installCoordinatorRecovery(pi);
+  installReviewTiming(pi);
   let blocker;
-  pi.on("agent_start", () => { blocker = undefined; });
+  let awaitingInspection = false;
+  pi.on("agent_start", () => { blocker = undefined; awaitingInspection = false; });
   pi.on("tool_call", (event) => {
-    if (!blocker || !["subagent", "agy_worker"].includes(event.toolName)) return;
+    if (!["subagent", "agy_worker"].includes(event.toolName)) return;
+    if (!blocker && awaitingInspection && !(event.toolName === "agy_worker" && event.input?.resumeAfterTimeout === true)) {
+      return { block: true, reason: "Inspect the timed-out worker's partial changes. Only the offered scoped continuation may resume delegation." };
+    }
+    if (!blocker) return;
     return {
       block: true,
       reason: `Pi team delegation is paused for this turn: ${blocker} Report the blocker and wait for user action.`,
     };
   });
   pi.on("tool_execution_end", (event, ctx) => {
-    if (blocker || !["subagent", "agy_worker"].includes(event.toolName) || !event.isError || ctx.signal?.aborted) return;
+    if (blocker || !["subagent", "agy_worker"].includes(event.toolName) || ctx.signal?.aborted) return;
+    if (event.toolName === "agy_worker" && event.isError && event.result?.details?.recoveryKind === "inspect-worker-timeout") {
+      awaitingInspection = true;
+      warn(ctx, "AGY timed out. Inspect the partial candidate before using the one scoped continuation.");
+      return;
+    }
+    if (!event.isError) {
+      if (event.toolName === "agy_worker") awaitingInspection = false;
+      return;
+    }
     const results = event.result?.details?.results;
     if (results?.length && results.every((item) => item.status === "aborted")) return;
     blocker = event.toolName === "agy_worker" ? "Worker failed. Inspect partial edits and the failed tool result before resuming." : failureSummary(event.result ?? {});

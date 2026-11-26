@@ -253,6 +253,9 @@ const defaultEffort = "high";
 
 export default function (pi: ExtensionAPI, stream = runAgyStream) {
   let recovery: { key: string; model: string; thinking?: string; excluded: Set<string> } | undefined;
+  let interrupted: { key: string; task: string } | undefined;
+  let offeredTimeout = false;
+  pi.on("before_agent_start", () => { interrupted = undefined; offeredTimeout = false; });
   pi.registerFlag("agy-model", { type: "string", default: defaultModel, description: "Plain Pi worker model ID from agy models" });
   pi.registerFlag("agy-effort", { type: "string", default: defaultEffort, description: "Plain Pi worker effort: low, medium, high, xhigh, or max" });
   pi.registerFlag("agy-team", { type: "boolean", default: false, description: "Require a linked task worktree and pin the team worker to Hydrogen High" });
@@ -267,13 +270,14 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
     ],
     executionMode: "sequential",
     parameters: Type.Object({
+      resumeAfterTimeout: Type.Optional(Type.Boolean({ description: "Team only: use the one offered continuation after inspecting the partial diff, with a brief for remaining work only." })),
       resumeWithFallback: Type.Optional(Type.Boolean({ description: "Team only: after a routing failure and inspection of partial edits, resume with the offered restricted Pi writer." })),
       task: Type.String({ minLength: 1, maxLength: 16000 }),
       cwd: Type.Optional(Type.String({ description: "Absolute linked task worktree root (required in pi-team; omit in plain Pi)" })),
       issue: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", description: "Existing Beads issue claimed by the coordinator (pi-team only)" })),
       actor: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9:._-]{0,159}$", description: "Exact unique Beads claim actor (pi-team only)" })),
     }, { additionalProperties: false }),
-    async execute(_id, { task, cwd: worktree, issue, actor, resumeWithFallback }, signal, onUpdate, ctx) {
+    async execute(_id, { task, cwd: worktree, issue, actor, resumeWithFallback, resumeAfterTimeout }, signal, onUpdate, ctx) {
       const team = pi.getFlag("agy-team") === true;
       let model = team ? defaultModel : pi.getFlag("agy-model");
       let effort = team ? defaultEffort : pi.getFlag("agy-effort");
@@ -296,8 +300,16 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
         if (git.code !== 0 || root !== cwd || !gitDir || !commonDir || gitDir === commonDir) {
           throw new Error("AGY team worker requires the root of a linked Git worktree, not the primary checkout.");
         }
-      } else if (resumeWithFallback !== undefined || worktree !== undefined || issue !== undefined || actor !== undefined) {
+      } else if (resumeAfterTimeout !== undefined || resumeWithFallback !== undefined || worktree !== undefined || issue !== undefined || actor !== undefined) {
         throw new Error("Start plain Pi in the desired workspace and omit cwd, issue and actor.");
+      }
+      const key = JSON.stringify([cwd, issue, actor]);
+      if (interrupted || resumeAfterTimeout) {
+        if (!resumeAfterTimeout || !interrupted || interrupted.key !== key || resumeWithFallback ||
+            task.trim() === interrupted.task) {
+          throw new Error("Timeout continuation requires an offer for this claim and worktree, inspection of partial edits, and a new remaining-work brief.");
+        }
+        interrupted = undefined;
       }
       const homeFromWorkspace = relative(cwd, await realpath(homedir()));
       if (cwd === "/" || (homeFromWorkspace !== ".." && !homeFromWorkspace.startsWith("../"))) {
@@ -322,7 +334,6 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
         throw new Error(`AGY worktree write preflight failed (${code}); no worker was started.`);
       }
       signal?.throwIfAborted();
-      const key = JSON.stringify([cwd, issue, actor]);
       const attempted = new Set<string>();
       if (resumeWithFallback) {
         if (!recovery || recovery.key !== key) throw new Error("No pending writer fallback for this claim and worktree.");
@@ -412,8 +423,6 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
 
       if (signal?.aborted) throw new Error("AGY was cancelled; inspect the workspace for partial changes.");
       if (result.truncated) throw new Error("AGY exceeded its output limit; inspect the workspace for partial changes.");
-      if (expiry) throw new Error(`Writer timed out (${expiry}); inspect partial changes.`);
-      if (result.killed && !("protocolError" in result && result.protocolError)) throw new Error("AGY exceeded its 10-minute timeout; inspect the workspace for partial changes.");
       let report: { status?: unknown; response?: unknown; denied_actions?: unknown; error?: unknown } | null = null;
       if (resumeWithFallback) report = {status: result.code === 0 ? "SUCCESS" : "ERROR", response: result.stdout};
       else try { report = JSON.parse(result.stdout); } catch { /* Empty or non-JSON CLI diagnostic. */ }
@@ -425,6 +434,20 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
         );
       }
       if (result.code === 73 && !result.stdout) throw new Error("The worktree lock is busy or AGY exited before reporting; check for an active writer before retrying.");
+      if (expiry) {
+        if (team && !resumeWithFallback && !offeredTimeout && result.killed && !result.stdout &&
+            "protocolError" in result && !result.protocolError && !result.diagnosticIssue && !routeIssue(result.stderr)) {
+          const idle = await pi.exec("flock", ["--nonblock", cwd, "true"], { cwd, signal, timeout: 5000, maxBuffer: 4096 });
+          signal?.throwIfAborted();
+          if (idle.code !== 0) throw new Error("Cannot verify the timed-out worktree lock is free; no continuation offered.");
+          offeredTimeout = true;
+          interrupted = { key, task: task.trim() };
+          return { isError: true, details: { ...details, recoveryKind: "inspect-worker-timeout" },
+            content: [{ type: "text", text: `AGY stopped at its work deadline (${expiry}); no success or retry is implied. Verify no active writer and the claim, inspect the entire partial diff including new files, and run focused checks. If safe, use resumeAfterTimeout: true once with only the remaining edits.` }] };
+        }
+        throw new Error(`Writer timed out (${expiry}); no continuation offered. Inspect partial changes.`);
+      }
+      if (result.killed && !("protocolError" in result && result.protocolError)) throw new Error("AGY exceeded its 10-minute timeout; inspect the workspace for partial changes.");
       if (team && (result.code !== 0 || (report?.status && report.status !== "SUCCESS"))) {
         const diagnostic = [result.stderr, report?.error && JSON.stringify(report.error),
           !resumeWithFallback && (report ? report.response : result.stdout)].filter(Boolean).join("\n");

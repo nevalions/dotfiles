@@ -5,7 +5,10 @@ import { childBlocker, installBlockerGuard } from "../pi/.pi/agent/team/subagent
 function guard() {
   const hooks = new Map();
   const notices = [];
-  installBlockerGuard({ on: (name, hook) => hooks.set(name, hook) });
+  installBlockerGuard({ on: (name, hook) => {
+    const previous = hooks.get(name);
+    hooks.set(name, (...args) => { const prior = previous?.(...args); return hook(...args) ?? prior; });
+  } });
   const ctx = { hasUI: true, ui: { notify: (...args) => notices.push(args) } };
   return { hooks, notices, ctx };
 }
@@ -34,6 +37,42 @@ test("validation failures without details notify, but deliberate cancellation do
   assert.deepEqual(notices, []);
   end({ toolName: "subagent", isError: true, result: { details: { results: [] } } }, ctx);
   assert.equal(notices.length, 1);
+});
+
+test("review receipts include prompt-local role times, not worker content or check durations", () => {
+  const {hooks,ctx} = guard();
+  const start = hooks.get("tool_execution_start"), end = hooks.get("tool_execution_end"), result = hooks.get("tool_result");
+  start({toolName:"agy_worker",toolCallId:"w"});
+  end({toolName:"agy_worker",toolCallId:"w",durationMs:61000},ctx);
+  const reviewer = {toolName:"subagent",toolCallId:"r",args:{agent:"reviewer"}};
+  start(reviewer);
+  const content = [{type:"text",text:"changes requested"}];
+  const receipt = result({...reviewer,content}).content;
+  assert.equal(receipt[0],content[0]);
+  assert.match(receipt[1].text,/worker 61s, reviewer \d+s/);
+  assert.equal(result({...reviewer,content,isError:true}),undefined);
+  end({...reviewer,durationMs:2000},ctx);
+  hooks.get("before_agent_start")();
+  start(reviewer);
+  assert.doesNotMatch(result({...reviewer,content}).content[1].text,/worker/);
+});
+
+test("only a structured AGY deadline leaves a scoped same-turn recovery path", () => {
+  const {hooks,ctx} = guard();
+  const end = hooks.get("tool_execution_end"), call = hooks.get("tool_call");
+  const resume = {toolName:"agy_worker",input:{resumeAfterTimeout:true}};
+  const failure = {toolName:"agy_worker",isError:true,result:{content:[{type:"text",text:"inspect-worker-timeout"}]}};
+  end(failure,ctx);
+  assert.equal(call(resume).block,true);
+  hooks.get("agent_start")();
+  end({...failure,result:{details:{recoveryKind:"inspect-worker-timeout"}}},ctx);
+  assert.equal(call({toolName:"read"}),undefined);
+  for (const toolName of ["agy_worker","subagent"]) assert.equal(call({toolName}).block,true);
+  assert.equal(call(resume),undefined);
+  end({toolName:"agy_worker",isError:false},ctx);
+  assert.equal(call({toolName:"subagent"}),undefined);
+  end(failure,ctx);
+  assert.equal(call(resume).block,true);
 });
 
 test("classification distinguishes launch and output limits without using successful response text as diagnostics", () => {
