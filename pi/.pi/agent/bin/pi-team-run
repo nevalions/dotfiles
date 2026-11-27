@@ -11,7 +11,10 @@ import os
 from pathlib import Path
 import re
 import secrets
+import selectors
+import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -19,7 +22,56 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+MAX_INFO_BYTES = 16384
+INFO_READ_TIMEOUT_SEC = 5.0
+PIDFD_WAIT_TIMEOUT_SEC = 0.5
+TRUSTED_PYTHON_BIN = '/usr/bin/python3'
+TRUSTED_BWRAP_BIN = '/usr/bin/bwrap'
+TRUSTED_GIT_BIN = '/usr/bin/git'
+TRUSTED_WRITER_BOOTSTRAP_PY = (
+    'import os, sys\n'
+    'buf = b""\n'
+    'while len(buf) < 3:\n'
+    '    chunk = os.read(0, 3 - len(buf))\n'
+    '    if not chunk:\n'
+    '        break\n'
+    '    buf += chunk\n'
+    'if buf != b"GO":\n'
+    '    sys.exit(88)\n'
+    'dn = os.open("/dev/null", os.O_RDONLY)\n'
+    'if dn != 0:\n'
+    '    os.dup2(dn, 0)\n'
+    '    os.close(dn)\n'
+    'try:\n'
+    '    fds = [int(name) for name in os.listdir("/proc/self/fd")]\n'
+    'except OSError:\n'
+    '    fds = list(range(3, 4096))\n'
+    'for fd in fds:\n'
+    '    if fd > 2:\n'
+    '        try:\n'
+    '            os.close(fd)\n'
+    '        except OSError:\n'
+    '            pass\n'
+    'try:\n'
+    '    os.execvp(sys.argv[1], sys.argv[1:])\n'
+    'except FileNotFoundError:\n'
+    '    prog = sys.argv[1].replace("\\r", " ").replace("\\n", " ")\n'
+    '    sys.stderr.write(f"bwrap: execvp {prog}: No such file or directory\\n")\n'
+    '    sys.stderr.flush()\n'
+    '    sys.exit(127)\n'
+    'except PermissionError:\n'
+    '    prog = sys.argv[1].replace("\\r", " ").replace("\\n", " ")\n'
+    '    sys.stderr.write(f"bwrap: execvp {prog}: Permission denied\\n")\n'
+    '    sys.stderr.flush()\n'
+    '    sys.exit(126)\n'
+    'except OSError as exc:\n'
+    '    prog = sys.argv[1].replace("\\r", " ").replace("\\n", " ")\n'
+    '    msg = exc.strerror or "exec failed"\n'
+    '    sys.stderr.write(f"bwrap: execvp {prog}: {msg}\\n")\n'
+    '    sys.stderr.flush()\n'
+    '    sys.exit(126)\n'
+)
 LANDING_STAGES = frozenset({'integrate', 'verify', 'deploy'})
 SHARED_STAGES = LANDING_STAGES | {'beads_close', 'wiki', 'honcho'}
 
@@ -160,6 +212,45 @@ V2_MIGRATION = (
 )
 
 
+V3_MIGRATION = (
+    """
+    CREATE TABLE writer_attempts (
+        attempt_id TEXT PRIMARY KEY,
+        repo_key TEXT NOT NULL,
+        worktree TEXT NOT NULL,
+        issue TEXT NOT NULL,
+        bound INTEGER NOT NULL CHECK (bound IN (0, 1)),
+        run_id TEXT REFERENCES runs(run_id),
+        status TEXT NOT NULL CHECK (status IN ('open', 'closed')),
+        exit_code INTEGER,
+        created_at TEXT NOT NULL,
+        closed_at TEXT,
+        CHECK ((bound = 0 AND run_id IS NULL) OR (bound = 1 AND run_id IS NOT NULL))
+    )
+    """,
+    "CREATE UNIQUE INDEX idx_writer_attempts_unbound ON writer_attempts(repo_key) WHERE status = 'open' AND bound = 0",
+    "CREATE UNIQUE INDEX idx_writer_attempts_issue ON writer_attempts(repo_key, issue) WHERE status = 'open'",
+    "CREATE UNIQUE INDEX idx_writer_attempts_worktree ON writer_attempts(worktree) WHERE status = 'open'",
+    """
+    CREATE TRIGGER writer_fence_before_run_insert BEFORE INSERT ON runs
+    WHEN NEW.status IN ('active', 'waiting') AND EXISTS (
+        SELECT 1 FROM writer_attempts w
+        WHERE w.status = 'open'
+          AND w.repo_key = NEW.repo_key
+          AND (
+              w.bound = 0
+              OR NEW.issue IS NULL
+              OR w.issue = NEW.issue
+              OR (NEW.worktree IS NOT NULL AND w.worktree = NEW.worktree)
+          )
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'writer fence active for repository');
+    END
+    """,
+)
+
+
 class CliError(Exception):
     """Domain or validation error surfaced cleanly to stderr."""
 
@@ -222,7 +313,11 @@ def validate_evidence(evidence: str) -> str:
 
 def _clean_git_env() -> dict[str, str]:
     """Return a clean environment for read-only Git identity queries."""
-    env = {k: v for k, v in os.environ.items() if k not in GIT_ENV_OVERRIDES}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith('GIT_') and k not in GIT_ENV_OVERRIDES
+    }
     env['GIT_CONFIG_NOSYSTEM'] = '1'
     env['GIT_CONFIG_GLOBAL'] = '/dev/null'
     env['GIT_TERMINAL_PROMPT'] = '0'
@@ -237,7 +332,7 @@ def _has_purported_git_metadata(path: Path) -> bool:
     return (path / 'HEAD').is_file() and (path / 'objects').is_dir()
 
 
-def canonicalize_repo(repo: str) -> str:
+def canonicalize_repo(repo: str, *, git_bin: str = 'git') -> str:
     """Canonicalize a repository path via real Git common-dir, failing closed on lookup errors."""
     raw = repo.strip()
     if not raw:
@@ -258,7 +353,7 @@ def canonicalize_repo(repo: str) -> str:
             raise CliError(f'unable to resolve repository directory: {repo!r}')
         try:
             proc = subprocess.run(
-                ['git', '-C', probe, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                [git_bin, '-C', probe, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
                 env=_clean_git_env(),
                 capture_output=True,
                 text=True,
@@ -328,18 +423,74 @@ def check_schema_version(conn: sqlite3.Connection, *, allow_init: bool) -> None:
             return
         for stmt in V2_MIGRATION:
             conn.execute(stmt)
+        version = 2
+    if version == 2:
+        if not allow_init:
+            return
+        for stmt in V3_MIGRATION:
+            conn.execute(stmt)
         conn.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
         return
     raise CliError(f'unsupported SQLite schema version {version}; expected {SCHEMA_VERSION}')
+
+
+def _verify_ledger_inode(
+    db_path: Path,
+    *,
+    require_exists: bool = False,
+    expected_lstat: os.stat_result | None = None,
+) -> tuple[int, int] | None:
+    """Verify an existing ledger database is a single-link regular file, not a symlink or alias."""
+    try:
+        st = os.lstat(db_path)
+    except FileNotFoundError:
+        if require_exists:
+            raise CliError(f'writer ledger file missing outside the writable worktree: {db_path}') from None
+        return None
+    except OSError as exc:
+        raise CliError(f'unable to inspect writer ledger file outside the writable worktree: {exc}') from None
+    if stat.S_ISLNK(st.st_mode):
+        raise CliError(f'writer ledger path must be symlink-free and outside the writable worktree: {db_path}')
+    if not stat.S_ISREG(st.st_mode):
+        raise CliError(f'writer ledger path must be a regular file outside the writable worktree: {db_path}')
+    if st.st_nlink != 1:
+        raise CliError(
+            f'writer ledger path must not have hardlink aliases outside the writable worktree '
+            f'(st_nlink={st.st_nlink}): {db_path}'
+        )
+    if expected_lstat is not None and (st.st_dev, st.st_ino) != (expected_lstat.st_dev, expected_lstat.st_ino):
+        raise CliError(f'writer ledger path changed during validation outside the writable worktree: {db_path}')
+    try:
+        fd = os.open(db_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        raise CliError(
+            f'unable to open writer ledger file for inode check outside the writable worktree: {exc}'
+        ) from None
+    try:
+        fst = os.fstat(fd)
+    finally:
+        os.close(fd)
+    if not stat.S_ISREG(fst.st_mode):
+        raise CliError(f'writer ledger path must be a regular file outside the writable worktree: {db_path}')
+    if fst.st_nlink != 1:
+        raise CliError(
+            f'writer ledger path must not have hardlink aliases outside the writable worktree '
+            f'(st_nlink={fst.st_nlink}): {db_path}'
+        )
+    if (fst.st_dev, fst.st_ino) != (st.st_dev, st.st_ino):
+        raise CliError(f'writer ledger path changed during validation outside the writable worktree: {db_path}')
+    return fst.st_dev, fst.st_ino
 
 
 @contextmanager
 def open_write_tx(db_path: Path):
     """Open a private SQLite connection inside a BEGIN IMMEDIATE transaction."""
     ensure_private_state_dir(db_path.parent)
+    _verify_ledger_inode(db_path, require_exists=False)
     conn = sqlite3.connect(str(db_path), timeout=5.0, isolation_level=None)
     conn.row_factory = sqlite3.Row
     try:
+        _verify_ledger_inode(db_path, require_exists=True)
         os.chmod(db_path, 0o600)
         conn.execute('PRAGMA busy_timeout = 5000')
         conn.execute('PRAGMA journal_mode = DELETE')
@@ -589,38 +740,116 @@ def compute_next_step(
     }
 
 
-def scoped_worktree(repo: str, repo_key: str, issue: str) -> str:
+def scoped_worktree(repo: str, repo_key: str, issue: str, *, git_bin: str = 'git') -> str:
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*-[A-Za-z0-9][A-Za-z0-9.]*', issue) or len(issue) > 128:
         raise CliError('--issue requires the full Beads issue ID')
     root = Path(repo).expanduser().resolve()
     try:
         result = subprocess.run(
-            ['git', '-C', str(root), 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-dir'],
+            [git_bin, '-C', str(root), 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-dir'],
             capture_output=True, text=True, env=_clean_git_env(), timeout=5,
         )
-    except subprocess.TimeoutExpired:
-        raise CliError('worktree lookup timed out') from None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CliError(f'worktree lookup failed: {exc}') from None
+    if '\x00' in result.stdout:
+        raise CliError('--issue requires the root of a linked Git worktree')
     paths = result.stdout.splitlines()
-    if (result.returncode or len(paths) != 2 or Path(paths[0]).resolve() != root
-            or Path(paths[1]).resolve().parent != Path(repo_key) / 'worktrees'):
+    if (
+        result.returncode != 0
+        or len(paths) != 2
+        or any(not p or p != p.strip() or not os.path.isabs(p) or not os.path.isdir(p) for p in paths)
+        or Path(paths[0]).resolve() != root
+        or Path(paths[1]).resolve().parent != Path(repo_key) / 'worktrees'
+    ):
         raise CliError('--issue requires the root of a linked Git worktree')
     return str(Path(paths[1]).resolve())
+
+
+def _same_repo_key(stored: str, repo_key: str, *, git_bin: str = 'git') -> bool:
+    """Compare stored run repo_key against canonical repo_key, failing closed if unresolvable."""
+    return stored == repo_key or canonicalize_repo(stored, git_bin=git_bin) == repo_key
+
+
+class _RetryActiveKeys(Exception):
+    """Internal sentinel to release a write lock before resolving unfamiliar active keys."""
+
+    def __init__(self, unresolved_keys: set[str]) -> None:
+        super().__init__('retry active key resolution')
+        self.unresolved_keys = unresolved_keys
+
+
+@contextmanager
+def _open_short_active_write_tx(
+    db_path: Path,
+    repo_key: str,
+    *,
+    git_bin: str = 'git',
+    max_attempts: int = 8,
+):
+    """Resolve unfamiliar active repo keys outside BEGIN IMMEDIATE, then yield inside one short write tx."""
+    resolved_keys: dict[str, str] = {repo_key: repo_key}
+    for _ in range(max_attempts):
+        try:
+            with open_write_tx(db_path) as conn:
+                active_rows = conn.execute(
+                    "SELECT run_id, repo_key, status, issue, worktree FROM runs WHERE status IN ('active', 'waiting')"
+                ).fetchall()
+                missing = {row['repo_key'] for row in active_rows if row['repo_key'] not in resolved_keys}
+                if missing:
+                    raise _RetryActiveKeys(missing)
+                yield conn, active_rows, resolved_keys
+                return
+        except _RetryActiveKeys as retry:
+            for key in sorted(retry.unresolved_keys):
+                resolved_keys[key] = canonicalize_repo(key, git_bin=git_bin)
+    raise CliError('active repository keys changed repeatedly during admission; retry')
+
+
+def _check_writer_fence_for_start(
+    conn: sqlite3.Connection,
+    repo_key: str,
+    issue: str | None,
+    worktree: str | None,
+) -> None:
+    """Reject run admission if an open writer attempt conflicts with the requested scope."""
+    open_attempts = conn.execute(
+        "SELECT attempt_id, repo_key, worktree, issue, bound FROM writer_attempts WHERE status = 'open'"
+    ).fetchall()
+    for att in open_attempts:
+        same_repo = att['repo_key'] == repo_key
+        same_worktree = worktree is not None and att['worktree'] == worktree
+        if not same_repo and not same_worktree:
+            continue
+        if not att['bound']:
+            raise CliError(
+                f'writer fence active for {repo_key}: unbound writer attempt {att["attempt_id"]} in {att["worktree"]}'
+            )
+        if issue is None:
+            raise CliError(
+                f'writer fence active for {repo_key}: scoped writer attempt {att["attempt_id"]} ({att["issue"]})'
+            )
+        if att['issue'] == issue:
+            raise CliError(
+                f'writer fence active for {repo_key}: writer attempt {att["attempt_id"]} already open for issue {issue}'
+            )
+        if same_worktree:
+            raise CliError(
+                f'writer fence active for {repo_key}: writer attempt {att["attempt_id"]} already open in worktree {worktree}'
+            )
 
 
 def cmd_start(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     """Start a new active pipeline run for a repository."""
     if args.commit_only and (args.no_ci or args.with_deploy):
         raise CliError('--commit-only cannot be combined with --no-ci or --with-deploy')
-    repo_key = canonicalize_repo(args.repo)
-    worktree = scoped_worktree(args.repo, repo_key, args.issue) if args.issue is not None else None
+    repo_key = canonicalize_repo(args.repo, git_bin=TRUSTED_GIT_BIN)
+    worktree = scoped_worktree(args.repo, repo_key, args.issue, git_bin=TRUSTED_GIT_BIN) if args.issue is not None else None
     now = format_utc(utc_now())
     run_id = args.run_id or f'run-{utc_now().strftime("%Y%m%dT%H%M%SZ")}-{secrets.token_hex(4)}'
-    with open_write_tx(db_path) as conn:
-        active_rows = conn.execute(
-            "SELECT run_id, repo_key, status, issue, worktree FROM runs WHERE status IN ('active', 'waiting')"
-        ).fetchall()
+    with _open_short_active_write_tx(db_path, repo_key, git_bin=TRUSTED_GIT_BIN) as (conn, active_rows, resolved_keys):
+        _check_writer_fence_for_start(conn, repo_key, args.issue, worktree)
         for existing in active_rows:
-            if existing['repo_key'] == repo_key or canonicalize_repo(existing['repo_key']) == repo_key:
+            if resolved_keys[existing['repo_key']] == repo_key:
                 if (existing['repo_key'] == repo_key and args.issue and existing['issue'] and args.issue != existing['issue']
                         and worktree != existing['worktree']):
                     continue
@@ -1053,6 +1282,416 @@ def cmd_monitor(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     raise CliError('CI monitoring deadline reached; required checks remain unverified')
 
 
+def _validate_writer_bwrap_argv(cmd_argv: list[str], cwd: str) -> tuple[str, list[str], list[str]]:
+    """Validate exact required bwrap isolation flags and extract payload argv."""
+    if not cmd_argv or cmd_argv[0] not in ('bwrap', TRUSTED_BWRAP_BIN):
+        raise CliError('writer-exec requires bwrap command argv')
+    bwrap_bin = TRUSTED_BWRAP_BIN
+    if not os.path.isabs(bwrap_bin) or not os.access(bwrap_bin, os.X_OK):
+        raise CliError('trusted bwrap executable not found or not executable')
+    try:
+        sep_idx = cmd_argv.index('--', 1)
+    except ValueError:
+        raise CliError('writer-exec requires `--` separating bwrap flags and payload') from None
+    bwrap_flags = cmd_argv[1:sep_idx]
+    payload_argv = cmd_argv[sep_idx + 1:]
+    if not payload_argv or any(not arg or '\x00' in arg for arg in payload_argv):
+        raise CliError('writer-exec requires a valid payload command after `--`')
+
+    resolved_cwd = Path(cwd).resolve()
+    has_unshare_pid = False
+    has_die_with_parent = False
+    has_ro_root = False
+    has_bind_cwd = False
+    has_dev = False
+    has_proc = False
+    overlay_src: Path | None = None
+    tmp_overlay: Path | None = None
+
+    i = 0
+    while i < len(bwrap_flags):
+        flag = bwrap_flags[i]
+        if flag == '--unshare-pid':
+            has_unshare_pid = True
+            i += 1
+        elif flag == '--die-with-parent':
+            has_die_with_parent = True
+            i += 1
+        elif flag == '--ro-bind':
+            if i + 2 >= len(bwrap_flags) or bwrap_flags[i + 1] != '/' or bwrap_flags[i + 2] != '/':
+                raise CliError('writer-exec requires exact `--ro-bind / /`')
+            has_ro_root = True
+            i += 3
+        elif flag == '--bind':
+            if i + 2 >= len(bwrap_flags):
+                raise CliError('writer-exec requires `--bind <cwd> <cwd>`')
+            if Path(bwrap_flags[i + 1]).resolve() != resolved_cwd or Path(bwrap_flags[i + 2]).resolve() != resolved_cwd:
+                raise CliError('writer-exec `--bind` must target exact worktree root')
+            has_bind_cwd = True
+            i += 3
+        elif flag == '--overlay-src':
+            if i + 1 >= len(bwrap_flags) or overlay_src is not None:
+                raise CliError('invalid `--overlay-src` in writer-exec')
+            overlay_src = Path(bwrap_flags[i + 1]).resolve()
+            i += 2
+        elif flag == '--tmp-overlay':
+            if i + 1 >= len(bwrap_flags) or tmp_overlay is not None:
+                raise CliError('invalid `--tmp-overlay` in writer-exec')
+            tmp_overlay = Path(bwrap_flags[i + 1]).resolve()
+            i += 2
+        elif flag == '--dev':
+            if i + 1 >= len(bwrap_flags) or bwrap_flags[i + 1] != '/dev':
+                raise CliError('writer-exec requires `--dev /dev`')
+            has_dev = True
+            i += 2
+        elif flag == '--proc':
+            if i + 1 >= len(bwrap_flags) or bwrap_flags[i + 1] != '/proc':
+                raise CliError('writer-exec requires `--proc /proc`')
+            has_proc = True
+            i += 2
+        else:
+            raise CliError(f'unsupported or disallowed bwrap flag in writer-exec: {flag!r}')
+
+    if not (has_unshare_pid and has_die_with_parent and has_ro_root and has_bind_cwd and has_dev and has_proc):
+        raise CliError('writer-exec requires exact bwrap PID and mount isolation flags')
+    if (overlay_src is None) != (tmp_overlay is None):
+        raise CliError('writer-exec requires paired `--overlay-src` and `--tmp-overlay`')
+    if overlay_src is not None and (overlay_src != tmp_overlay or overlay_src == Path('/') or not overlay_src.is_dir()):
+        raise CliError('writer-exec overlay target must be an existing non-root directory')
+    return bwrap_bin, bwrap_flags, payload_argv
+
+
+def _read_bwrap_info(info_r: int, timeout: float = INFO_READ_TIMEOUT_SEC) -> dict:
+    """Read bounded JSON metadata from bwrap --info-fd until EOF."""
+    os.set_blocking(info_r, False)
+    deadline = time.monotonic() + timeout
+    chunks: list[bytes] = []
+    total = 0
+    with selectors.DefaultSelector() as sel:
+        sel.register(info_r, selectors.EVENT_READ)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not sel.select(timeout=remaining):
+                raise CliError('bwrap --info-fd timed out before reporting child PID')
+            try:
+                chunk = os.read(info_r, MAX_INFO_BYTES + 1 - total)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_INFO_BYTES:
+                raise CliError('bwrap --info-fd output exceeded byte limit')
+            chunks.append(chunk)
+    try:
+        info = json.loads(b''.join(chunks).decode('utf-8'))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise CliError(f'bwrap --info-fd returned invalid JSON: {exc}') from None
+    if not isinstance(info, dict):
+        raise CliError('bwrap --info-fd payload must be a JSON object')
+    return info
+
+
+def _read_proc_identity(pid: int | str) -> tuple[int, str, tuple[int, ...], str, str]:
+    """Read PPid, State, NStgid, starttime, and pid namespace symlink for a process."""
+    try:
+        status_text = Path(f'/proc/{pid}/status').read_text(encoding='utf-8')
+        stat_text = Path(f'/proc/{pid}/stat').read_text(encoding='utf-8')
+        ns_pid = os.readlink(f'/proc/{pid}/ns/pid')
+    except OSError as exc:
+        raise CliError(f'unable to inspect sandbox process {pid}: {exc}') from None
+    ppid: int | None = None
+    state = ''
+    nstgid: tuple[int, ...] = ()
+    for line in status_text.splitlines():
+        if line.startswith('PPid:'):
+            ppid = int(line.split(':', 1)[1].strip())
+        elif line.startswith('State:'):
+            state = line.split(':', 1)[1].strip()[:1]
+        elif line.startswith('NStgid:'):
+            nstgid = tuple(int(tok) for tok in line.split(':', 1)[1].split())
+    rparen = stat_text.rfind(')')
+    if rparen < 0:
+        raise CliError(f'malformed /proc/{pid}/stat')
+    fields = stat_text[rparen + 2:].split()
+    if len(fields) <= 19 or ppid is None or not state or not nstgid or int(fields[1]) != ppid:
+        raise CliError(f'incomplete /proc identity metadata for {pid}')
+    return ppid, state, nstgid, fields[19], ns_pid
+
+
+def _pin_verified_namespace_init(info: dict, launcher_pid: int) -> int:
+    """Verify child-pid is a live nested PID namespace init under launcher and pin its pidfd."""
+    child_pid = info.get('child-pid')
+    if not isinstance(child_pid, int) or isinstance(child_pid, bool) or child_pid <= 1:
+        raise CliError('bwrap --info-fd did not report a valid child-pid')
+    _, _, host_nstgid, _, host_ns_pid = _read_proc_identity('self')
+
+    def check_once() -> tuple[int, tuple[int, ...], str, str]:
+        ppid, state, nstgid, starttime, ns_pid = _read_proc_identity(child_pid)
+        if ppid != launcher_pid:
+            raise CliError(f'child-pid {child_pid} is not a direct child of bwrap launcher {launcher_pid}')
+        if state not in ('R', 'S', 'D'):
+            raise CliError(f'child-pid {child_pid} is not live (state={state!r})')
+        if len(nstgid) <= len(host_nstgid) or nstgid[-1] != 1:
+            raise CliError(f'child-pid {child_pid} is not a nested PID namespace init ({nstgid})')
+        if ns_pid == host_ns_pid:
+            raise CliError(f'child-pid {child_pid} remained in host PID namespace')
+        reported_ns = info.get('pid-namespace')
+        if isinstance(reported_ns, int) and not isinstance(reported_ns, bool) and ns_pid != f'pid:[{reported_ns}]':
+            raise CliError(f'child-pid {child_pid} pid namespace mismatch')
+        return ppid, nstgid, starttime, ns_pid
+
+    ident_before = check_once()
+    pidfd = os.pidfd_open(child_pid, 0)
+    try:
+        ident_after = check_once()
+        if ident_after != ident_before:
+            raise CliError(f'child-pid {child_pid} identity changed during pidfd verification')
+    except Exception:
+        os.close(pidfd)
+        raise
+    return pidfd
+
+
+def _validate_writer_state_path(
+    db_path: Path,
+    resolved_cwd: Path,
+    *,
+    require_exists: bool = False,
+) -> tuple[int, int] | None:
+    """Require a symlink-free, single-link regular ledger pathname outside the writable worktree."""
+    if not db_path.is_absolute():
+        raise CliError('writer ledger path must be an absolute path outside the writable worktree')
+    norm_parts: list[str] = []
+    missing_seen = False
+    last_st: os.stat_result | None = None
+    parts = db_path.parts
+    for idx, part in enumerate(parts[1:], start=1):
+        is_last = idx == len(parts) - 1
+        if part == '.':
+            continue
+        if part == '..':
+            if missing_seen:
+                raise CliError('writer ledger path must not traverse missing directories with `..` outside the writable worktree')
+            if norm_parts:
+                norm_parts.pop()
+            cur = Path('/', *norm_parts)
+            if cur == resolved_cwd or cur.is_relative_to(resolved_cwd):
+                raise CliError('writer ledger path must not be inside the writable worktree')
+            continue
+        norm_parts.append(part)
+        cur = Path('/', *norm_parts)
+        if cur == resolved_cwd or cur.is_relative_to(resolved_cwd):
+            raise CliError('writer ledger path must not be inside the writable worktree')
+        try:
+            st = os.lstat(cur)
+        except FileNotFoundError:
+            missing_seen = True
+            continue
+        except OSError as exc:
+            raise CliError(f'unable to inspect writer ledger path outside the writable worktree: {exc}') from None
+        if missing_seen:
+            raise CliError('writer ledger path state changed during writable worktree isolation check')
+        if stat.S_ISLNK(st.st_mode):
+            raise CliError(f'writer ledger path must be symlink-free and outside the writable worktree: {cur}')
+        if not is_last and not stat.S_ISDIR(st.st_mode):
+            raise CliError(f'writer ledger parent component is not a directory outside the writable worktree: {cur}')
+        if is_last:
+            if not stat.S_ISREG(st.st_mode):
+                raise CliError(f'writer ledger path must be a regular file outside the writable worktree: {cur}')
+            if st.st_nlink != 1:
+                raise CliError(
+                    f'writer ledger path must not have hardlink aliases outside the writable worktree '
+                    f'(st_nlink={st.st_nlink}): {cur}'
+                )
+            last_st = st
+    try:
+        state_candidates = (db_path.resolve(), db_path.parent.resolve(), db_path.parent.parent.resolve())
+    except OSError as exc:
+        raise CliError(f'unable to resolve writer ledger path: {exc}') from None
+    if any(candidate == resolved_cwd or candidate.is_relative_to(resolved_cwd) for candidate in state_candidates):
+        raise CliError('writer ledger path must not be inside the writable worktree')
+    if require_exists or last_st is not None:
+        return _verify_ledger_inode(db_path, require_exists=require_exists, expected_lstat=last_st)
+    return None
+
+
+def cmd_writer_exec(args: argparse.Namespace, db_path: Path) -> tuple[int, None]:
+    """Register a writer fence attempt, supervise isolated bwrap execution, and close only on verified exit."""
+    if not hasattr(os, 'pidfd_open'):
+        raise CliError('Linux os.pidfd_open is required for writer-exec')
+    python_bin = TRUSTED_PYTHON_BIN
+    if not python_bin or not os.path.isabs(python_bin) or not os.access(python_bin, os.X_OK):
+        raise CliError('trusted absolute Python executable is required for writer-exec')
+    raw_argv = list(args.argv or [])
+    if raw_argv and raw_argv[0] == '--':
+        raw_argv = raw_argv[1:]
+    bwrap_bin, bwrap_flags, payload_argv = _validate_writer_bwrap_argv(raw_argv, args.cwd)
+    resolved_cwd = Path(args.cwd).resolve()
+    pre_ledger_id = _validate_writer_state_path(db_path, resolved_cwd, require_exists=False)
+    repo_key = canonicalize_repo(args.cwd, git_bin=TRUSTED_GIT_BIN)
+    worktree = scoped_worktree(args.cwd, repo_key, args.issue, git_bin=TRUSTED_GIT_BIN)
+    attempt_id = f'wa-{secrets.token_hex(16)}'
+    now = format_utc(utc_now())
+
+    with _open_short_active_write_tx(db_path, repo_key, git_bin=TRUSTED_GIT_BIN) as (conn, active_rows, resolved_keys):
+        same_repo_runs = [row for row in active_rows if resolved_keys[row['repo_key']] == repo_key]
+        bound_run = None
+        for row in same_repo_runs:
+            if row['issue'] is None:
+                raise CliError(
+                    f'writer fence: exclusive unscoped run {row["run_id"]} ({row["status"]}) active for {repo_key}'
+                )
+            norm_row_wt = os.path.realpath(row['worktree']) if row['worktree'] else None
+            if row['issue'] == args.issue:
+                if norm_row_wt != worktree:
+                    raise CliError(
+                        f'writer fence: active run {row["run_id"]} for {args.issue} is bound to different worktree {row["worktree"]!r}'
+                    )
+                if row['status'] != 'active':
+                    raise CliError(
+                        f'writer fence: run {row["run_id"]} for {args.issue} is {row["status"]}, not active'
+                    )
+                bound_run = row
+            elif norm_row_wt == worktree:
+                raise CliError(
+                    f'writer fence: worktree {worktree} already bound to active run {row["run_id"]} ({row["issue"]})'
+                )
+        bound = 1 if bound_run is not None else 0
+        run_id = bound_run['run_id'] if bound_run is not None else None
+        if not bound and same_repo_runs:
+            raise CliError(
+                f'writer fence: unbound writer cannot start while active run {same_repo_runs[0]["run_id"]} exists for {repo_key}'
+            )
+
+        open_attempts = conn.execute(
+            "SELECT attempt_id, repo_key, worktree, issue, bound FROM writer_attempts WHERE status = 'open'"
+        ).fetchall()
+        for att in open_attempts:
+            same_repo = att['repo_key'] == repo_key
+            same_wt = att['worktree'] == worktree
+            if not same_repo and not same_wt:
+                continue
+            if not att['bound']:
+                raise CliError(
+                    f'writer fence: exclusive unbound writer attempt {att["attempt_id"]} already open for {repo_key}'
+                )
+            if not bound:
+                raise CliError(
+                    f'writer fence: unbound writer cannot start while writer attempt {att["attempt_id"]} is open for {repo_key}'
+                )
+            if att['issue'] == args.issue:
+                raise CliError(
+                    f'writer fence: writer attempt {att["attempt_id"]} already open for issue {args.issue}'
+                )
+            if same_wt:
+                raise CliError(
+                    f'writer fence: writer attempt {att["attempt_id"]} already open for worktree {worktree}'
+                )
+
+        try:
+            conn.execute(
+                """
+                INSERT INTO writer_attempts (
+                    attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?)
+                """,
+                (attempt_id, repo_key, worktree, args.issue, bound, run_id, now),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise CliError(f'writer fence conflict for {repo_key}: {exc}') from exc
+
+    post_ledger_id = _validate_writer_state_path(db_path, resolved_cwd, require_exists=True)
+    if pre_ledger_id is not None and post_ledger_id != pre_ledger_id:
+        raise CliError('writer ledger inode changed during registration; leaving writer fence open')
+
+    info_r, info_w = os.pipe2(os.O_CLOEXEC)
+    go_r, go_w = os.pipe2(os.O_CLOEXEC)
+    pidfd = -1
+    proc: subprocess.Popen[bytes] | None = None
+    try:
+        bwrap_cmd = [
+            bwrap_bin,
+            *bwrap_flags,
+            '--info-fd',
+            str(info_w),
+            '--',
+            python_bin,
+            '-I',
+            '-S',
+            '-c',
+            TRUSTED_WRITER_BOOTSTRAP_PY,
+            *payload_argv,
+        ]
+        proc = subprocess.Popen(
+            bwrap_cmd,
+            cwd=args.cwd,
+            stdin=go_r,
+            stdout=None,
+            stderr=None,
+            pass_fds=(info_w,),
+            close_fds=True,
+        )
+        os.close(info_w)
+        info_w = -1
+        os.close(go_r)
+        go_r = -1
+
+        info = _read_bwrap_info(info_r)
+        os.close(info_r)
+        info_r = -1
+
+        pidfd = _pin_verified_namespace_init(info, proc.pid)
+        if proc.poll() is not None:
+            raise CliError(f'bwrap launcher exited prematurely ({proc.returncode}) before GO')
+
+        view = memoryview(b'GO')
+        sent = 0
+        while sent < len(view):
+            n = os.write(go_w, view[sent:])
+            if n <= 0:
+                raise CliError('failed to deliver GO to isolated sandbox bootstrap')
+            sent += n
+        os.close(go_w)
+        go_w = -1
+
+        launcher_rc = proc.wait()
+        if launcher_rc < 0:
+            return 128 + (-launcher_rc), None
+
+        with selectors.DefaultSelector() as sel:
+            sel.register(pidfd, selectors.EVENT_READ)
+            if not sel.select(timeout=PIDFD_WAIT_TIMEOUT_SEC):
+                raise CliError('namespace-init pidfd not readable after launcher wait; leaving writer fence open')
+
+        closed_at = format_utc(utc_now())
+        with open_write_tx(db_path) as conn:
+            cur = conn.execute(
+                """
+                UPDATE writer_attempts
+                SET status = 'closed', exit_code = ?, closed_at = ?
+                WHERE attempt_id = ? AND status = 'open'
+                """,
+                (launcher_rc, closed_at, attempt_id),
+            )
+            if cur.rowcount != 1:
+                raise CliError(f'writer fence close mismatch for {attempt_id}')
+        return launcher_rc, None
+    finally:
+        for fd in (info_w, info_r, go_r, go_w, pidfd):
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+
 def cmd_cancel(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     """Cancel a non-terminal run at its current stage and free its repo key."""
     stage = validate_stage(args.stage)
@@ -1119,9 +1758,9 @@ def poll_queued_ci(db_path: Path) -> tuple[list[dict], dict[int, str]]:
 def cmd_preflight(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     def git(*tokens):
         try:
-            result = subprocess.run(['git', '-C', args.checkout, *tokens], capture_output=True,
-                                    text=True, timeout=5, check=False)
-        except subprocess.TimeoutExpired:
+            result = subprocess.run([TRUSTED_GIT_BIN, '-C', args.checkout, *tokens], capture_output=True,
+                                    text=True, env=_clean_git_env(), timeout=5, check=False)
+        except (OSError, subprocess.TimeoutExpired):
             raise CliError('Git preflight exceeded its deadline') from None
         if result.returncode:
             raise CliError('preflight requires a readable Git checkout')
@@ -1129,8 +1768,13 @@ def cmd_preflight(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
 
     root, git_dir, common_dir, head = git('rev-parse', '--path-format=absolute', '--show-toplevel',
                                          '--git-dir', '--git-common-dir', 'HEAD').splitlines()
-    payload = {'checkout': root, 'linked_worktree': git_dir != common_dir, 'head': validate_full_rev(head),
-               'dirty': bool(git('status', '--porcelain')), 'next': None}
+    payload = {
+        'checkout': root,
+        'linked_worktree': git_dir != common_dir,
+        'head': validate_full_rev(head),
+        'dirty': bool(git('status', '--porcelain')),
+        'next': None,
+    }
     if args.run_id:
         _, payload['next'] = cmd_resume(args, db_path)
     return 0, payload
@@ -1310,6 +1954,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_cancel.add_argument('stage', help='Current stage name')
     p_cancel.add_argument('--reason', help='Optional cancellation reason')
 
+    p_wexec = sub.add_parser('writer-exec', help=argparse.SUPPRESS)
+    p_wexec.add_argument('--cwd', required=True)
+    p_wexec.add_argument('--issue', required=True)
+    p_wexec.add_argument('argv', nargs=argparse.REMAINDER)
+
     return parser
 
 
@@ -1330,6 +1979,7 @@ def main(argv: list[str] | None = None) -> int:
         'watch': cmd_watch,
         'monitor': cmd_monitor,
         'cancel': cmd_cancel,
+        'writer-exec': cmd_writer_exec,
     }
     os.umask(0o077)
     try:
@@ -1342,6 +1992,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f'state error: {exc}', file=sys.stderr)
         return 1
 
+    if args.command == 'writer-exec':
+        return code
     if args.command == 'watch':
         for notice in result:
             print(json.dumps(notice, sort_keys=True))

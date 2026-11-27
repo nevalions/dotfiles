@@ -13,6 +13,7 @@ import { Type } from "typebox";
 const efforts = ["low", "medium", "high", "xhigh", "max"];
 const timeoutMs = 10 * 60_000;
 const heartbeatMs = 30_000;
+const teamRunner = join(homedir(), ".pi/agent/bin/pi-team-run");
 export const namespaceArgs = (cwd: string, privateAgentDir?: string) => [
   "--unshare-pid", "--die-with-parent", "--ro-bind", "/", "/", "--bind", cwd, cwd,
   ...(privateAgentDir ? ["--overlay-src", privateAgentDir, "--tmp-overlay", privateAgentDir] : []),
@@ -254,10 +255,7 @@ const defaultEffort = "high";
 
 export default function (pi: ExtensionAPI, stream = runAgyStream) {
   let recovery: { key: string; model: string; thinking?: string; excluded: Set<string> } | undefined;
-  let interrupted: { key: string; task: string } | undefined;
-  let offeredTimeout = false;
   pi.on("session_start", (event, ctx) => teamTaskPicker(pi, event, ctx));
-  pi.on("before_agent_start", () => { interrupted = undefined; offeredTimeout = false; });
   pi.registerFlag("agy-model", { type: "string", default: defaultModel, description: "Plain Pi worker model ID from agy models" });
   pi.registerFlag("agy-effort", { type: "string", default: defaultEffort, description: "Plain Pi worker effort: low, medium, high, xhigh, or max" });
   pi.registerFlag("agy-team", { type: "boolean", default: false, description: "Require a linked task worktree and enable the scoped team writers" });
@@ -273,7 +271,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
     executionMode: "sequential",
     parameters: Type.Object({
       flashFirst: Type.Optional(Type.Boolean({ description: "Team only: prefer the restricted DeepSeek Flash writer for a fresh, testable edit; if not configured, start AGY instead. Omit for AGY or recovery." })),
-      resumeAfterTimeout: Type.Optional(Type.Boolean({ description: "Team only: use the one offered continuation after inspecting the partial diff, with a brief for remaining work only." })),
+      resumeAfterTimeout: Type.Optional(Type.Boolean({ description: "Unsupported for fenced team writers; fails closed before launch if set." })),
       resumeWithFallback: Type.Optional(Type.Boolean({ description: "Team only: after a routing failure and inspection of partial edits, resume with the offered restricted Pi writer." })),
       task: Type.String({ minLength: 1, maxLength: 16000 }),
       cwd: Type.Optional(Type.String({ description: "Absolute linked task worktree root (required in pi-team; omit in plain Pi)" })),
@@ -291,12 +289,13 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       if (!task.trim() || task.includes("\0")) throw new Error("Provide a non-empty AGY assignment without NUL characters.");
       signal?.throwIfAborted();
 
+      const gitBin = team ? "/usr/bin/git" : "git";
       let cwd = await realpath(ctx.cwd);
       if (team && (!issue || !actor)) throw new Error("Provide the Beads issue and exact existing claim actor; AGY does not claim issues.");
       if (team) {
         if (!worktree || !isAbsolute(worktree)) throw new Error("Provide the absolute linked task worktree root.");
         cwd = await realpath(worktree);
-        const git = await pi.exec("git", ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir"], {
+        const git = await pi.exec(gitBin, ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir"], {
           cwd, signal, timeout: 5000, maxBuffer: 64 * 1024,
         });
         const [root, gitDir, commonDir] = git.stdout.trimEnd().split("\n");
@@ -307,8 +306,11 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
         throw new Error("Start plain Pi in the desired workspace and omit cwd, issue and actor.");
       }
       const key = JSON.stringify([cwd, issue, actor]);
+      if (resumeAfterTimeout) {
+        throw new Error("Timeout continuation (resumeAfterTimeout) is disabled for fenced team writers because an interrupted deadline has no verified completion receipt; no worker was started. Inspect partial edits, verify no active writer and the ledger/claim, and start a fresh assignment if safe.");
+      }
       if (flashFirst) {
-        if (interrupted || recovery?.key === key || resumeAfterTimeout || resumeWithFallback) {
+        if (recovery?.key === key || resumeWithFallback) {
           throw new Error("Flash-first is for fresh assignments, not recovery. Inspect partial edits and follow the offered recovery path.");
         }
         if (ctx.modelRegistry?.getAvailable().some(m => `${m.provider}/${m.id}` === flashWriterModel)) {
@@ -318,22 +320,18 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
         }
       }
       const restricted = Boolean((flashFirst && model === flashWriterModel) || resumeWithFallback);
-      if (interrupted || resumeAfterTimeout) {
-        if (!resumeAfterTimeout || !interrupted || interrupted.key !== key || resumeWithFallback ||
-            task.trim() === interrupted.task) {
-          throw new Error("Timeout continuation requires an offer for this claim and worktree, inspection of partial edits, and a new remaining-work brief.");
-        }
-        interrupted = undefined;
-      }
       const homeFromWorkspace = relative(cwd, await realpath(homedir()));
       if (cwd === "/" || (homeFromWorkspace !== ".." && !homeFromWorkspace.startsWith("../"))) {
         throw new Error("AGY requires a workspace that does not contain your home directory. Start Pi in the project directory.");
       }
+      const bwrapBin = team ? "/usr/bin/bwrap" : "bwrap";
+      const flockBin = team ? "/usr/bin/flock" : "flock";
+      const trueBin = team ? "/usr/bin/true" : "true";
       const sandbox = namespaceArgs(cwd, restricted ? await realpath(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi/agent")) : undefined);
-      const isolation = await pi.exec("bwrap", [...sandbox, "true"], { cwd, signal, timeout: 5000, maxBuffer: 4096 });
+      const isolation = await pi.exec(bwrapBin, [...sandbox, trueBin], { cwd, signal, timeout: 5000, maxBuffer: 4096 });
       signal?.throwIfAborted();
       if (isolation.code !== 0) throw new Error("AGY requires working bubblewrap PID isolation; no worker was started.");
-      const lock = await pi.exec("flock", ["--version"], { cwd, signal, timeout: 5000, maxBuffer: 4096 });
+      const lock = await pi.exec(flockBin, ["--version"], { cwd, signal, timeout: 5000, maxBuffer: 4096 });
       signal?.throwIfAborted();
       if (lock.code !== 0) throw new Error("AGY requires util-linux flock; no worker was started.");
       try {
@@ -369,13 +367,14 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
         task.trim(),
       ].join("\n");
 
+      const bdBin = "/usr/bin/bd";
       const worker = new AbortController();
       const runningSignal = signal ? AbortSignal.any([signal, worker.signal]) : worker.signal;
       const heartbeat = async () => {
-        const result = await pi.exec("bd", ["--actor", actor!, "heartbeat", issue!], {
+        const result = await pi.exec(bdBin, ["--actor", actor!, "heartbeat", issue!], {
           cwd, signal: runningSignal, timeout: 5000, maxBuffer: 4096,
         });
-        if (result.code !== 0) throw new Error("Beads heartbeat failed");
+        if (result.code !== 0 || result.killed) throw new Error("Beads heartbeat failed");
       };
       if (team) {
         try {
@@ -401,7 +400,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       const lease = team ? activityLease({windowMs: timeoutMs, registry: ctx.modelRegistry, label: launch,
         notify: message => warn(ctx, message), expire: reason => { expiry = reason; worker.abort(); },
       }) : undefined;
-      const sample = worktreeSampler(pi, cwd, runningSignal, () => lease?.record("fileChanges"));
+      const sample = worktreeSampler(pi, cwd, runningSignal, () => lease?.record("fileChanges"), gitBin);
       let sampling: Promise<void> | undefined;
       const tick = () => sampling ??= sample().catch(() => {}).finally(() => { sampling = undefined; });
       let samplingTimer;
@@ -419,9 +418,10 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
             recovery = undefined;
           }
           runningSignal.throwIfAborted();
-          const args = ["--no-fork", "--nonblock", "--conflict-exit-code", "73", cwd, "bwrap", ...sandbox, ...writerArgs];
-          if (restricted) return await pi.exec("flock", args, { cwd, signal: runningSignal, maxBuffer: 256 * 1024 });
-          return await stream("flock", args, {
+          const runnerArgs = ["/usr/bin/python3", "-I", "-S", teamRunner, "writer-exec", "--cwd", cwd, "--issue", issue!, "--", "/usr/bin/bwrap", ...sandbox, ...writerArgs];
+          const args = ["--no-fork", "--nonblock", "--conflict-exit-code", "73", cwd, ...(team ? runnerArgs : ["bwrap", ...sandbox, ...writerArgs])];
+          if (restricted) return await pi.exec(flockBin, args, { cwd, signal: runningSignal, maxBuffer: 256 * 1024 });
+          return await stream(flockBin, args, {
             cwd, signal: runningSignal, timeout: team ? undefined : timeoutMs,
             onProgress: onUpdate && ((summary: string) => onUpdate({ content: [{ type: "text", text: `AGY · ${summary}` }], details })),
             record: (kind: string) => lease?.record(kind),
@@ -450,17 +450,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       }
       if (result.code === 73 && !result.stdout) throw new Error("The worktree lock is busy or AGY exited before reporting; check for an active writer before retrying.");
       if (expiry) {
-        if (team && !restricted && !offeredTimeout && result.killed && !result.stdout &&
-            "protocolError" in result && !result.protocolError && !result.diagnosticIssue && !routeIssue(result.stderr)) {
-          const idle = await pi.exec("flock", ["--nonblock", cwd, "true"], { cwd, signal, timeout: 5000, maxBuffer: 4096 });
-          signal?.throwIfAborted();
-          if (idle.code !== 0) throw new Error("Cannot verify the timed-out worktree lock is free; no continuation offered.");
-          offeredTimeout = true;
-          interrupted = { key, task: task.trim() };
-          return { isError: true, details: { ...details, recoveryKind: "inspect-worker-timeout" },
-            content: [{ type: "text", text: `AGY stopped at its work deadline (${expiry}); no success or retry is implied. Verify no active writer and the claim, inspect the entire partial diff including new files, and run focused checks. If safe, use resumeAfterTimeout: true once with only the remaining edits.` }] };
-        }
-        throw new Error(`Writer timed out (${expiry}); no continuation offered. Inspect partial changes.`);
+        throw new Error(`Writer timed out (${expiry}); no continuation offered. Inspect partial changes and verify active writer, ledger, and claim state.`);
       }
       if (result.killed && !("protocolError" in result && result.protocolError)) throw new Error("AGY exceeded its 10-minute timeout; inspect the workspace for partial changes.");
       if (team && (result.code !== 0 || (report?.status && report.status !== "SUCCESS"))) {
@@ -477,6 +467,9 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
           warn(ctx, message);
           throw new Error(message);
         }
+      }
+      if (team && result.code !== 0 && !result.stdout && /writer fence/i.test(result.stderr)) {
+        throw new Error("AGY blocked by a durable writer fence; inspect active runs and writers before retrying.");
       }
       if (result.code !== 0) throw new Error(`Worker exited with code ${result.code}; inspect the workspace for partial changes.`);
       if ("protocolError" in result && result.protocolError) throw new Error("Invalid AGY event stream; inspect the workspace for partial changes.");

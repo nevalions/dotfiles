@@ -9,11 +9,15 @@ import json
 import runpy
 import os
 from pathlib import Path
+import shutil
+import signal
 import sqlite3
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -178,7 +182,7 @@ class PiTeamRunTests(unittest.TestCase):
 
         with closing(sqlite3.connect(str(db_path))) as conn, conn:
             version = conn.execute('PRAGMA user_version').fetchone()[0]
-            self.assertEqual(version, 2)
+            self.assertEqual(version, 3)
             conn.execute('PRAGMA user_version = 99')
 
         bad = self.run_cli('status', run['run_id'])
@@ -595,6 +599,850 @@ class PiTeamRunTests(unittest.TestCase):
 
         self.assertEqual(canonicalize(str(self.repo_dir)), str(self.repo_dir.resolve()))
         self.assertEqual(canonicalize('opaque-id'), 'opaque-id')
+
+    def test_v2_read_only_discovery_defers_migration_until_write(self) -> None:
+        a, b = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        db.parent.mkdir(parents=True)
+        script = runpy.run_path(str(BIN_PATH))
+        with closing(sqlite3.connect(db)) as conn, conn:
+            for stmt in script['V1_SCHEMA']:
+                conn.execute(stmt)
+            for stmt in script['V2_MIGRATION']:
+                conn.execute(stmt)
+            conn.execute('PRAGMA user_version = 2')
+            conn.execute(
+                "INSERT INTO runs(run_id,repo_key,issue,worktree,status,current_stage,created_at,updated_at) "
+                "VALUES ('v2-scoped',?, 'repo-1', ?, 'active', 'implement', 'now', 'now')",
+                (repo_key, wt_a_admin),
+            )
+
+        discovered = self.run_json('discover', b)
+        self.assertEqual(len(discovered), 1)
+        self.assertEqual(discovered[0]['run_id'], 'v2-scoped')
+        self.assertEqual(discovered[0]['issue'], 'repo-1')
+        self.assertEqual(self.run_json('status', 'v2-scoped')['issue'], 'repo-1')
+        preflight = self.run_json('preflight', b)
+        self.assertNotIn('writer_fence_open', preflight)
+        self.assertTrue(preflight['linked_worktree'])
+
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 2)
+            self.assertIsNone(
+                conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_attempts'").fetchone()
+            )
+
+        second = self.run_json('start', b, '--issue', 'repo-2')
+        self.assertEqual(second['issue'], 'repo-2')
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 3)
+            self.assertIsNotNone(
+                conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_attempts'").fetchone()
+            )
+            self.assertIsNotNone(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='writer_fence_before_run_insert'"
+                ).fetchone()
+            )
+        self.assertEqual(self.run_json('status', 'v2-scoped')['current_stage'], 'implement')
+
+    def test_direct_dispatcher_unscoped_insert_blocked_by_writer_fence_trigger(self) -> None:
+        a, _ = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        seed = self.run_json('start', a, '--issue', 'repo-1')
+        self.run_json('cancel', seed['run_id'], 'admit')
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+
+        insert_sql = (
+            "INSERT INTO runs("
+            "run_id, repo_key, issue, worktree, status, current_stage, wait_generation, "
+            "commit_only, no_ci, with_deploy, with_honcho, with_wiki, created_at, updated_at"
+            ") VALUES (?, ?, NULL, NULL, ?, 'admit', 0, 0, 0, 0, 0, 0, 'now', 'now')"
+        )
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute('PRAGMA foreign_keys = ON')
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES ('wa-unbound', ?, ?, 'repo-1', 0, NULL, 'open', 'now')",
+                (repo_key, wt_a_admin),
+            )
+            for st in ('active', 'waiting'):
+                with self.assertRaisesRegex(sqlite3.IntegrityError, 'writer fence active for repository'):
+                    conn.execute(insert_sql, (f'disp-unbound-{st}', repo_key, st))
+            conn.execute(
+                "UPDATE writer_attempts SET status = 'closed', exit_code = 0, closed_at = 'now' "
+                "WHERE attempt_id = 'wa-unbound'"
+            )
+
+        scoped = self.run_json('start', a, '--issue', 'repo-1')['run_id']
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute('PRAGMA foreign_keys = ON')
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES ('wa-bound', ?, ?, 'repo-1', 1, ?, 'open', 'now')",
+                (repo_key, wt_a_admin, scoped),
+            )
+            with self.assertRaisesRegex(sqlite3.IntegrityError, 'writer fence active for repository'):
+                conn.execute(insert_sql, ('disp-bound-active', repo_key, 'active'))
+            conn.execute(
+                "UPDATE writer_attempts SET status = 'closed', exit_code = 0, closed_at = 'now' "
+                "WHERE attempt_id = 'wa-bound'"
+            )
+
+        self.run_json('cancel', scoped, 'admit')
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(insert_sql, ('disp-clear', repo_key, 'active'))
+        self.assertEqual(self.run_json('status', 'disp-clear')['status'], 'active')
+
+    def test_writer_exec_rejects_state_ledger_inside_writable_worktree(self) -> None:
+        if not os.access('/usr/bin/bwrap', os.X_OK):
+            self.skipTest('/usr/bin/bwrap is required')
+        a, _ = self.linked_pair()
+        marker = Path(a) / 'payload-ran'
+        bwrap_argv = [
+            '/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+            '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--', '/bin/sh', '-c', f'touch {marker}',
+        ]
+
+        evil_xdg = Path(a) / 'evil-xdg'
+        proc_dir = subprocess.run(
+            [sys.executable, str(BIN_PATH), 'writer-exec', '--cwd', a, '--issue', 'repo-1', '--', *bwrap_argv],
+            env={**self.env, 'XDG_STATE_HOME': str(evil_xdg)},
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(proc_dir.returncode, 0)
+        self.assertIn('writable worktree', proc_dir.stderr.lower())
+        self.assertFalse(evil_xdg.exists())
+        self.assertFalse(marker.exists())
+
+        state_dir = self.xdg_state / 'pi-team-run'
+        state_dir.mkdir(parents=True, exist_ok=True)
+        evil_db = Path(a) / 'linked-state.db'
+        (state_dir / 'state.db').symlink_to(evil_db)
+        proc_db_link = self.run_cli('writer-exec', '--cwd', a, '--issue', 'repo-1', '--', *bwrap_argv)
+        self.assertNotEqual(proc_db_link.returncode, 0)
+        self.assertIn('writable worktree', proc_db_link.stderr.lower())
+        self.assertFalse(evil_db.exists())
+        self.assertFalse(marker.exists())
+
+        (state_dir / 'state.db').unlink()
+        state_dir.rmdir()
+        evil_state_dir = Path(a) / 'linked-state-dir'
+        state_dir.symlink_to(evil_state_dir)
+        proc_dir_link = self.run_cli('writer-exec', '--cwd', a, '--issue', 'repo-1', '--', *bwrap_argv)
+        self.assertNotEqual(proc_dir_link.returncode, 0)
+        self.assertIn('writable worktree', proc_dir_link.stderr.lower())
+        self.assertFalse(evil_state_dir.exists())
+        self.assertFalse(marker.exists())
+        state_dir.unlink()
+
+        outside_target = Path(self.tmp.name) / 'outward-target'
+        outside_target.mkdir(parents=True, exist_ok=True)
+        outward_xdg = Path(a) / 'outward-xdg'
+        outward_xdg.symlink_to(outside_target)
+        proc_outward = subprocess.run(
+            [sys.executable, str(BIN_PATH), 'writer-exec', '--cwd', a, '--issue', 'repo-1', '--', *bwrap_argv],
+            env={**self.env, 'XDG_STATE_HOME': str(outward_xdg)},
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(proc_outward.returncode, 0)
+        self.assertIn('writable worktree', proc_outward.stderr.lower())
+        self.assertFalse((outside_target / 'pi-team-run').exists())
+        self.assertFalse(marker.exists())
+
+        wt_sub = Path(a) / 'wt-sub'
+        wt_sub.mkdir()
+        outside_dotdot = Path(self.tmp.name) / 'outside-dotdot'
+        proc_dotdot = subprocess.run(
+            [sys.executable, str(BIN_PATH), 'writer-exec', '--cwd', a, '--issue', 'repo-1', '--', *bwrap_argv],
+            env={**self.env, 'XDG_STATE_HOME': f'{wt_sub}/../{outside_dotdot.name}'},
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(proc_dotdot.returncode, 0)
+        self.assertIn('writable worktree', proc_dotdot.stderr.lower())
+        self.assertFalse(outside_dotdot.exists())
+        self.assertFalse(marker.exists())
+
+        nested_outside = Path(self.tmp.name) / 'nested-outside'
+        nested_outside.mkdir()
+        wt_hop = Path(a) / 'wt-hop'
+        wt_hop.symlink_to(nested_outside)
+        state_dir.symlink_to(wt_hop)
+        proc_nested = self.run_cli('writer-exec', '--cwd', a, '--issue', 'repo-1', '--', *bwrap_argv)
+        self.assertNotEqual(proc_nested.returncode, 0)
+        self.assertIn('writable worktree', proc_nested.stderr.lower())
+        self.assertFalse((nested_outside / 'state.db').exists())
+        self.assertFalse(marker.exists())
+        state_dir.unlink()
+
+        outside_sub = self.xdg_state / 'direct-sub'
+        outside_sub.mkdir(parents=True, exist_ok=True)
+        if subprocess.run(['/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+                           '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--', 'true'],
+                          capture_output=True, check=False).returncode == 0:
+            proc_clean = subprocess.run(
+                [sys.executable, str(BIN_PATH), 'writer-exec', '--cwd', a, '--issue', 'repo-1', '--', *bwrap_argv],
+                env={**self.env, 'XDG_STATE_HOME': f'{outside_sub}/..'},
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(proc_clean.returncode, 0, msg=proc_clean.stderr)
+            self.assertTrue(marker.exists())
+
+    def test_writer_exec_rejects_matching_waiting_run(self) -> None:
+        if not os.access('/usr/bin/bwrap', os.X_OK):
+            self.skipTest('/usr/bin/bwrap is required')
+        a, _ = self.linked_pair()
+        run_id = self.run_json('start', a, '--issue', 'repo-1')['run_id']
+        self.run_json('wait', run_id, 'admit', '--target', 'user', '--reason', 'hold')
+        self.assertEqual(self.run_json('status', run_id)['status'], 'waiting')
+
+        marker = Path(a) / 'payload-ran'
+        bwrap_argv = [
+            'bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+            '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--', '/bin/sh', '-c', f'touch {marker}',
+        ]
+        proc = self.run_cli('writer-exec', '--cwd', a, '--issue', 'repo-1', '--', *bwrap_argv)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn('waiting', proc.stderr.lower())
+        self.assertFalse(marker.exists())
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM writer_attempts').fetchone()[0], 0)
+
+    def test_missing_legacy_linked_path_refuses_start_and_writer_exec(self) -> None:
+        a, b = self.linked_pair()
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        db.parent.mkdir(parents=True)
+        with closing(sqlite3.connect(db)) as conn, conn:
+            for stmt in runpy.run_path(str(BIN_PATH))['V1_SCHEMA']:
+                conn.execute(stmt)
+            conn.execute('PRAGMA user_version = 1')
+            conn.execute(
+                "INSERT INTO runs(run_id,repo_key,status,current_stage,created_at,updated_at) "
+                "VALUES ('legacy-missing', ?, 'active', 'implement', 'now', 'now')",
+                (a,),
+            )
+
+        subprocess.run(['git', '-C', str(self.repo_dir), 'worktree', 'remove', a], check=True, capture_output=True)
+        self.assertFalse(Path(a).exists())
+
+        scoped_start = self.run_cli('start', b, '--issue', 'repo-1')
+        self.assertNotEqual(scoped_start.returncode, 0)
+        self.assertIn('does not exist', scoped_start.stderr.lower())
+
+        unscoped_start = self.run_cli('start', str(self.repo_dir))
+        self.assertNotEqual(unscoped_start.returncode, 0)
+        self.assertIn('does not exist', unscoped_start.stderr.lower())
+
+        if not os.access('/usr/bin/bwrap', os.X_OK):
+            self.skipTest('/usr/bin/bwrap is required')
+        marker = Path(b) / 'payload-ran'
+        bwrap_argv = [
+            'bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+            '--bind', b, b, '--dev', '/dev', '--proc', '/proc', '--', '/bin/sh', '-c', f'touch {marker}',
+        ]
+        writer = self.run_cli('writer-exec', '--cwd', b, '--issue', 'repo-1', '--', *bwrap_argv)
+        self.assertNotEqual(writer.returncode, 0)
+        self.assertIn('does not exist', writer.stderr.lower())
+        self.assertFalse(marker.exists())
+
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute('SELECT run_id, repo_key, status, current_stage FROM runs').fetchall()
+            self.assertEqual([dict(row) for row in rows], [{
+                'run_id': 'legacy-missing',
+                'repo_key': a,
+                'status': 'active',
+                'current_stage': 'implement',
+            }])
+            has_attempts = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_attempts'"
+            ).fetchone()
+            if has_attempts is not None:
+                self.assertEqual(conn.execute('SELECT count(*) FROM writer_attempts').fetchone()[0], 0)
+
+    def test_writer_exec_bootstrap_reports_missing_and_unexecutable_without_traceback(self) -> None:
+        if not os.access('/usr/bin/bwrap', os.X_OK):
+            self.skipTest('/usr/bin/bwrap is required')
+        a, _ = self.linked_pair()
+        missing = Path(self.tmp.name) / 'missing-writer'
+        nonexec = Path(self.tmp.name) / 'nonexec-writer'
+        nonexec.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
+        nonexec.chmod(0o644)
+
+        base_bwrap = [
+            'bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+            '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--',
+        ]
+        miss_proc = self.run_cli(
+            'writer-exec', '--cwd', a, '--issue', 'repo-1', '--',
+            *base_bwrap, str(missing), '--secret-arg', 'secret-arg-do-not-leak',
+        )
+        self.assertEqual(miss_proc.returncode, 127)
+        self.assertEqual(miss_proc.stderr.strip(), f'bwrap: execvp {missing}: No such file or directory')
+        self.assertNotIn('Traceback', miss_proc.stderr)
+        self.assertNotIn('FileNotFoundError', miss_proc.stderr)
+        self.assertNotIn('secret-arg-do-not-leak', miss_proc.stderr)
+
+        perm_proc = self.run_cli(
+            'writer-exec', '--cwd', a, '--issue', 'repo-1', '--',
+            *base_bwrap, str(nonexec), '--secret-arg', 'secret-arg-do-not-leak',
+        )
+        self.assertEqual(perm_proc.returncode, 126)
+        self.assertEqual(perm_proc.stderr.strip(), f'bwrap: execvp {nonexec}: Permission denied')
+        self.assertNotIn('Traceback', perm_proc.stderr)
+        self.assertNotIn('PermissionError', perm_proc.stderr)
+        self.assertNotIn('secret-arg-do-not-leak', perm_proc.stderr)
+
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            attempts = [
+                (row['status'], row['exit_code'])
+                for row in conn.execute('SELECT status, exit_code FROM writer_attempts ORDER BY rowid').fetchall()
+            ]
+        self.assertEqual(attempts, [('closed', 127), ('closed', 126)])
+
+    def test_writer_exec_pins_trusted_binaries_and_ignores_python_site_hooks(self) -> None:
+        for exe in ('/usr/bin/bwrap', '/usr/bin/python3', '/usr/bin/git'):
+            if not os.access(exe, os.X_OK):
+                self.skipTest(f'{exe} is required')
+        a, _ = self.linked_pair()
+        if subprocess.run(['/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+                           '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--', 'true'],
+                          capture_output=True, check=False).returncode != 0:
+            self.skipTest('working /usr/bin/bwrap PID namespace is required')
+
+        shadow_dir = Path(a) / 'shadow-bin'
+        shadow_dir.mkdir()
+        shadow_marker = Path(a) / 'shadow-bin-ran'
+        for name in ('bwrap', 'git', 'python3'):
+            exe = shadow_dir / name
+            exe.write_text(f'#!/bin/sh\ntouch {shadow_marker}\nexit 99\n', encoding='utf-8')
+            exe.chmod(0o755)
+
+        hook_dir = Path(a) / 'py-hooks'
+        hook_dir.mkdir()
+        hook_marker = Path(a) / 'site-hook-ran'
+        (hook_dir / 'sitecustomize.py').write_text(
+            f'from pathlib import Path\nPath({str(hook_marker)!r}).write_text("pwned")\n',
+            encoding='utf-8',
+        )
+
+        worker_dir = Path(self.tmp.name) / 'worker-bin'
+        worker_dir.mkdir()
+        worker_marker = Path(a) / 'worker-ran'
+        fake_worker = worker_dir / 'fake-worker'
+        fake_worker.write_text(f'#!/bin/sh\ntouch {worker_marker}\n', encoding='utf-8')
+        fake_worker.chmod(0o755)
+
+        poison_env = {
+            **self.env,
+            'PATH': f'{shadow_dir}:{worker_dir}:/usr/bin:/bin',
+            'PYTHONPATH': str(hook_dir),
+            'PYTHONUSERBASE': str(hook_dir),
+        }
+        proc = subprocess.run(
+            [
+                '/usr/bin/python3', '-I', '-S', str(BIN_PATH),
+                'writer-exec', '--cwd', a, '--issue', 'repo-1', '--',
+                '/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+                '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--',
+                'fake-worker',
+            ],
+            cwd=a,
+            env=poison_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertTrue(worker_marker.exists())
+        self.assertFalse(shadow_marker.exists())
+        self.assertFalse(hook_marker.exists())
+
+    def test_short_sqlite_transaction_resolves_unfamiliar_keys_outside_lock_and_retries_new_keys(self) -> None:
+        a, b = self.linked_pair()
+        other = Path(self.tmp.name) / 'other-repo'
+        other.mkdir()
+        other_run = self.run_json('start', str(other))['run_id']
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_start = script['cmd_start']
+        real_canon = script['canonicalize_repo']
+        parser = script['build_parser']()
+
+        resolving_other = threading.Event()
+        allow_finish = threading.Event()
+        tx_probe_ok: list[bool] = []
+
+        def delayed_canon(repo: str, *, git_bin: str = 'git') -> str:
+            if repo == str(other):
+                with closing(sqlite3.connect(str(db), timeout=0.05, isolation_level=None)) as probe:
+                    probe.execute('BEGIN IMMEDIATE')
+                    probe.execute('ROLLBACK')
+                tx_probe_ok.append(True)
+                resolving_other.set()
+                self.assertTrue(allow_finish.wait(timeout=5.0))
+            return real_canon(repo, git_bin=git_bin)
+
+        result_holder: list[tuple[int, dict] | BaseException] = []
+
+        def run_start() -> None:
+            try:
+                with patch.dict(cmd_start.__globals__, {'canonicalize_repo': delayed_canon}):
+                    result_holder.append(cmd_start(parser.parse_args(['start', b, '--issue', 'repo-1']), db))
+            except BaseException as exc:
+                result_holder.append(exc)
+
+        t = threading.Thread(target=run_start)
+        t.start()
+        self.assertTrue(resolving_other.wait(timeout=5.0))
+        ckpt = self.run_json('checkpoint', other_run, 'admit', '--evidence', 'ev:unblocked')
+        self.assertEqual(ckpt['current_stage'], 'implement')
+        allow_finish.set()
+        t.join(timeout=5.0)
+        self.assertFalse(t.is_alive())
+        self.assertEqual(tx_probe_ok, [True])
+        self.assertIsInstance(result_holder[0], tuple)
+        code, payload = result_holder[0]
+        self.assertEqual(code, 0)
+        self.assertEqual(payload['issue'], 'repo-1')
+
+        # Now verify new-key race: while resolving an unfamiliar key outside tx, another run inserts a conflicting key.
+        third = Path(self.tmp.name) / 'third-repo'
+        third.mkdir()
+        self.run_json('start', str(third))
+        self.run_json('cancel', payload['run_id'], 'admit')
+
+        resolving_third = threading.Event()
+        allow_race_finish = threading.Event()
+        race_holder: list[BaseException | tuple[int, dict]] = []
+
+        def race_canon(repo: str, *, git_bin: str = 'git') -> str:
+            if repo == str(third):
+                resolving_third.set()
+                self.assertTrue(allow_race_finish.wait(timeout=5.0))
+            return real_canon(repo, git_bin=git_bin)
+
+        def run_raced_start() -> None:
+            try:
+                with patch.dict(cmd_start.__globals__, {'canonicalize_repo': race_canon}):
+                    race_holder.append(cmd_start(parser.parse_args(['start', b, '--issue', 'repo-2']), db))
+            except BaseException as exc:
+                race_holder.append(exc)
+
+        t2 = threading.Thread(target=run_raced_start)
+        t2.start()
+        self.assertTrue(resolving_third.wait(timeout=5.0))
+        self.run_json('start', a)
+        allow_race_finish.set()
+        t2.join(timeout=5.0)
+        self.assertFalse(t2.is_alive())
+        self.assertIsInstance(race_holder[0], script['CliError'])
+        self.assertIn('active run already exists', str(race_holder[0]).lower())
+
+    def test_writer_exec_unreadable_pidfd_after_wait_and_identity_failure_keep_fence_open(self) -> None:
+        if not os.access('/usr/bin/bwrap', os.X_OK) or not hasattr(os, 'pidfd_open'):
+            self.skipTest('/usr/bin/bwrap and os.pidfd_open are required')
+        a, b = self.linked_pair()
+        if subprocess.run(['/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+                           '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--', 'true'],
+                          capture_output=True, check=False).returncode != 0:
+            self.skipTest('working /usr/bin/bwrap PID namespace is required')
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_writer_exec = script['cmd_writer_exec']
+        parser = script['build_parser']()
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+
+        # Case A: negative identity verification proves no GO, no payload execution, and fence remains open.
+        blocked_marker = Path(a) / 'identity-failed-ran'
+        real_read_info = script['_read_bwrap_info']
+
+        def tampered_read_info(info_r: int, timeout: float = script['INFO_READ_TIMEOUT_SEC']) -> dict:
+            info = real_read_info(info_r, timeout)
+            info['child-pid'] = os.getpid()
+            return info
+
+        args_ident = parser.parse_args([
+            'writer-exec', '--cwd', a, '--issue', 'repo-ident', '--',
+            '/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+            '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--',
+            '/bin/sh', '-c', f'touch {blocked_marker}',
+        ])
+        with patch.dict(cmd_writer_exec.__globals__, {'_read_bwrap_info': tampered_read_info}):
+            with self.assertRaisesRegex(script['CliError'], 'not a direct child|namespace'):
+                cmd_writer_exec(args_ident, db)
+        self.assertFalse(blocked_marker.exists())
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = [dict(r) for r in conn.execute('SELECT issue, status, exit_code FROM writer_attempts').fetchall()]
+        self.assertEqual(rows, [{'issue': 'repo-ident', 'status': 'open', 'exit_code': None}])
+        denied_ident = self.run_cli('start', b)
+        self.assertNotEqual(denied_ident.returncode, 0)
+        self.assertIn('writer fence', denied_ident.stderr.lower())
+
+        # Clear the test-only fence row in disposable temp ledger before Case B.
+        with closing(sqlite3.connect(str(db))) as conn, conn:
+            conn.execute("UPDATE writer_attempts SET status = 'closed', exit_code = 1, closed_at = 'now'")
+
+        # Case B: real bwrap lifecycle + real identity check + real worker exit, but unreadable witness after proc.wait().
+        ran_marker = Path(a) / 'unreadable-witness-worker-ran'
+        real_pin = script['_pin_verified_namespace_init']
+        dummy_r, dummy_w = os.pipe2(os.O_CLOEXEC)
+        try:
+            def pin_with_unready_witness(info: dict, launcher_pid: int) -> int:
+                real_pidfd = real_pin(info, launcher_pid)
+                os.close(real_pidfd)
+                return os.dup(dummy_r)
+
+            args_witness = parser.parse_args([
+                'writer-exec', '--cwd', a, '--issue', 'repo-witness', '--',
+                '/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+                '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--',
+                '/bin/sh', '-c', f'touch {ran_marker}',
+            ])
+            with patch.dict(cmd_writer_exec.__globals__, {
+                '_pin_verified_namespace_init': pin_with_unready_witness,
+                'PIDFD_WAIT_TIMEOUT_SEC': 0.05,
+            }):
+                with self.assertRaisesRegex(script['CliError'], 'pidfd not readable after launcher wait'):
+                    cmd_writer_exec(args_witness, db)
+        finally:
+            os.close(dummy_r)
+            os.close(dummy_w)
+
+        self.assertTrue(ran_marker.exists())
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            open_rows = [
+                dict(r)
+                for r in conn.execute("SELECT issue, status, exit_code FROM writer_attempts WHERE status = 'open'").fetchall()
+            ]
+        self.assertEqual(open_rows, [{'issue': 'repo-witness', 'status': 'open', 'exit_code': None}])
+        self.assertNotIn('writer_fence_open', self.run_json('preflight', a))
+        denied_witness = self.run_cli('start', b)
+        self.assertNotEqual(denied_witness.returncode, 0)
+        self.assertIn('writer fence', denied_witness.stderr.lower())
+
+    def test_start_and_writer_exec_pin_trusted_git_and_ignore_git_env_overrides(self) -> None:
+        if not os.access('/usr/bin/git', os.X_OK):
+            self.skipTest('/usr/bin/git is required')
+        a, b = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+
+        unrelated = Path(self.tmp.name) / 'unrelated-repo'
+        unrelated.mkdir()
+        git_env = {
+            'PATH': '/usr/bin:/bin',
+            'HOME': '/nonexistent',
+            'GIT_CONFIG_NOSYSTEM': '1',
+            'GIT_CONFIG_GLOBAL': '/dev/null',
+            'GIT_TERMINAL_PROMPT': '0',
+        }
+        subprocess.run(['/usr/bin/git', '-C', str(unrelated), 'init', '-b', 'main'], env=git_env, check=True, capture_output=True)
+        subprocess.run(['/usr/bin/git', '-C', str(unrelated), 'config', 'user.name', 'Test'], env=git_env, check=True, capture_output=True)
+        subprocess.run(['/usr/bin/git', '-C', str(unrelated), 'config', 'user.email', 'test@example.invalid'], env=git_env, check=True, capture_output=True)
+        subprocess.run(['/usr/bin/git', '-C', str(unrelated), 'commit', '--allow-empty', '-m', 'base'], env=git_env, check=True, capture_output=True)
+
+        seed = self.run_json('start', a, '--issue', 'repo-seed')
+        self.run_json('cancel', seed['run_id'], 'admit')
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        with closing(sqlite3.connect(str(db))) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES ('wa-open-git-pin', ?, ?, 'repo-1', 0, NULL, 'open', 'now')",
+                (repo_key, wt_a_admin),
+            )
+
+        shadow_dir = Path(self.tmp.name) / 'shadow-git-bin'
+        shadow_dir.mkdir()
+        shadow_marker = Path(self.tmp.name) / 'shadow-git-ran'
+        fake_git = shadow_dir / 'git'
+        fake_git.write_text(
+            f'#!/bin/sh\ntouch {shadow_marker}\nprintf "%s\\n" "{unrelated}/.git"\n',
+            encoding='utf-8',
+        )
+        fake_git.chmod(0o755)
+
+        poison_env = {
+            **self.env,
+            'PATH': f'{shadow_dir}:{self.env.get("PATH", "/usr/bin:/bin")}',
+            'GIT_DIR': str(unrelated / '.git'),
+            'GIT_COMMON_DIR': str(unrelated / '.git'),
+            'GIT_WORK_TREE': str(unrelated),
+            'GIT_INDEX_FILE': str(unrelated / '.git' / 'index'),
+            'GIT_CEILING_DIRECTORIES': str(Path(self.tmp.name)),
+            'GIT_DISCOVERY_ACROSS_FILESYSTEM': '0',
+            'GIT_CONFIG_PARAMETERS': "'core.bare=true'",
+        }
+
+        for start_args in (['start', b], ['start', b, '--issue', 'repo-2']):
+            denied = subprocess.run(
+                [sys.executable, str(BIN_PATH), *start_args],
+                env=poison_env, text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(denied.returncode, 0, msg=denied.stdout)
+            self.assertIn('writer fence', denied.stderr.lower())
+        self.assertFalse(shadow_marker.exists())
+
+        self.assertNotEqual(self.run_cli('writer-fence', b).returncode, 0)
+
+        if os.access('/usr/bin/bwrap', os.X_OK):
+            blocked_marker = Path(b) / 'poison-wexec-ran'
+            wexec_denied = subprocess.run(
+                [
+                    sys.executable, str(BIN_PATH), 'writer-exec', '--cwd', b, '--issue', 'repo-2', '--',
+                    '/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+                    '--bind', b, b, '--dev', '/dev', '--proc', '/proc', '--',
+                    '/bin/sh', '-c', f'touch {blocked_marker}',
+                ],
+                env=poison_env, text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(wexec_denied.returncode, 0, msg=wexec_denied.stdout)
+            self.assertIn('writer fence', wexec_denied.stderr.lower())
+            self.assertFalse(blocked_marker.exists())
+            self.assertFalse(shadow_marker.exists())
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_start = script['cmd_start']
+        parser = script['build_parser']()
+
+        seen_cmds: list[tuple[list[str], dict[str, str]]] = []
+        real_run = subprocess.run
+
+        def recording_run(cmd, *r_args, **r_kwargs):
+            seen_cmds.append((list(cmd), dict(r_kwargs.get('env') or {})))
+            return real_run(cmd, *r_args, **r_kwargs)
+
+        with patch.dict(os.environ, {
+            'GIT_DIR': str(unrelated / '.git'),
+            'GIT_COMMON_DIR': str(unrelated / '.git'),
+            'GIT_WORK_TREE': str(unrelated),
+            'GIT_CONFIG_PARAMETERS': "'core.bare=true'",
+        }):
+            with patch.dict(cmd_start.__globals__, {'subprocess': type('Sub', (), {
+                'TimeoutExpired': subprocess.TimeoutExpired,
+                'run': staticmethod(recording_run),
+            })()}):
+                with self.assertRaisesRegex(script['CliError'], 'writer fence'):
+                    cmd_start(parser.parse_args(['start', b, '--issue', 'repo-2']), db)
+        self.assertEqual(len(seen_cmds), 2)
+        for cmd, env_used in seen_cmds:
+            self.assertEqual(cmd[0], '/usr/bin/git')
+            self.assertIn('rev-parse', cmd)
+            self.assertNotIn('status', cmd)
+            self.assertNotIn('GIT_DIR', env_used)
+            self.assertNotIn('GIT_COMMON_DIR', env_used)
+            self.assertNotIn('GIT_WORK_TREE', env_used)
+            self.assertEqual(env_used.get('GIT_CONFIG_NOSYSTEM'), '1')
+            self.assertEqual(env_used.get('GIT_CONFIG_GLOBAL'), '/dev/null')
+            self.assertEqual(env_used.get('GIT_TERMINAL_PROMPT'), '0')
+
+        for bad_out in (
+            subprocess.CompletedProcess(['/usr/bin/git'], 128, stdout='', stderr='fatal'),
+            subprocess.CompletedProcess(['/usr/bin/git'], 0, stdout=f'{b}\n{wt_a_admin}\n', stderr=''),
+            subprocess.CompletedProcess(['/usr/bin/git'], 0, stdout='relative\n', stderr=''),
+            subprocess.CompletedProcess(['/usr/bin/git'], 0, stdout=f'{repo_key}\0\n', stderr=''),
+        ):
+            with patch.dict(cmd_start.__globals__, {'subprocess': type('Sub', (), {
+                'TimeoutExpired': subprocess.TimeoutExpired,
+                'run': staticmethod(lambda *a, _res=bad_out, **kw: _res),
+            })()}):
+                with self.assertRaises(script['CliError']):
+                    cmd_start(parser.parse_args(['start', b]), db)
+
+    def test_writer_exec_rejects_ledger_hardlink_nonregular_and_late_inode_swap(self) -> None:
+        if not os.access('/usr/bin/bwrap', os.X_OK) or not hasattr(os, 'pidfd_open'):
+            self.skipTest('/usr/bin/bwrap and os.pidfd_open are required')
+        a, _ = self.linked_pair()
+        if subprocess.run(['/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+                           '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--', 'true'],
+                          capture_output=True, check=False).returncode != 0:
+            self.skipTest('working /usr/bin/bwrap PID namespace is required')
+
+        seed = self.run_json('start', a, '--issue', 'repo-seed')
+        self.run_json('cancel', seed['run_id'], 'admit')
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        before_bytes = db.read_bytes()
+        marker = Path(a) / 'hardlink-payload-ran'
+        bwrap_argv = [
+            '/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+            '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--', '/bin/sh', '-c', f'touch {marker}',
+        ]
+
+        wt_hardlink = Path(a) / 'state-hardlink.db'
+        os.link(db, wt_hardlink)
+        self.assertEqual(db.stat().st_nlink, 2)
+        proc = self.run_cli('writer-exec', '--cwd', a, '--issue', 'repo-hardlink', '--', *bwrap_argv)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn('hardlink', proc.stderr.lower())
+        self.assertFalse(marker.exists())
+        self.assertEqual(db.read_bytes(), before_bytes)
+        wt_hardlink.unlink()
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            self.assertEqual(conn.execute('SELECT count(*) FROM writer_attempts').fetchone()[0], 0)
+            self.assertEqual(conn.execute('SELECT count(*) FROM runs').fetchone()[0], 1)
+
+        fifo_xdg = Path(self.tmp.name) / 'fifo-xdg'
+        fifo_dir = fifo_xdg / 'pi-team-run'
+        fifo_dir.mkdir(parents=True)
+        fifo_db = fifo_dir / 'state.db'
+        os.mkfifo(fifo_db)
+        fifo_proc = subprocess.run(
+            [sys.executable, str(BIN_PATH), 'writer-exec', '--cwd', a, '--issue', 'repo-fifo', '--', *bwrap_argv],
+            env={**self.env, 'XDG_STATE_HOME': str(fifo_xdg)},
+            text=True, capture_output=True, check=False,
+        )
+        self.assertNotEqual(fifo_proc.returncode, 0)
+        self.assertIn('regular file', fifo_proc.stderr.lower())
+        self.assertFalse(marker.exists())
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_writer_exec = script['cmd_writer_exec']
+        parser = script['build_parser']()
+        real_validate = script['_validate_writer_state_path']
+        calls = 0
+
+        def inject_late_hardlink(path_arg: Path, cwd_arg: Path, *, require_exists: bool = False):
+            nonlocal calls
+            calls += 1
+            if calls == 2 and not wt_hardlink.exists():
+                os.link(db, wt_hardlink)
+            return real_validate(path_arg, cwd_arg, require_exists=require_exists)
+
+        args_late = parser.parse_args(['writer-exec', '--cwd', a, '--issue', 'repo-late', '--', *bwrap_argv])
+        with patch.dict(cmd_writer_exec.__globals__, {'_validate_writer_state_path': inject_late_hardlink}):
+            with self.assertRaisesRegex(script['CliError'], 'hardlink'):
+                cmd_writer_exec(args_late, db)
+        self.assertFalse(marker.exists())
+        wt_hardlink.unlink()
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = [dict(r) for r in conn.execute('SELECT issue, status, exit_code FROM writer_attempts').fetchall()]
+        self.assertEqual(rows, [{'issue': 'repo-late', 'status': 'open', 'exit_code': None}])
+
+    def test_writer_exec_high_exit_200_requires_witness_and_only_signal_killed_launcher_bypasses_close(self) -> None:
+        if not os.access('/usr/bin/bwrap', os.X_OK) or not hasattr(os, 'pidfd_open'):
+            self.skipTest('/usr/bin/bwrap and os.pidfd_open are required')
+        a, b = self.linked_pair()
+        if subprocess.run(['/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+                           '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--', 'true'],
+                          capture_output=True, check=False).returncode != 0:
+            self.skipTest('working /usr/bin/bwrap PID namespace is required')
+
+        marker_200 = Path(a) / 'exit-200-ran'
+        proc_200 = self.run_cli(
+            'writer-exec', '--cwd', a, '--issue', 'repo-200', '--',
+            '/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+            '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--',
+            '/bin/sh', '-c', f'touch {marker_200}; exit 200',
+        )
+        self.assertEqual(proc_200.returncode, 200, msg=proc_200.stderr)
+        self.assertTrue(marker_200.exists())
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = [dict(r) for r in conn.execute('SELECT issue, status, exit_code FROM writer_attempts').fetchall()]
+        self.assertEqual(rows, [{'issue': 'repo-200', 'status': 'closed', 'exit_code': 200}])
+        self.assertNotIn('writer_fence_open', self.run_json('preflight', a))
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_writer_exec = script['cmd_writer_exec']
+        parser = script['build_parser']()
+        real_pin = script['_pin_verified_namespace_init']
+
+        marker_unready = Path(a) / 'exit-200-unready-ran'
+        dummy_r, dummy_w = os.pipe2(os.O_CLOEXEC)
+        try:
+            def pin_unready(info: dict, launcher_pid: int) -> int:
+                real_pidfd = real_pin(info, launcher_pid)
+                os.close(real_pidfd)
+                return os.dup(dummy_r)
+
+            args_200 = parser.parse_args([
+                'writer-exec', '--cwd', a, '--issue', 'repo-200-unready', '--',
+                '/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+                '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--',
+                '/bin/sh', '-c', f'touch {marker_unready}; exit 200',
+            ])
+            with patch.dict(cmd_writer_exec.__globals__, {
+                '_pin_verified_namespace_init': pin_unready,
+                'PIDFD_WAIT_TIMEOUT_SEC': 0.05,
+            }):
+                with self.assertRaisesRegex(script['CliError'], 'pidfd not readable after launcher wait'):
+                    cmd_writer_exec(args_200, db)
+        finally:
+            os.close(dummy_r)
+            os.close(dummy_w)
+
+        self.assertTrue(marker_unready.exists())
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            open_rows = [
+                dict(r)
+                for r in conn.execute("SELECT issue, status, exit_code FROM writer_attempts WHERE status = 'open'").fetchall()
+            ]
+        self.assertEqual(open_rows, [{'issue': 'repo-200-unready', 'status': 'open', 'exit_code': None}])
+
+        with closing(sqlite3.connect(str(db))) as conn, conn:
+            conn.execute("UPDATE writer_attempts SET status = 'closed', exit_code = 200, closed_at = 'now'")
+
+        marker_sig = Path(a) / 'sigkill-launcher-ready'
+        real_popen = subprocess.Popen
+        killer_threads: list[threading.Thread] = []
+
+        def popen_and_kill_launcher(*p_args, **p_kwargs):
+            proc = real_popen(*p_args, **p_kwargs)
+
+            def kill_when_ready() -> None:
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline and not marker_sig.exists():
+                    time.sleep(0.005)
+                if marker_sig.exists():
+                    try:
+                        os.kill(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+            kt = threading.Thread(target=kill_when_ready, daemon=True)
+            kt.start()
+            killer_threads.append(kt)
+            return proc
+
+        args_sig = parser.parse_args([
+            'writer-exec', '--cwd', a, '--issue', 'repo-sigkill', '--',
+            '/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+            '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--',
+            '/bin/sh', '-c', f'touch {marker_sig}; exec /bin/sleep 0.3',
+        ])
+        with patch.dict(cmd_writer_exec.__globals__, {'subprocess': type('Sub', (), {
+            'Popen': staticmethod(popen_and_kill_launcher),
+            'TimeoutExpired': subprocess.TimeoutExpired,
+            'SubprocessError': subprocess.SubprocessError,
+            'run': staticmethod(subprocess.run),
+        })()}):
+            rc, _ = cmd_writer_exec(args_sig, db)
+        for kt in killer_threads:
+            kt.join(timeout=5.0)
+        time.sleep(0.35)
+
+        self.assertEqual(rc, 128 + signal.SIGKILL)
+        self.assertTrue(marker_sig.exists())
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            sig_rows = [
+                dict(r)
+                for r in conn.execute("SELECT issue, status, exit_code FROM writer_attempts WHERE status = 'open'").fetchall()
+            ]
+        self.assertEqual(sig_rows, [{'issue': 'repo-sigkill', 'status': 'open', 'exit_code': None}])
+        self.assertNotEqual(self.run_cli('start', b).returncode, 0)
 
 
 if __name__ == '__main__':
