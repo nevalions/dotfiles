@@ -680,6 +680,37 @@ def cmd_status(args: argparse.Namespace, db_path: Path) -> tuple[int, dict | lis
         return 0, [build_run_dict(conn, row) for row in rows]
 
 
+def cmd_discover(args: argparse.Namespace, db_path: Path) -> tuple[int, list]:
+    """List only this Git repository's unfinished runs; never initialize or migrate the ledger."""
+    checkout = Path(args.checkout).resolve()
+    key = canonicalize_repo(str(checkout))
+    if not (Path(key) / 'HEAD').is_file() or not (Path(key) / 'objects').is_dir():
+        raise CliError('startup discovery requires a Git checkout')
+    if not db_path.exists():
+        return 0, []
+    result = []
+    with open_read_only(db_path) as conn:
+        for row in conn.execute("SELECT * FROM runs WHERE status IN ('active', 'waiting') ORDER BY created_at"):
+            stored = row['repo_key']
+            if stored != key:
+                if not os.path.exists(stored) or canonicalize_repo(stored) != key:
+                    continue
+            issue = row['issue'] if 'issue' in row.keys() else None
+            root = None
+            if issue and row['worktree']:
+                admin = Path(row['worktree'])
+                if admin.parent == Path(key) / 'worktrees':
+                    try:
+                        gitfile = (admin / (admin / 'gitdir').read_text().rstrip('\n')).resolve(strict=True)
+                        if gitfile.name == '.git' and scoped_worktree(str(gitfile.parent), key, issue) == str(admin):
+                            root = str(gitfile.parent)
+                    except (OSError, ValueError, CliError):
+                        pass
+            result.append({'run_id': row['run_id'], 'issue': issue, 'worktree': root,
+                           'stage': row['current_stage'], 'status': row['status']})
+    return 0, result
+
+
 def cmd_resume(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     """Show the next required step for a run without making any state changes."""
     if not db_path.exists():
@@ -1221,6 +1252,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_start.add_argument('--with-wiki', action='store_true', help='Opt in to optional wiki stage')
     p_start.add_argument('--note', help='Optional nonsecret run note')
 
+    p_discover = sub.add_parser('discover', parents=[common], help='List unfinished runs for this checkout')
+    p_discover.add_argument('checkout', nargs='?', default='.')
+
     p_preflight = sub.add_parser('preflight', parents=[common], help='Show exact local checkout and ledger state')
     p_preflight.add_argument('checkout')
     p_preflight.add_argument('--run-id')
@@ -1287,6 +1321,7 @@ def main(argv: list[str] | None = None) -> int:
         'start': cmd_start,
         'status': cmd_status,
         'preflight': cmd_preflight,
+        'discover': cmd_discover,
         'delivery-profile': cmd_delivery_profile,
         'resume': cmd_resume,
         'wait': cmd_wait,

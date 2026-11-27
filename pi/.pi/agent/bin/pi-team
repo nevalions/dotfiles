@@ -21,4 +21,8 @@ if [ ! -r "$subagent_source" ] || [ ! -r "$todo" ] || [ ! -r "$policy" ] || [ ! 
   exit 1
 fi
 subagent=$(python3 -I "$team_dir/prepare-subagent.py" "$subagent_source" "$agent_dir/install/team-cache")
+unset PI_TEAM_TASK_PICKER
+case "$#:${1-}" in
+  0:|1:-c|1:--continue|1:-r|1:--resume) export PI_TEAM_TASK_PICKER=1 ;;
+esac
 exec "$agent_dir/bin/pi" --extension "$subagent" --extension "$todo" --append-system-prompt "$policy" --agy-team "$@"

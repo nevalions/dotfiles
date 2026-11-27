@@ -298,6 +298,22 @@ class PiTeamRunTests(unittest.TestCase):
         self.run_json('checkpoint', run, 'wiki', '--skip', '--evidence', 'skip:not-applicable')
         self.assertFalse(self.run_json('checkpoint', other, 'admit', '--evidence', 'claimed')['reserved'])
 
+    def test_startup_discovery_is_scoped_read_only_and_handles_missing_worktree(self):
+        a, b = self.linked_pair()
+        self.assertEqual(self.run_json('discover', str(self.repo_dir)), [])
+        self.assertFalse(self.xdg_state.exists())
+        self.run_json('start', 'other-repo')
+        run = self.run_json('start', a, '--issue', 'repo-1')['run_id']
+        row, = self.run_json('discover', b)
+        self.assertEqual(row, dict(issue='repo-1', run_id=run, stage='admit', status='active', worktree=a))
+        subprocess.run(['git', '-C', str(self.repo_dir), 'worktree', 'remove', a], check=True)
+        self.assertIsNone(self.run_json('discover', str(self.repo_dir))[0]['worktree'])
+        self.run_json('cancel', run, 'admit')
+        self.assertEqual(self.run_json('discover', b), [])
+        legacy = self.run_json('start', str(self.repo_dir))['run_id']
+        self.assertEqual(self.run_json('discover', b)[0]['run_id'], legacy)
+        self.assertIsNone(self.run_json('discover', b)[0]['issue'])
+
     def test_v1_run_stays_exclusive_across_migration(self):
         a, _ = self.linked_pair()
         db = self.xdg_state / 'pi-team-run/state.db'

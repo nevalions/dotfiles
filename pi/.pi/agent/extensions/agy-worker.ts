@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { activityLease, flashWriterModel, routeIssue, warn, writeAlternate } from "../team/team-health.mjs";
 import { runAgyStream } from "../team/agy-stream.mjs";
+import { teamTaskPicker } from "../team/task-picker.mjs";
 import { worktreeSampler } from "../team/worktree-activity.mjs";
 import { Type } from "typebox";
 
@@ -255,6 +256,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
   let recovery: { key: string; model: string; thinking?: string; excluded: Set<string> } | undefined;
   let interrupted: { key: string; task: string } | undefined;
   let offeredTimeout = false;
+  pi.on("session_start", (event, ctx) => teamTaskPicker(pi, event, ctx));
   pi.on("before_agent_start", () => { interrupted = undefined; offeredTimeout = false; });
   pi.registerFlag("agy-model", { type: "string", default: defaultModel, description: "Plain Pi worker model ID from agy models" });
   pi.registerFlag("agy-effort", { type: "string", default: defaultEffort, description: "Plain Pi worker effort: low, medium, high, xhigh, or max" });
