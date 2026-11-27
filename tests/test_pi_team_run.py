@@ -5,6 +5,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+import errno
+import io
 import json
 import runpy
 import os
@@ -1443,6 +1445,1861 @@ class PiTeamRunTests(unittest.TestCase):
             ]
         self.assertEqual(sig_rows, [{'issue': 'repo-sigkill', 'status': 'open', 'exit_code': None}])
         self.assertNotEqual(self.run_cli('start', b).returncode, 0)
+
+    def _recovery_host_patches(
+        self,
+        cmd_fn,
+        db_path: Path,
+        *,
+        boot_id: str,
+        machine_id: str = '1' * 32,
+        fs_type: str = 'ext4',
+        fsid: int = 0x9123456789ABCDEF,
+        pid_ns_ino: int = 0xEFFFFFFC,
+        nstgid_line: str = 'NStgid:\t1000\n',
+        proc_fs: str = 'proc',
+        proc_root: str = '/',
+        proc_dev: str | None = None,
+        extra_mounts: str = '',
+        proc_magic: int | None = None,
+        ledger_magic: int | None = None,
+        ledger_dev_maj_min: str | None = None,
+    ):
+        probe_path = db_path if db_path.exists() else (db_path.parent if db_path.parent.exists() else Path(self.tmp.name))
+        st = os.stat(probe_path)
+        maj_min = ledger_dev_maj_min if ledger_dev_maj_min is not None else f'{os.major(st.st_dev)}:{os.minor(st.st_dev)}'
+        if proc_dev is None:
+            proc_st = os.stat('/proc')
+            proc_dev = f'{os.major(proc_st.st_dev)}:{os.minor(proc_st.st_dev)}'
+        mountinfo = (
+            f'22 1 {maj_min} / / rw,relatime - {fs_type} /dev/sda2 rw\n'
+            f'31 22 {proc_dev} {proc_root} /proc rw,nosuid,nodev,noexec - {proc_fs} proc rw\n'
+        )
+        if extra_mounts:
+            mountinfo += extra_mounts.rstrip('\n') + '\n'
+        real_fstatfs_magic = cmd_fn.__globals__['_fstatfs_magic']
+        real_fstat = os.fstat
+        fs_magics = cmd_fn.__globals__['LOCAL_DURABLE_FS_MAGICS']
+
+        def patched_fstatfs_magic(fd: int) -> int:
+            st_fd = real_fstat(fd)
+            if stat.S_ISDIR(st_fd.st_mode):
+                return real_fstatfs_magic(fd) if proc_magic is None else proc_magic
+            if ledger_magic is not None:
+                return ledger_magic
+            return fs_magics.get(fs_type, 0x01021994)
+
+        return patch.dict(
+            cmd_fn.__globals__,
+            {
+                '_fstatfs_magic': patched_fstatfs_magic,
+                '_read_host_boot_id': lambda _proc_fd: boot_id,
+                '_read_machine_id_raw': lambda: machine_id,
+                '_read_proc_self_mountinfo': lambda _proc_fd: mountinfo,
+                '_read_proc_self_status': lambda _proc_fd: f'Name:\tpython3\n{nstgid_line}',
+                '_read_proc_self_ns_pid': lambda _proc_fd: (f'pid:[{pid_ns_ino}]', pid_ns_ino),
+                '_read_fd_statvfs_fsid': lambda _fd: fsid,
+                '_read_path_statvfs_fsid': lambda _path: fsid,
+            },
+        )
+
+    def test_writer_recovery_missing_and_legacy_v1_v2_state_fail_closed_without_init_or_migration(self) -> None:
+        a, _ = self.linked_pair()
+        att_id = 'wa-' + 'a1' * 16
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_recovery = script['cmd_writer_recovery']
+        parser = script['build_parser']()
+        boot_1 = '11111111-1111-4111-8111-111111111111'
+
+        missing_arg = self.run_cli('writer-recovery', 'status')
+        self.assertNotEqual(missing_arg.returncode, 0)
+
+        res = self.run_cli('writer-recovery', 'status', att_id)
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn('missing', res.stderr.lower())
+        self.assertFalse(self.xdg_state.exists())
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+            for action in ('arm', 'retire'):
+                args = parser.parse_args([
+                    'writer-recovery', action, att_id, '--cwd', a, '--issue', 'repo-1',
+                    '--unbound', '--confirm-local-ledger',
+                ])
+                with self.assertRaisesRegex(script['CliError'], 'missing'):
+                    cmd_recovery(args, db)
+                self.assertFalse(self.xdg_state.exists())
+
+        for version in (1, 2):
+            sub_xdg = Path(self.tmp.name) / f'xdg-v{version}'
+            sub_dir = sub_xdg / 'pi-team-run'
+            sub_dir.mkdir(parents=True)
+            sub_dir.chmod(0o700)
+            sub_db = sub_dir / 'state.db'
+            with closing(sqlite3.connect(sub_db)) as conn, conn:
+                for stmt in script['V1_SCHEMA']:
+                    conn.execute(stmt)
+                if version == 2:
+                    for stmt in script['V2_MIGRATION']:
+                        conn.execute(stmt)
+                conn.execute(f'PRAGMA user_version = {version}')
+            sub_db.chmod(0o600)
+
+            st_proc = subprocess.run(
+                [sys.executable, str(BIN_PATH), 'writer-recovery', 'status', att_id],
+                env={**self.env, 'XDG_STATE_HOME': str(sub_xdg)},
+                text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(st_proc.returncode, 0)
+            self.assertIn(f'got {version}', st_proc.stderr.lower())
+
+            with self._recovery_host_patches(cmd_recovery, sub_db, boot_id=boot_1):
+                arm_args = parser.parse_args([
+                    'writer-recovery', 'arm', att_id, '--cwd', a, '--issue', 'repo-1',
+                    '--unbound', '--confirm-local-ledger',
+                ])
+                with self.assertRaisesRegex(script['CliError'], f'got {version}'):
+                    cmd_recovery(arm_args, sub_db)
+
+            with closing(sqlite3.connect(f'{sub_db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+                self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], version)
+                self.assertIsNone(
+                    conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_attempts'").fetchone()
+                )
+                self.assertIsNone(
+                    conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_recovery_events'"
+                    ).fetchone()
+                )
+
+    def test_writer_recovery_pre_db_validation_and_real_tmpfs_refusal(self) -> None:
+        a, _ = self.linked_pair()
+        seed = self.run_json('start', a, '--issue', 'repo-1')
+        self.run_json('cancel', seed['run_id'], 'admit')
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        att_id = 'wa-' + 'c3' * 16
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-1', 0, NULL, 'open', '2026-11-27T10:00:00Z')",
+                (att_id, repo_key, wt_a_admin),
+            )
+
+        for bad_id in ('wa-short', 'wa-' + 'A' * 32, 'wa-unbound', 'not-an-attempt'):
+            bad_proc = self.run_cli(
+                'writer-recovery', 'arm', bad_id, '--cwd', a, '--issue', 'repo-1',
+                '--unbound', '--confirm-local-ledger',
+            )
+            self.assertNotEqual(bad_proc.returncode, 0)
+            self.assertIn('invalid writer attempt id', bad_proc.stderr.lower())
+
+        no_attest = self.run_cli('writer-recovery', 'arm', att_id, '--cwd', a, '--issue', 'repo-1', '--unbound')
+        self.assertNotEqual(no_attest.returncode, 0)
+        self.assertIn('--confirm-local-ledger', no_attest.stderr)
+
+        main_cwd = self.run_cli(
+            'writer-recovery', 'arm', att_id, '--cwd', str(self.repo_dir), '--issue', 'repo-1',
+            '--unbound', '--confirm-local-ledger',
+        )
+        self.assertNotEqual(main_cwd.returncode, 0)
+        self.assertIn('linked git worktree', main_cwd.stderr.lower())
+
+        nonexistent_cwd = self.run_cli(
+            'writer-recovery', 'arm', att_id, '--cwd', str(Path(self.tmp.name) / 'no-such-wt'),
+            '--issue', 'repo-1', '--unbound', '--confirm-local-ledger',
+        )
+        self.assertNotEqual(nonexistent_cwd.returncode, 0)
+
+        for fake_flag in ('--boot-id', '--machine-id'):
+            proc_flag = self.run_cli(
+                'writer-recovery', 'arm', att_id, '--cwd', a, '--issue', 'repo-1',
+                '--unbound', '--confirm-local-ledger', fake_flag, 'deadbeef',
+            )
+            self.assertNotEqual(proc_flag.returncode, 0)
+
+        script = runpy.run_path(str(BIN_PATH))
+        nsfs_fixture = (
+            '22 1 259:2 / / rw,relatime shared:1 - ext4 /dev/nvme0n1p2 rw\n'
+            '31 22 0:26 / /proc rw,nosuid,nodev,noexec - proc proc rw\n'
+            '567 22 0:4 net:[4026533698] /run/docker/netns/abc123 rw shared:123 - nsfs nsfs rw\n'
+            '568 22 0:4 mnt:[4026531841] /run/snapd/ns/foo.mnt rw - nsfs nsfs rw\n'
+        )
+        parsed_nsfs = script['_parse_mountinfo'](nsfs_fixture)
+        self.assertIn(('0:4', 'net:[4026533698]', '/run/docker/netns/abc123', 'nsfs'), parsed_nsfs)
+        self.assertIn(('0:4', 'mnt:[4026531841]', '/run/snapd/ns/foo.mnt', 'nsfs'), parsed_nsfs)
+        for bad_mountinfo in (
+            '',
+            'malformed line without separator\n',
+            '22 1 0:4 / - ext4 /dev/sda1 rw\n',
+            'x 1 0:4 / / rw - ext4 /dev/sda1 rw\n',
+            '22 1 bad / / rw - ext4 /dev/sda1 rw\n',
+            '22 1 0:4 net:[4026533698] /mnt/x rw - ext4 /dev/sda1 rw\n',
+            '22 1 0:4 net:[notanumber] /run/docker/netns/x rw - nsfs nsfs rw\n',
+            '22 1 0:4 relative/root /run/docker/netns/x rw - nsfs nsfs rw\n',
+            '22 1 0:4 / relative/mp rw - tmpfs tmpfs rw\n',
+        ):
+            with self.assertRaises(script['CliError']):
+                script['_parse_mountinfo'](bad_mountinfo)
+
+        mounts = script['_parse_mountinfo'](Path('/proc/self/mountinfo').read_text(encoding='utf-8'))
+        tmp_resolved = Path(self.tmp.name).resolve()
+        matching = [m for m in mounts if tmp_resolved == Path(m[2]) or tmp_resolved.is_relative_to(Path(m[2]))]
+        tmp_fs = [m for m in matching if len(Path(m[2]).parts) == max(len(Path(x[2]).parts) for x in matching)][-1][3]
+        proc_fd, _ = script['_open_pinned_proc_root']()
+        try:
+            proc_ns_ino = script['_read_proc_self_ns_pid'](proc_fd)[1]
+        finally:
+            os.close(proc_fd)
+        if tmp_fs not in script['LOCAL_DURABLE_FS_TYPES'] and proc_ns_ino == script['PROC_PID_INIT_INO']:
+            real_arm = self.run_cli(
+                'writer-recovery', 'arm', att_id, '--cwd', a, '--issue', 'repo-1',
+                '--unbound', '--confirm-local-ledger',
+            )
+            self.assertNotEqual(real_arm.returncode, 0)
+            self.assertIn('not an allowed local durable filesystem', real_arm.stderr.lower())
+            with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+                self.assertIsNone(
+                    conn.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_recovery_events'"
+                    ).fetchone()
+                )
+
+    def test_writer_recovery_bound_review_attempt_arm_same_boot_refusals_and_post_reboot_retire(self) -> None:
+        a, b = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        wt_b_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-b').resolve())
+
+        run_a = self.run_json('start', a, '--issue', 'repo-1')['run_id']
+        for stage in ('admit', 'implement', 'check'):
+            self.run_json('checkpoint', run_a, stage, '--evidence', f'ev:{stage}')
+        self.run_json('wait', run_a, 'review', '--target', 'coordinator', '--reason', 'waiting review')
+        run_b = self.run_json('start', b, '--issue', 'repo-2')['run_id']
+
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        att_target = 'wa-' + 'd4' * 16
+        att_other = 'wa-' + 'e5' * 16
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-1', 1, ?, 'open', '2026-11-27T09:00:00Z')",
+                (att_target, repo_key, wt_a_admin, run_a),
+            )
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-2', 1, ?, 'open', '2026-11-27T09:05:00Z')",
+                (att_other, repo_key, wt_b_admin, run_b),
+            )
+
+        pre_status_a = self.run_json('status', run_a)
+        self.assertEqual(pre_status_a['status'], 'waiting')
+        self.assertEqual(pre_status_a['current_stage'], 'review')
+        self.assertFalse(pre_status_a['reserved'])
+
+        unarmed_status = self.run_json('writer-recovery', 'status', att_target)
+        self.assertEqual(unarmed_status['recovery_state'], 'unarmed')
+        self.assertIsNone(unarmed_status['disposition'])
+        self.assertEqual(unarmed_status['recovery_events'], [])
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_recovery_events'"
+                ).fetchone()
+            )
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_recovery = script['cmd_writer_recovery']
+        parser = script['build_parser']()
+        boot_1 = '1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d'
+        boot_2 = '9f8e7d6c-5b4a-4f3e-8d2c-1b0a9f8e7d6c'
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+            retire_before_arm = parser.parse_args([
+                'writer-recovery', 'retire', att_target, '--cwd', a, '--issue', 'repo-1',
+                '--run-id', run_a, '--confirm-local-ledger',
+            ])
+            with self.assertRaisesRegex(script['CliError'], 'not armed'):
+                cmd_recovery(retire_before_arm, db)
+
+            for bad_cli in (
+                ['writer-recovery', 'arm', att_target, '--cwd', a, '--issue', 'repo-wrong', '--run-id', run_a, '--confirm-local-ledger'],
+                ['writer-recovery', 'arm', att_target, '--cwd', b, '--issue', 'repo-1', '--run-id', run_a, '--confirm-local-ledger'],
+                ['writer-recovery', 'arm', att_target, '--cwd', a, '--issue', 'repo-1', '--unbound', '--confirm-local-ledger'],
+                ['writer-recovery', 'arm', att_target, '--cwd', a, '--issue', 'repo-1', '--run-id', run_b, '--confirm-local-ledger'],
+                ['writer-recovery', 'arm', 'wa-' + 'ff' * 16, '--cwd', a, '--issue', 'repo-1', '--run-id', run_a, '--confirm-local-ledger'],
+            ):
+                with self.assertRaises(script['CliError']):
+                    cmd_recovery(parser.parse_args(bad_cli), db)
+
+        arm_args = parser.parse_args([
+            'writer-recovery', 'arm', att_target, '--cwd', a, '--issue', 'repo-1',
+            '--run-id', run_a, '--confirm-local-ledger', '--json',
+        ])
+        for bad_env_kwargs in (
+            {'boot_id': '00000000-0000-0000-0000-000000000000'},
+            {'boot_id': ''},
+            {'boot_id': 'not-a-uuid'},
+            {'boot_id': boot_1.upper()},
+            {'boot_id': boot_1.replace('-', '')},
+            {'machine_id': '0' * 32},
+            {'machine_id': ''},
+            {'machine_id': '1' * 31},
+            {'machine_id': 'A' * 32},
+            {'fs_type': 'tmpfs'},
+            {'fs_type': 'nfs'},
+            {'fs_type': 'nsfs'},
+            {'fsid': 0},
+            {'pid_ns_ino': 4026539999},
+            {'nstgid_line': 'NStgid:\t1000\t1\n'},
+            {'proc_fs': 'tmpfs'},
+            {'proc_root': '/subdir'},
+            {'extra_mounts': '99 31 0:99 / /proc/sys/kernel/random/boot_id rw - tmpfs tmpfs rw'},
+            {'extra_mounts': '99 31 0:4 net:[4026533698] /proc/sys/kernel/random/boot_id rw - nsfs nsfs rw'},
+        ):
+            with self.subTest(bad_env=bad_env_kwargs):
+                env_opts = dict(bad_env_kwargs)
+                with self._recovery_host_patches(cmd_recovery, db, boot_id=env_opts.pop('boot_id', boot_1), **env_opts):
+                    with self.assertRaises(script['CliError']):
+                        cmd_recovery(arm_args, db)
+
+        if Path('/proc/sys/kernel/random/boot_id').is_file():
+            proc_fd, _ = script['_open_pinned_proc_root']()
+            try:
+                raw_boot = script['_read_host_boot_id'](proc_fd)
+            finally:
+                os.close(proc_fd)
+            self.assertEqual(script['_validate_boot_id'](raw_boot), raw_boot)
+
+        for bad_mode_target, bad_mode in (
+            (db, 0o640),
+            (db, 0o620),
+            (db, 0o604),
+            (db.parent, 0o750),
+            (db.parent, 0o710),
+        ):
+            orig_mode = stat.S_IMODE(bad_mode_target.stat().st_mode)
+            bad_mode_target.chmod(bad_mode)
+            try:
+                with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+                    with self.assertRaisesRegex(script['CliError'], 'private permissions'):
+                        cmd_recovery(arm_args, db)
+            finally:
+                bad_mode_target.chmod(orig_mode)
+
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_recovery_events'"
+                ).fetchone()
+            )
+            self.assertEqual(
+                conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_target,)).fetchone()[:],
+                ('open', None, None),
+            )
+
+        with self._recovery_host_patches(
+            cmd_recovery,
+            db,
+            boot_id=boot_1,
+            extra_mounts='567 22 0:4 net:[4026533698] /run/docker/netns/abc123 rw shared:123 - nsfs nsfs rw',
+        ):
+            code, armed = cmd_recovery(arm_args, db)
+            self.assertEqual(code, 0)
+            self.assertEqual(armed['action'], 'arm')
+            self.assertEqual(armed['status'], 'open')
+            self.assertIsNone(armed['exit_code'])
+            self.assertIsNone(armed['disposition'])
+            self.assertEqual(armed['observed_boot_id'], boot_1)
+            self.assertEqual(armed['ledger_fs_type'], 'ext4')
+            self.assertNotIn('1' * 32, json.dumps(armed))
+
+            with self.assertRaisesRegex(script['CliError'], 'already has recovery event'):
+                cmd_recovery(arm_args, db)
+
+            retire_args = parser.parse_args([
+                'writer-recovery', 'retire', att_target, '--cwd', a, '--issue', 'repo-1',
+                '--run-id', run_a, '--confirm-local-ledger', '--json',
+            ])
+            with self.assertRaisesRegex(script['CliError'], 'same host boot'):
+                cmd_recovery(retire_args, db)
+
+        self.assertEqual(self.run_json('writer-recovery', 'status', att_target)['recovery_state'], 'armed')
+
+        for drift_kwargs in (
+            {'machine_id': '2' * 32},
+            {'fsid': 0x12345678},
+            {'fs_type': 'xfs'},
+            {'pid_ns_ino': 4026539999},
+        ):
+            with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2, **drift_kwargs):
+                with self.assertRaises(script['CliError']):
+                    cmd_recovery(retire_args, db)
+
+        for bad_retire_env in (
+            {'boot_id': '00000000-0000-0000-0000-000000000000'},
+            {'boot_id': 'malformed'},
+            {'machine_id': '0' * 32},
+        ):
+            with self.subTest(bad_env=bad_retire_env):
+                env_opts = dict(bad_retire_env)
+                with self._recovery_host_patches(cmd_recovery, db, boot_id=env_opts.pop('boot_id', boot_2), **env_opts):
+                    with self.assertRaises(script['CliError']):
+                        cmd_recovery(retire_args, db)
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+            for bad_retire in (
+                ['writer-recovery', 'retire', att_target, '--cwd', a, '--issue', 'repo-wrong', '--run-id', run_a, '--confirm-local-ledger'],
+                ['writer-recovery', 'retire', att_target, '--cwd', b, '--issue', 'repo-1', '--run-id', run_a, '--confirm-local-ledger'],
+                ['writer-recovery', 'retire', att_target, '--cwd', a, '--issue', 'repo-1', '--unbound', '--confirm-local-ledger'],
+                ['writer-recovery', 'retire', att_target, '--cwd', a, '--issue', 'repo-1', '--run-id', run_b, '--confirm-local-ledger'],
+            ):
+                with self.assertRaises(script['CliError']):
+                    cmd_recovery(parser.parse_args(bad_retire), db)
+
+            code, retired = cmd_recovery(retire_args, db)
+            self.assertEqual(code, 0)
+            self.assertEqual(retired['action'], 'retire')
+            self.assertEqual(retired['status'], 'closed')
+            self.assertIsNone(retired['exit_code'])
+            self.assertEqual(retired['disposition'], 'interrupted')
+            self.assertEqual(retired['armed_boot_id'], boot_1)
+            self.assertEqual(retired['retired_boot_id'], boot_2)
+            self.assertTrue(retired['closed_at'])
+
+            with self.assertRaisesRegex(script['CliError'], 'already been retired'):
+                cmd_recovery(retire_args, db)
+            with self.assertRaisesRegex(script['CliError'], 'not open'):
+                cmd_recovery(arm_args, db)
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id='33333333-3333-4333-8333-333333333333'):
+            with self.assertRaisesRegex(script['CliError'], 'already been retired'):
+                cmd_recovery(retire_args, db)
+
+        self.assertEqual(self.run_json('status', run_a), pre_status_a)
+        final_rec = self.run_json('writer-recovery', 'status', att_target)
+        self.assertEqual(final_rec['status'], 'closed')
+        self.assertIsNone(final_rec['exit_code'])
+        self.assertEqual(final_rec['recovery_state'], 'retired')
+        self.assertEqual(final_rec['disposition'], 'interrupted')
+        self.assertEqual([ev['action'] for ev in final_rec['recovery_events']], ['arm', 'retire'])
+
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 3)
+            other_row = dict(conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_other,)).fetchone())
+            self.assertEqual(other_row, {'status': 'open', 'exit_code': None, 'closed_at': None})
+        other_rec = self.run_json('writer-recovery', 'status', att_other)
+        self.assertEqual((other_rec['status'], other_rec['recovery_state']), ('open', 'unarmed'))
+
+    def test_writer_recovery_unbound_attempt_lifecycle(self) -> None:
+        a, _ = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        seed = self.run_json('start', a, '--issue', 'repo-1')
+        self.run_json('cancel', seed['run_id'], 'admit')
+
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        att_unbound = 'wa-' + 'f6' * 16
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-1', 0, NULL, 'open', '2026-11-27T08:00:00Z')",
+                (att_unbound, repo_key, wt_a_admin),
+            )
+
+        blocked = self.run_cli('start', a, '--issue', 'repo-1')
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn('writer fence', blocked.stderr.lower())
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_recovery = script['cmd_writer_recovery']
+        parser = script['build_parser']()
+        boot_1 = '11111111-1111-4111-8111-111111111111'
+        boot_2 = '22222222-2222-4222-8222-222222222222'
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+            with self.assertRaises(script['CliError']):
+                cmd_recovery(parser.parse_args([
+                    'writer-recovery', 'arm', att_unbound, '--cwd', a, '--issue', 'repo-1',
+                    '--run-id', seed['run_id'], '--confirm-local-ledger',
+                ]), db)
+            code, armed = cmd_recovery(parser.parse_args([
+                'writer-recovery', 'arm', att_unbound, '--cwd', a, '--issue', 'repo-1',
+                '--unbound', '--confirm-local-ledger',
+            ]), db)
+            self.assertEqual((code, armed['bound'], armed['run_id']), (0, False, None))
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+            code, retired = cmd_recovery(parser.parse_args([
+                'writer-recovery', 'retire', att_unbound, '--cwd', a, '--issue', 'repo-1',
+                '--unbound', '--confirm-local-ledger',
+            ]), db)
+            self.assertEqual(code, 0)
+            self.assertEqual(retired['status'], 'closed')
+            self.assertIsNone(retired['exit_code'])
+            self.assertEqual(retired['disposition'], 'interrupted')
+            self.assertFalse(retired['bound'])
+            self.assertIsNone(retired['run_id'])
+
+        fresh = self.run_json('start', a, '--issue', 'repo-1')
+        self.assertEqual(fresh['status'], 'active')
+
+    def test_writer_recovery_refuses_whitespace_cwd_and_attempt_id_without_receipt(self) -> None:
+        a, _ = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        seed = self.run_json('start', a, '--issue', 'repo-1')
+        self.run_json('cancel', seed['run_id'], 'admit')
+
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        att_id = 'wa-' + '21' * 16
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-1', 0, NULL, 'open', '2026-11-27T08:00:00Z')",
+                (att_id, repo_key, wt_a_admin),
+            )
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_recovery = script['cmd_writer_recovery']
+        parser = script['build_parser']()
+        self.assertTrue(Path(a).is_dir())
+
+        for action in ('arm', 'retire'):
+            for bad_argv in (
+                ['writer-recovery', action, att_id, '--cwd', f'{a} ', '--issue', 'repo-1',
+                 '--unbound', '--confirm-local-ledger'],
+                ['writer-recovery', action, att_id, '--cwd', f' {a}', '--issue', 'repo-1',
+                 '--unbound', '--confirm-local-ledger'],
+                ['writer-recovery', action, f'{att_id} ', '--cwd', a, '--issue', 'repo-1',
+                 '--unbound', '--confirm-local-ledger'],
+                ['writer-recovery', action, f' {att_id}', '--cwd', a, '--issue', 'repo-1',
+                 '--unbound', '--confirm-local-ledger'],
+            ):
+                with self.subTest(action=action, argv=bad_argv):
+                    with self.assertRaises(script['CliError']):
+                        cmd_recovery(parser.parse_args(bad_argv), db)
+
+            cwd_refusal = self.run_cli(
+                'writer-recovery', action, att_id, '--cwd', f'{a} ', '--issue', 'repo-1',
+                '--unbound', '--confirm-local-ledger',
+            )
+            self.assertNotEqual(cwd_refusal.returncode, 0)
+            self.assertIn('whitespace', cwd_refusal.stderr.lower())
+
+            id_refusal = self.run_cli(
+                'writer-recovery', action, f'{att_id} ', '--cwd', a, '--issue', 'repo-1',
+                '--unbound', '--confirm-local-ledger',
+            )
+            self.assertNotEqual(id_refusal.returncode, 0)
+            self.assertIn('invalid writer attempt id', id_refusal.stderr.lower())
+
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_recovery_events'"
+                ).fetchone()
+            )
+            self.assertEqual(
+                conn.execute(
+                    'SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_id,)
+                ).fetchone()[:],
+                ('open', None, None),
+            )
+
+    def test_writer_recovery_scope_options_single_use_and_run_id_verbatim(self) -> None:
+        a, _ = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        seed = self.run_json('start', a, '--issue', 'repo-1')
+        self.run_json('cancel', seed['run_id'], 'admit')
+
+        legacy_run = ' legacy run 21 '
+        att_id = 'wa-' + '22' * 16
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                'INSERT INTO runs(run_id, repo_key, status, current_stage, created_at, updated_at, issue, worktree) '
+                "VALUES (?, ?, 'active', 'review', '2026-11-27T09:00:00Z', '2026-11-27T09:00:00Z', 'repo-legacy', ?)",
+                (legacy_run, repo_key, wt_a_admin),
+            )
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-legacy', 1, ?, 'open', '2026-11-27T09:10:00Z')",
+                (att_id, repo_key, wt_a_admin, legacy_run),
+            )
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_recovery = script['cmd_writer_recovery']
+        parser = script['build_parser']()
+        boot_1 = '11111111-1111-4111-8111-111111111111'
+        boot_2 = '22222222-2222-4222-8222-222222222222'
+
+        duplicate_option_lists = (
+            ['--cwd', a, '--cwd', a, '--issue', 'repo-legacy', '--run-id', legacy_run,
+             '--confirm-local-ledger'],
+            ['--cwd', a, '--cwd', str(self.repo_dir), '--issue', 'repo-legacy', '--run-id', legacy_run,
+             '--confirm-local-ledger'],
+            ['--cwd', a, '--issue', 'repo-legacy', '--issue', 'repo-legacy', '--run-id', legacy_run,
+             '--confirm-local-ledger'],
+            ['--cwd', a, '--issue', 'repo-legacy', '--issue', 'repo-1', '--run-id', legacy_run,
+             '--confirm-local-ledger'],
+            ['--cwd', a, '--issue', 'repo-legacy', '--run-id', legacy_run, '--run-id', legacy_run,
+             '--confirm-local-ledger'],
+            ['--cwd', a, '--issue', 'repo-legacy', '--run-id', legacy_run, '--run-id', 'run-other',
+             '--confirm-local-ledger'],
+        )
+        for action in ('arm', 'retire'):
+            for opts in duplicate_option_lists:
+                with self.subTest(action=action, opts=opts):
+                    with self.assertRaises(SystemExit) as raised:
+                        parser.parse_args(['writer-recovery', action, att_id, *opts])
+                    self.assertEqual(raised.exception.code, 2)
+
+            repeated = self.run_cli(
+                'writer-recovery', action, att_id, '--cwd', a, '--issue', 'repo-legacy',
+                '--run-id', legacy_run, '--run-id', legacy_run, '--confirm-local-ledger',
+            )
+            self.assertEqual(repeated.returncode, 2)
+            self.assertIn('only once', repeated.stderr.lower())
+
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            self.assertIsNone(
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_recovery_events'"
+                ).fetchone()
+            )
+            self.assertEqual(
+                conn.execute(
+                    'SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_id,)
+                ).fetchone()[:],
+                ('open', None, None),
+            )
+
+        trimmed_arm = parser.parse_args([
+            'writer-recovery', 'arm', att_id, '--cwd', a, '--issue', 'repo-legacy',
+            '--run-id', legacy_run.strip(), '--confirm-local-ledger',
+        ])
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+            with self.assertRaisesRegex(script['CliError'], 'scope does not match'):
+                cmd_recovery(trimmed_arm, db)
+
+        arm_args = parser.parse_args([
+            'writer-recovery', 'arm', att_id, '--cwd', a, '--issue', 'repo-legacy',
+            '--run-id', legacy_run, '--confirm-local-ledger',
+        ])
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+            code, armed = cmd_recovery(arm_args, db)
+        self.assertEqual(code, 0)
+        self.assertEqual(armed['run_id'], legacy_run)
+
+        retire_trimmed = parser.parse_args([
+            'writer-recovery', 'retire', att_id, '--cwd', a, '--issue', 'repo-legacy',
+            '--run-id', legacy_run.strip(), '--confirm-local-ledger',
+        ])
+        retire_args = parser.parse_args([
+            'writer-recovery', 'retire', att_id, '--cwd', a, '--issue', 'repo-legacy',
+            '--run-id', legacy_run, '--confirm-local-ledger',
+        ])
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+            with self.assertRaisesRegex(script['CliError'], 'scope does not match'):
+                cmd_recovery(retire_trimmed, db)
+            code, retired = cmd_recovery(retire_args, db)
+        self.assertEqual(code, 0)
+        self.assertEqual((retired['status'], retired['run_id']), ('closed', legacy_run))
+        self.assertEqual(retired['disposition'], 'interrupted')
+
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            self.assertEqual(
+                [dict(row) for row in conn.execute(
+                    'SELECT action, attempt_run_id FROM writer_recovery_events WHERE attempt_id = ? ORDER BY action',
+                    (att_id,),
+                )],
+                [{'action': 'arm', 'attempt_run_id': legacy_run},
+                 {'action': 'retire', 'attempt_run_id': legacy_run}],
+            )
+            self.assertEqual(
+                conn.execute('SELECT status FROM runs WHERE run_id = ?', (legacy_run,)).fetchone()['status'],
+                'active',
+            )
+            self.assertEqual(
+                conn.execute(
+                    'SELECT status, exit_code FROM writer_attempts WHERE attempt_id = ?', (att_id,)
+                ).fetchone()[:],
+                ('closed', None),
+            )
+
+    def test_writer_recovery_rejects_already_closed_tampering_and_inode_drift(self) -> None:
+        a, _ = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        seed = self.run_json('start', a, '--issue', 'repo-1')
+        self.run_json('cancel', seed['run_id'], 'admit')
+
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        att_closed = 'wa-' + '07' * 16
+        att_open = 'wa-' + '08' * 16
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, exit_code, created_at, closed_at) "
+                "VALUES (?, ?, ?, 'repo-1', 0, NULL, 'closed', 0, '2026-11-27T07:00:00Z', '2026-11-27T07:05:00Z')",
+                (att_closed, repo_key, wt_a_admin),
+            )
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-1', 0, NULL, 'open', '2026-11-27T08:00:00Z')",
+                (att_open, repo_key, wt_a_admin),
+            )
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_recovery = script['cmd_writer_recovery']
+        parser = script['build_parser']()
+        boot_1 = '11111111-1111-4111-8111-111111111111'
+        boot_2 = '22222222-2222-4222-8222-222222222222'
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+            with self.assertRaisesRegex(script['CliError'], 'not open'):
+                cmd_recovery(parser.parse_args([
+                    'writer-recovery', 'arm', att_closed, '--cwd', a, '--issue', 'repo-1',
+                    '--unbound', '--confirm-local-ledger',
+                ]), db)
+            cmd_recovery(parser.parse_args([
+                'writer-recovery', 'arm', att_open, '--cwd', a, '--issue', 'repo-1',
+                '--unbound', '--confirm-local-ledger',
+            ]), db)
+
+        with closing(sqlite3.connect(db)) as conn, conn:
+            with self.assertRaisesRegex(sqlite3.DatabaseError, 'append-only'):
+                conn.execute("UPDATE writer_recovery_events SET boot_id = ? WHERE attempt_id = ?", (boot_2, att_open))
+            with self.assertRaisesRegex(sqlite3.DatabaseError, 'append-only'):
+                conn.execute("DELETE FROM writer_recovery_events WHERE attempt_id = ?", (att_open,))
+
+        retire_args = parser.parse_args([
+            'writer-recovery', 'retire', att_open, '--cwd', a, '--issue', 'repo-1',
+            '--unbound', '--confirm-local-ledger',
+        ])
+
+        real_pin_check = cmd_recovery.__globals__['_verify_pinned_ledger_under_tx']
+        calls = 0
+
+        def fail_on_precommit_pin(path_arg: Path, expected_arg: dict) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 4:
+                raise script['CliError']('writer ledger inode changed under mutation boundary')
+            return real_pin_check(path_arg, expected_arg)
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+            with patch.dict(cmd_recovery.__globals__, {'_verify_pinned_ledger_under_tx': fail_on_precommit_pin}):
+                with self.assertRaisesRegex(script['CliError'], 'inode changed under mutation boundary'):
+                    cmd_recovery(retire_args, db)
+
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            self.assertEqual(
+                conn.execute('SELECT status, exit_code FROM writer_attempts WHERE attempt_id = ?', (att_open,)).fetchone()['status'],
+                'open',
+            )
+            self.assertEqual(
+                conn.execute('SELECT count(*) FROM writer_recovery_events WHERE attempt_id = ?', (att_open,)).fetchone()[0],
+                1,
+            )
+
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "UPDATE writer_attempts SET created_at = '2026-11-27T08:00:01Z' WHERE attempt_id = ?",
+                (att_open,),
+            )
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+            with self.assertRaisesRegex(script['CliError'], 'changed since arm'):
+                cmd_recovery(retire_args, db)
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "UPDATE writer_attempts SET created_at = '2026-11-27T08:00:00Z' WHERE attempt_id = ?",
+                (att_open,),
+            )
+
+        hardlink_db = db.parent / 'state-hardlink.db'
+        os.link(db, hardlink_db)
+        try:
+            with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+                with self.assertRaisesRegex(script['CliError'], 'hardlink'):
+                    cmd_recovery(retire_args, db)
+        finally:
+            hardlink_db.unlink()
+
+        copied_db = db.parent / 'state-copy.db'
+        shutil.copy2(db, copied_db)
+        copied_db.chmod(0o600)
+        os.replace(copied_db, db)
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+            with self.assertRaisesRegex(script['CliError'], 'ledger continuity mismatch'):
+                cmd_recovery(retire_args, db)
+
+        moved_db = db.parent / 'state-moved.db'
+        os.replace(db, moved_db)
+        db.symlink_to(moved_db)
+        try:
+            with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+                with self.assertRaisesRegex(script['CliError'], 'symlink-free'):
+                    cmd_recovery(retire_args, db)
+        finally:
+            db.unlink()
+            os.replace(moved_db, db)
+
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            self.assertEqual(
+                dict(conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_open,)).fetchone()),
+                {'status': 'open', 'exit_code': None, 'closed_at': None},
+            )
+
+        db.chmod(0o640)
+        try:
+            with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+                with self.assertRaisesRegex(script['CliError'], 'private permissions'):
+                    cmd_recovery(retire_args, db)
+        finally:
+            db.chmod(0o600)
+
+        perm_calls = 0
+
+        def drift_perms_under_tx(path_arg: Path, expected_arg: dict) -> None:
+            nonlocal perm_calls
+            perm_calls += 1
+            if perm_calls == 3:
+                path_arg.parent.chmod(0o750)
+            return real_pin_check(path_arg, expected_arg)
+
+        try:
+            with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+                with patch.dict(cmd_recovery.__globals__, {'_verify_pinned_ledger_under_tx': drift_perms_under_tx}):
+                    with self.assertRaisesRegex(script['CliError'], 'private permissions'):
+                        cmd_recovery(retire_args, db)
+        finally:
+            db.parent.chmod(0o700)
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+            req = script['_validate_recovery_request'](retire_args, db)
+            with script['_open_recovery_write_tx'](db, req) as tx_conn:
+                self.assertEqual(tx_conn.execute('PRAGMA synchronous').fetchone()[0], 3)
+                self.assertEqual(str(tx_conn.execute('PRAGMA journal_mode').fetchone()[0]).lower(), 'delete')
+
+        with closing(sqlite3.connect(db)) as conn:
+            conn.execute('PRAGMA journal_mode = WAL')
+        try:
+            with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+                with self.assertRaisesRegex(script['CliError'], 'rollback journal mode'):
+                    cmd_recovery(retire_args, db)
+            with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+                self.assertEqual(str(conn.execute('PRAGMA journal_mode').fetchone()[0]).lower(), 'wal')
+                self.assertEqual(
+                    conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_open,)).fetchone()[:],
+                    ('open', None, None),
+                )
+                self.assertEqual(
+                    conn.execute('SELECT count(*) FROM writer_recovery_events WHERE attempt_id = ?', (att_open,)).fetchone()[0],
+                    1,
+                )
+        finally:
+            with closing(sqlite3.connect(db)) as conn:
+                conn.execute('PRAGMA journal_mode = DELETE')
+
+    def test_recovery_write_tx_preserves_posix_lock_across_under_tx_rechecks(self) -> None:
+        a, _ = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        seed = self.run_json('start', a, '--issue', 'repo-1')
+        self.run_json('cancel', seed['run_id'], 'admit')
+
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        att_id = 'wa-' + '19' * 16
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-1', 0, NULL, 'open', '2026-11-27T08:00:00Z')",
+                (att_id, repo_key, wt_a_admin),
+            )
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_recovery = script['cmd_writer_recovery']
+        parser = script['build_parser']()
+        boot_1 = '11111111-1111-4111-8111-111111111111'
+        arm_args = parser.parse_args([
+            'writer-recovery', 'arm', att_id, '--cwd', a, '--issue', 'repo-1',
+            '--unbound', '--confirm-local-ledger',
+        ])
+
+        probe_code = (
+            'import sqlite3, sys\n'
+            'conn = sqlite3.connect(sys.argv[1], uri=True, timeout=0.05, isolation_level=None)\n'
+            'try:\n'
+            '    conn.execute("PRAGMA busy_timeout = 50")\n'
+            '    try:\n'
+            '        conn.execute("BEGIN IMMEDIATE")\n'
+            '    except sqlite3.OperationalError as exc:\n'
+            '        code = getattr(exc, "sqlite_errorcode", None)\n'
+            '        name = getattr(exc, "sqlite_errorname", None)\n'
+            '        msg = str(exc)\n'
+            '        is_busy = (\n'
+            '            code == getattr(sqlite3, "SQLITE_BUSY", 5)\n'
+            '            or name == "SQLITE_BUSY"\n'
+            '            or "locked" in msg.lower()\n'
+            '            or "busy" in msg.lower()\n'
+            '        )\n'
+            '        if is_busy:\n'
+            '            label = name or "SQLITE_BUSY"\n'
+            '            print(f"{label}:{msg}")\n'
+            '            sys.exit(2)\n'
+            '        raise\n'
+            '    try:\n'
+            '        conn.execute("ROLLBACK")\n'
+            '    except sqlite3.Error:\n'
+            '        pass\n'
+            '    print("ACQUIRED")\n'
+            '    sys.exit(0)\n'
+            'finally:\n'
+            '    conn.close()\n'
+        )
+        db_uri = f'{db.resolve().as_uri()}?mode=rw'
+
+        def probe_begin_immediate() -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [sys.executable, '-I', '-c', probe_code, db_uri],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+
+        pre_probe = probe_begin_immediate()
+        self.assertEqual(pre_probe.returncode, 0, msg=pre_probe.stdout + pre_probe.stderr)
+        self.assertEqual(pre_probe.stdout.strip(), 'ACQUIRED')
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+            req = script['_validate_recovery_request'](arm_args, db)
+            with script['_open_recovery_write_tx'](db, req) as tx_conn:
+                self.assertTrue(tx_conn.in_transaction)
+                held_probe = probe_begin_immediate()
+                self.assertEqual(held_probe.returncode, 2, msg=held_probe.stdout + held_probe.stderr)
+                self.assertRegex(held_probe.stdout.lower(), r'sqlite_busy|locked')
+
+                script['_verify_pinned_ledger_under_tx'](db, req)
+                os.statvfs(db)
+                recheck_probe = probe_begin_immediate()
+                self.assertEqual(recheck_probe.returncode, 2, msg=recheck_probe.stdout + recheck_probe.stderr)
+                self.assertRegex(recheck_probe.stdout.lower(), r'sqlite_busy|locked')
+
+            after_probe = probe_begin_immediate()
+            self.assertEqual(after_probe.returncode, 0, msg=after_probe.stdout + after_probe.stderr)
+            self.assertEqual(after_probe.stdout.strip(), 'ACQUIRED')
+
+            with self.assertRaisesRegex(script['CliError'], 'rollback abort'):
+                with script['_open_recovery_write_tx'](db, req) as tx_conn:
+                    tx_conn.execute(
+                        "UPDATE writer_attempts SET status = 'closed', closed_at = '2026-11-27T08:01:00Z' "
+                        "WHERE attempt_id = ?",
+                        (att_id,),
+                    )
+                    rollback_probe = probe_begin_immediate()
+                    self.assertEqual(rollback_probe.returncode, 2, msg=rollback_probe.stdout + rollback_probe.stderr)
+                    self.assertRegex(rollback_probe.stdout.lower(), r'sqlite_busy|locked')
+                    raise script['CliError']('rollback abort')
+
+        after_rollback_probe = probe_begin_immediate()
+        self.assertEqual(after_rollback_probe.returncode, 0, msg=after_rollback_probe.stdout + after_rollback_probe.stderr)
+        self.assertEqual(after_rollback_probe.stdout.strip(), 'ACQUIRED')
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            self.assertEqual(
+                conn.execute('SELECT status, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_id,)).fetchone()[:],
+                ('open', None),
+            )
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+            req = script['_validate_recovery_request'](arm_args, db)
+            with patch.dict(cmd_recovery.__globals__, {'_read_path_statvfs_fsid': lambda _path: 0x12345678}):
+                with self.assertRaisesRegex(script['CliError'], 'filesystem ID changed under mutation boundary'):
+                    with script['_open_recovery_write_tx'](db, req):
+                        pass
+
+            def drift_during_statvfs(path_arg: Path) -> int:
+                path_arg.chmod(0o640)
+                return 0x9123456789ABCDEF
+
+            try:
+                with patch.dict(cmd_recovery.__globals__, {'_read_path_statvfs_fsid': drift_during_statvfs}):
+                    with self.assertRaisesRegex(script['CliError'], 'private permissions'):
+                        with script['_open_recovery_write_tx'](db, req):
+                            pass
+            finally:
+                db.chmod(0o600)
+
+    def test_writer_recovery_kernel_openat2_boot_read_and_boundary_refusals(self) -> None:
+        if sys.platform != 'linux' or os.uname().machine not in ('x86_64', 'aarch64'):
+            self.skipTest('Linux x86_64/aarch64 openat2 required')
+        if not Path('/proc/sys/kernel/random/boot_id').is_file():
+            self.skipTest('/proc/sys/kernel/random/boot_id required')
+
+        script = runpy.run_path(str(BIN_PATH))
+        proc_fd, proc_st = script['_open_pinned_proc_root']()
+        try:
+            self.assertEqual(proc_st.st_ino, script['PROC_ROOT_INO'])
+            self.assertEqual(script['_fstatfs_magic'](proc_fd), script['PROC_SUPER_MAGIC'])
+            self.assertEqual(script['_read_proc_self_pid'](proc_fd), os.getpid())
+            raw_boot = script['_read_host_boot_id'](proc_fd)
+            self.assertEqual(script['_validate_boot_id'](raw_boot), raw_boot)
+
+            mounts = script['_parse_mountinfo'](script['_read_proc_self_mountinfo'](proc_fd))
+            proc_mounts = [m for m in mounts if m[2] == '/proc']
+            self.assertEqual(len(proc_mounts), 1)
+            actual_maj_min = f'{os.major(proc_st.st_dev)}:{os.minor(proc_st.st_dev)}'
+            self.assertEqual(proc_mounts[0][0], actual_maj_min)
+            self.assertEqual(proc_mounts[0][1], '/')
+            self.assertEqual(proc_mounts[0][3], 'proc')
+
+            status_text = script['_read_proc_self_status'](proc_fd)
+            self.assertIn('NStgid:', status_text)
+            ns_link, ns_ino = script['_read_proc_self_ns_pid'](proc_fd)
+            self.assertEqual(ns_link, f'pid:[{ns_ino}]')
+            nstgid_line = next(line for line in status_text.splitlines() if line.startswith('NStgid:'))
+            if len(nstgid_line.split(':', 1)[1].split()) == 1 and ns_ino == script['PROC_PID_INIT_INO']:
+                verified_ino, _ = script['_verify_initial_pid_namespace_and_procfs'](proc_fd, proc_st)
+                self.assertEqual(verified_ino, script['PROC_PID_INIT_INO'])
+        finally:
+            os.close(proc_fd)
+
+        a, _ = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        seed = self.run_json('start', a, '--issue', 'repo-1')
+        self.run_json('cancel', seed['run_id'], 'admit')
+
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        att_id = 'wa-' + '2b' * 16
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-1', 0, NULL, 'open', '2026-11-27T09:00:00Z')",
+                (att_id, repo_key, wt_a_admin),
+            )
+
+        cmd_recovery = script['cmd_writer_recovery']
+        parser = script['build_parser']()
+        arm_args = parser.parse_args([
+            'writer-recovery', 'arm', att_id, '--cwd', a, '--issue', 'repo-1',
+            '--unbound', '--confirm-local-ledger',
+        ])
+        retire_args = parser.parse_args([
+            'writer-recovery', 'retire', att_id, '--cwd', a, '--issue', 'repo-1',
+            '--unbound', '--confirm-local-ledger',
+        ])
+        real_openat2 = script['_linux_openat2']
+        real_read_boot = script['_read_host_boot_id']
+
+        for err_no in (errno.EXDEV, errno.ELOOP, errno.ENOSYS):
+            def fail_boot_openat2(dir_fd: int, rel_path: str, flags: int, resolve: int, _err=err_no) -> int:
+                if rel_path == 'sys/kernel/random/boot_id':
+                    raise OSError(_err, os.strerror(_err))
+                return real_openat2(dir_fd, rel_path, flags, resolve)
+
+            with self._recovery_host_patches(cmd_recovery, db, boot_id=raw_boot):
+                with patch.dict(cmd_recovery.__globals__, {
+                    '_read_host_boot_id': real_read_boot,
+                    '_linux_openat2': fail_boot_openat2,
+                }):
+                    with self.assertRaisesRegex(script['CliError'], 'pinned procfs root'):
+                        cmd_recovery(arm_args, db)
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=raw_boot):
+            with patch.dict(cmd_recovery.__globals__, {'_read_host_boot_id': real_read_boot}):
+                with patch('os.uname', return_value=type('U', (), {'machine': 'riscv64'})()):
+                    with self.assertRaisesRegex(script['CliError'], 'not supported on architecture'):
+                        cmd_recovery(arm_args, db)
+                with patch.object(sys, 'platform', 'darwin'):
+                    with self.assertRaisesRegex(script['CliError'], 'requires Linux'):
+                        cmd_recovery(arm_args, db)
+
+        real_fstat = os.fstat
+
+        def wrong_proc_inode_fstat(fd: int):
+            st = real_fstat(fd)
+            if stat.S_ISDIR(st.st_mode) and st.st_ino == script['PROC_ROOT_INO']:
+                return os.stat_result((
+                    st.st_mode, 2, st.st_dev, st.st_nlink, st.st_uid, st.st_gid,
+                    st.st_size, st.st_atime, st.st_mtime, st.st_ctime,
+                ))
+            return st
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=raw_boot):
+            with patch('os.fstat', side_effect=wrong_proc_inode_fstat):
+                with self.assertRaisesRegex(script['CliError'], 'untrusted /proc root inode'):
+                    cmd_recovery(arm_args, db)
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=raw_boot, proc_dev='0:99999'):
+            with self.assertRaisesRegex(script['CliError'], 'device mismatch'):
+                cmd_recovery(arm_args, db)
+
+        with self._recovery_host_patches(
+            cmd_recovery,
+            db,
+            boot_id=raw_boot,
+            extra_mounts='99 22 0:99 / /proc rw - proc proc rw',
+        ):
+            with self.assertRaisesRegex(script['CliError'], 'unique /proc mount'):
+                cmd_recovery(arm_args, db)
+
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            self.assertEqual(
+                conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_id,)).fetchone()[:],
+                ('open', None, None),
+            )
+            self.assertIsNone(
+                conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_recovery_events'").fetchone()
+            )
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id='11111111-1111-4111-8111-111111111111'):
+            code, armed = cmd_recovery(arm_args, db)
+            self.assertEqual(code, 0)
+            self.assertEqual(armed['action'], 'arm')
+
+        def fail_retire_exdev(dir_fd: int, rel_path: str, flags: int, resolve: int) -> int:
+            if rel_path == 'sys/kernel/random/boot_id':
+                raise OSError(errno.EXDEV, os.strerror(errno.EXDEV))
+            return real_openat2(dir_fd, rel_path, flags, resolve)
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id='22222222-2222-4222-8222-222222222222'):
+            with patch.dict(cmd_recovery.__globals__, {
+                '_read_host_boot_id': real_read_boot,
+                '_linux_openat2': fail_retire_exdev,
+            }):
+                with self.assertRaisesRegex(script['CliError'], 'pinned procfs root'):
+                    cmd_recovery(retire_args, db)
+
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            self.assertEqual(
+                conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_id,)).fetchone()[:],
+                ('open', None, None),
+            )
+            self.assertEqual(
+                [r[0] for r in conn.execute('SELECT action FROM writer_recovery_events WHERE attempt_id = ?', (att_id,)).fetchall()],
+                ['arm'],
+            )
+
+    def test_writer_recovery_authenticates_procfs_self_pid_and_ledger_fs_magic(self) -> None:
+        if sys.platform != 'linux' or os.uname().machine not in ('x86_64', 'aarch64'):
+            self.skipTest('Linux x86_64/aarch64 fstatfs required')
+        if not Path('/proc/sys/kernel/random/boot_id').is_file():
+            self.skipTest('/proc/sys/kernel/random/boot_id required')
+
+        a, _ = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        seed = self.run_json('start', a, '--issue', 'repo-1')
+        self.run_json('cancel', seed['run_id'], 'admit')
+
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        att_id = 'wa-' + '4e' * 16
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-1', 0, NULL, 'open', '2026-11-27T09:00:00Z')",
+                (att_id, repo_key, wt_a_admin),
+            )
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_recovery = script['cmd_writer_recovery']
+        parser = script['build_parser']()
+        boot_1 = '11111111-1111-4111-8111-111111111111'
+        boot_2 = '22222222-2222-4222-8222-222222222222'
+        arm_args = parser.parse_args([
+            'writer-recovery', 'arm', att_id, '--cwd', a, '--issue', 'repo-1',
+            '--unbound', '--confirm-local-ledger',
+        ])
+        retire_args = parser.parse_args([
+            'writer-recovery', 'retire', att_id, '--cwd', a, '--issue', 'repo-1',
+            '--unbound', '--confirm-local-ledger',
+        ])
+
+        # Verify real fstatfs on host ledger FD and fail-closed on bad FD / ABI.
+        probe_fd = os.open(db, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            real_magic = script['_fstatfs_magic'](probe_fd)
+            self.assertGreater(real_magic, 0)
+            mounts = script['_parse_mountinfo'](Path('/proc/self/mountinfo').read_text(encoding='utf-8'))
+            db_resolved = db.resolve()
+            matching = [m for m in mounts if db_resolved == Path(m[2]) or db_resolved.is_relative_to(Path(m[2]))]
+            host_fs = [m for m in matching if len(Path(m[2]).parts) == max(len(Path(x[2]).parts) for x in matching)][-1][3]
+            if host_fs in script['LOCAL_DURABLE_FS_MAGICS']:
+                self.assertEqual(real_magic, script['LOCAL_DURABLE_FS_MAGICS'][host_fs])
+            elif host_fs == 'tmpfs':
+                self.assertEqual(real_magic, 0x01021994)
+        finally:
+            os.close(probe_fd)
+        with self.assertRaisesRegex(script['CliError'], 'valid open file descriptor'):
+            script['_fstatfs_magic'](-1)
+        unused_r, unused_w = os.pipe()
+        os.close(unused_r)
+        os.close(unused_w)
+        with self.assertRaisesRegex(script['CliError'], 'fstatfs'):
+            script['_fstatfs_magic'](unused_r)
+        fake_ctypes = type('FakeCtypes', (), {
+            'sizeof': staticmethod(lambda _t: 4),
+            'c_long': script['ctypes'].c_long,
+            'c_void_p': script['ctypes'].c_void_p,
+        })()
+        with patch.dict(cmd_recovery.__globals__, {'ctypes': fake_ctypes}):
+            with self.assertRaisesRegex(script['CliError'], '64-bit LP64 ABI'):
+                cmd_recovery(arm_args, db)
+
+        # 1. Simulated wrong /proc magic despite matching root inode (1) and /proc mountinfo.
+        for bad_proc_magic in (0x01021994, 0xEF53):
+            with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1, proc_magic=bad_proc_magic):
+                with self.assertRaisesRegex(script['CliError'], 'untrusted /proc filesystem magic'):
+                    cmd_recovery(arm_args, db)
+        proc_fd, proc_st = script['_open_pinned_proc_root']()
+        try:
+            mountinfo_calls: list[int] = []
+            with patch.dict(cmd_recovery.__globals__, {
+                '_fstatfs_magic': lambda _fd: 0x01021994,
+                '_read_proc_self_mountinfo': lambda fd: (mountinfo_calls.append(fd), '')[1],
+            }):
+                with self.assertRaisesRegex(script['CliError'], 'untrusted /proc filesystem magic'):
+                    script['_verify_initial_pid_namespace_and_procfs'](proc_fd, proc_st)
+            self.assertEqual(mountinfo_calls, [])
+        finally:
+            os.close(proc_fd)
+
+        # 2. Fake /proc/self link mismatch with otherwise valid numeric witness; no numeric reads or mutation.
+        real_readlink = os.readlink
+        mismatch_pid = str(os.getpid() + 1)
+        for bad_self in (mismatch_pid, f'0{os.getpid()}', 'not-a-pid'):
+            numeric_reads: list[str] = []
+
+            def fake_self_readlink(path, *, dir_fd=None, _bad=bad_self):
+                if path == 'self' and dir_fd is not None:
+                    return _bad
+                return real_readlink(path) if dir_fd is None else real_readlink(path, dir_fd=dir_fd)
+
+            with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+                with patch.dict(cmd_recovery.__globals__, {
+                    '_read_proc_self_mountinfo': lambda _fd: (numeric_reads.append('mountinfo'), '')[1],
+                    '_read_proc_self_status': lambda _fd: (numeric_reads.append('status'), '')[1],
+                    '_read_proc_self_ns_pid': lambda _fd: (numeric_reads.append('ns'), ('pid:[1]', 1))[1],
+                }):
+                    with patch('os.readlink', side_effect=fake_self_readlink):
+                        with self.assertRaisesRegex(script['CliError'], '/proc/self PID mismatch'):
+                            cmd_recovery(arm_args, db)
+            self.assertEqual(numeric_reads, [])
+
+        # 3. Fake btrfs major-0 mountinfo claim paired with non-btrfs FD refuses; other FS mismatches refuse too.
+        real_lstat = os.lstat
+        real_fstat = os.fstat
+        db_ino = db.stat().st_ino
+        btrfs_subvol_dev = os.makedev(0, 99)
+
+        def _with_dev(st: os.stat_result, dev: int) -> os.stat_result:
+            return os.stat_result((
+                st.st_mode, st.st_ino, dev, st.st_nlink, st.st_uid, st.st_gid,
+                st.st_size, st.st_atime, st.st_mtime, st.st_ctime,
+            ))
+
+        def major_zero_lstat(path, *l_args, **l_kwargs):
+            st = real_lstat(path, *l_args, **l_kwargs)
+            if stat.S_ISREG(st.st_mode) and st.st_ino == db_ino:
+                return _with_dev(st, btrfs_subvol_dev)
+            return st
+
+        def major_zero_fstat(fd: int):
+            st = real_fstat(fd)
+            if stat.S_ISREG(st.st_mode) and st.st_ino == db_ino:
+                return _with_dev(st, btrfs_subvol_dev)
+            return st
+
+        with patch('os.lstat', side_effect=major_zero_lstat), patch('os.fstat', side_effect=major_zero_fstat):
+            for non_btrfs_magic in (0x01021994, 0xEF53, 0x58465342):
+                with self._recovery_host_patches(
+                    cmd_recovery,
+                    db,
+                    boot_id=boot_1,
+                    fs_type='btrfs',
+                    ledger_dev_maj_min='0:42',
+                    ledger_magic=non_btrfs_magic,
+                ):
+                    with self.assertRaisesRegex(script['CliError'], 'magic mismatch'):
+                        cmd_recovery(arm_args, db)
+
+        for claimed_fs, wrong_magic in (('ext4', 0x58465342), ('xfs', 0xEF53), ('f2fs', 0x01021994)):
+            with self._recovery_host_patches(
+                cmd_recovery,
+                db,
+                boot_id=boot_1,
+                fs_type=claimed_fs,
+                ledger_magic=wrong_magic,
+            ):
+                with self.assertRaisesRegex(script['CliError'], 'magic mismatch'):
+                    cmd_recovery(arm_args, db)
+
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            self.assertEqual(
+                conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_id,)).fetchone()[:],
+                ('open', None, None),
+            )
+            self.assertIsNone(
+                conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_recovery_events'").fetchone()
+            )
+
+        # Genuine /proc/self + genuine btrfs magic pass arm, with zero extra os.open calls while SQLite tx is open.
+        real_open = os.open
+        real_connect = sqlite3.connect
+        db_resolved_str = str(db.resolve())
+        sql_open_calls: list[str] = []
+        tx_active = [False]
+
+        def tracked_connect(*c_args, **c_kwargs):
+            tx_active[0] = True
+            return real_connect(*c_args, **c_kwargs)
+
+        def tracked_open(path, flags, *o_args, **o_kwargs):
+            if tx_active[0] and str(path) == db_resolved_str:
+                sql_open_calls.append(str(path))
+            return real_open(path, flags, *o_args, **o_kwargs)
+
+        with patch('os.lstat', side_effect=major_zero_lstat), patch('os.fstat', side_effect=major_zero_fstat):
+            with self._recovery_host_patches(
+                cmd_recovery,
+                db,
+                boot_id=boot_1,
+                fs_type='btrfs',
+                ledger_dev_maj_min='0:42',
+                ledger_magic=0x9123683E,
+            ):
+                with patch.object(sqlite3, 'connect', side_effect=tracked_connect):
+                    with patch('os.open', side_effect=tracked_open):
+                        code, armed = cmd_recovery(arm_args, db)
+        self.assertEqual((code, armed['action'], armed['ledger_fs_type']), (0, 'arm', 'btrfs'))
+        self.assertEqual(sql_open_calls, [])
+
+        # Retire refuses fake /proc/self mismatch without mutation, then passes on genuine /proc/self.
+        def fake_retire_readlink(path, *, dir_fd=None):
+            if path == 'self' and dir_fd is not None:
+                return mismatch_pid
+            return real_readlink(path) if dir_fd is None else real_readlink(path, dir_fd=dir_fd)
+
+        with patch('os.lstat', side_effect=major_zero_lstat), patch('os.fstat', side_effect=major_zero_fstat):
+            with self._recovery_host_patches(
+                cmd_recovery,
+                db,
+                boot_id=boot_2,
+                fs_type='btrfs',
+                ledger_dev_maj_min='0:42',
+                ledger_magic=0x9123683E,
+            ):
+                with patch('os.readlink', side_effect=fake_retire_readlink):
+                    with self.assertRaisesRegex(script['CliError'], '/proc/self PID mismatch'):
+                        cmd_recovery(retire_args, db)
+                with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+                    self.assertEqual(
+                        conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_id,)).fetchone()[:],
+                        ('open', None, None),
+                    )
+                    self.assertEqual(
+                        [r[0] for r in conn.execute('SELECT action FROM writer_recovery_events WHERE attempt_id = ?', (att_id,)).fetchall()],
+                        ['arm'],
+                    )
+                code_r, retired = cmd_recovery(retire_args, db)
+                self.assertEqual((code_r, retired['status'], retired['disposition']), (0, 'closed', 'interrupted'))
+
+    def test_writer_recovery_rejects_sibling_copied_git_pointer_and_malformed_gitdir(self) -> None:
+        a, _ = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        seed = self.run_json('start', a, '--issue', 'repo-1')
+        self.run_json('cancel', seed['run_id'], 'admit')
+
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        att_id = 'wa-' + '3c' * 16
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-1', 0, NULL, 'open', '2026-11-27T09:00:00Z')",
+                (att_id, repo_key, wt_a_admin),
+            )
+
+        sibling = Path(self.tmp.name) / 'sibling-copy'
+        sibling.mkdir()
+        (sibling / '.git').write_bytes((Path(a) / '.git').read_bytes())
+
+        symlink_sibling = Path(self.tmp.name) / 'sibling-symlink'
+        symlink_sibling.mkdir()
+        (symlink_sibling / '.git').symlink_to(Path(a) / '.git')
+
+        cli_sibling = self.run_cli(
+            'writer-recovery', 'arm', att_id, '--cwd', str(sibling), '--issue', 'repo-1',
+            '--unbound', '--confirm-local-ledger',
+        )
+        self.assertNotEqual(cli_sibling.returncode, 0)
+        self.assertIn('linked git worktree', cli_sibling.stderr.lower())
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_recovery = script['cmd_writer_recovery']
+        parser = script['build_parser']()
+        boot_1 = '11111111-1111-4111-8111-111111111111'
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+            for bad_cwd in (sibling, symlink_sibling):
+                bad_args = parser.parse_args([
+                    'writer-recovery', 'arm', att_id, '--cwd', str(bad_cwd), '--issue', 'repo-1',
+                    '--unbound', '--confirm-local-ledger',
+                ])
+                with self.assertRaisesRegex(script['CliError'], 'linked Git worktree'):
+                    cmd_recovery(bad_args, db)
+
+            gitdir_path = Path(wt_a_admin) / 'gitdir'
+            orig_gitdir = gitdir_path.read_text(encoding='utf-8')
+            symlink_target = Path(self.tmp.name) / 'gitdir-link-target'
+            symlink_target.write_text(orig_gitdir, encoding='utf-8')
+            arm_real = parser.parse_args([
+                'writer-recovery', 'arm', att_id, '--cwd', a, '--issue', 'repo-1',
+                '--unbound', '--confirm-local-ledger',
+            ])
+            try:
+                gitdir_path.unlink()
+                with self.assertRaisesRegex(script['CliError'], 'gitdir backlink'):
+                    cmd_recovery(arm_real, db)
+
+                gitdir_path.symlink_to(symlink_target)
+                with self.assertRaisesRegex(script['CliError'], 'gitdir backlink'):
+                    cmd_recovery(arm_real, db)
+                gitdir_path.unlink()
+
+                for bad_content in ('', f'{orig_gitdir}{orig_gitdir}', f'{orig_gitdir.rstrip()}\n\n', '   \n'):
+                    gitdir_path.write_text(bad_content, encoding='utf-8')
+                    with self.assertRaisesRegex(script['CliError'], 'gitdir'):
+                        cmd_recovery(arm_real, db)
+
+                rel_gitdir = os.path.relpath(Path(a).resolve() / '.git', Path(wt_a_admin).resolve())
+                gitdir_path.write_text(f'{rel_gitdir}\n', encoding='utf-8')
+                self.assertEqual(script['scoped_worktree'](a, repo_key, 'repo-1'), wt_a_admin)
+            finally:
+                if gitdir_path.is_symlink() or gitdir_path.exists():
+                    gitdir_path.unlink()
+                gitdir_path.write_text(orig_gitdir, encoding='utf-8')
+
+        with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+            self.assertEqual(
+                conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_id,)).fetchone()[:],
+                ('open', None, None),
+            )
+            self.assertIsNone(
+                conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_recovery_events'").fetchone()
+            )
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+            code, armed = cmd_recovery(arm_real, db)
+            self.assertEqual(code, 0)
+            self.assertEqual(armed['action'], 'arm')
+            self.assertEqual(armed['worktree'], wt_a_admin)
+
+    def test_writer_recovery_exact_run_id_matching_long_whitespace_and_punctuation(self) -> None:
+        a, b = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        wt_b_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-b').resolve())
+
+        long_id = 'r-' + 'x' * 260
+        ws_punct_id = '-run with spaces:v3 '
+        self.assertGreater(len(long_id), 256)
+        self.assertEqual(self.run_json('start', a, '--issue', 'repo-1', '--run-id', long_id)['run_id'], long_id)
+        self.assertEqual(self.run_json('start', b, '--issue', 'repo-2', f'--run-id={ws_punct_id}')['run_id'], ws_punct_id)
+
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        att_long = 'wa-' + '4d' * 16
+        att_ws = 'wa-' + '5e' * 16
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-1', 1, ?, 'open', '2026-11-27T09:00:00Z')",
+                (att_long, repo_key, wt_a_admin, long_id),
+            )
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-2', 1, ?, 'open', '2026-11-27T09:05:00Z')",
+                (att_ws, repo_key, wt_b_admin, ws_punct_id),
+            )
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_recovery = script['cmd_writer_recovery']
+        parser = script['build_parser']()
+        boot_1 = '11111111-1111-4111-8111-111111111111'
+        boot_2 = '22222222-2222-4222-8222-222222222222'
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+            for bad_run_flag in ('--run-id=', f'--run-id= {long_id}', f'--run-id={long_id} ', f'--run-id={long_id}\n'):
+                with self.assertRaises(script['CliError']):
+                    cmd_recovery(parser.parse_args([
+                        'writer-recovery', 'arm', att_long, '--cwd', a, '--issue', 'repo-1',
+                        bad_run_flag, '--confirm-local-ledger',
+                    ]), db)
+            with self.assertRaises(script['CliError']):
+                cmd_recovery(parser.parse_args([
+                    'writer-recovery', 'arm', att_ws, '--cwd', b, '--issue', 'repo-2',
+                    f'--run-id={ws_punct_id.strip()}', '--confirm-local-ledger',
+                ]), db)
+
+            with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+                self.assertIsNone(
+                    conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_recovery_events'").fetchone()
+                )
+
+            code_l, armed_l = cmd_recovery(parser.parse_args([
+                'writer-recovery', 'arm', att_long, '--cwd', a, '--issue', 'repo-1',
+                f'--run-id={long_id}', '--confirm-local-ledger',
+            ]), db)
+            self.assertEqual((code_l, armed_l['run_id']), (0, long_id))
+
+            code_w, armed_w = cmd_recovery(parser.parse_args([
+                'writer-recovery', 'arm', att_ws, '--cwd', b, '--issue', 'repo-2',
+                f'--run-id={ws_punct_id}', '--confirm-local-ledger',
+            ]), db)
+            self.assertEqual((code_w, armed_w['run_id']), (0, ws_punct_id))
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+            code_rl, retired_l = cmd_recovery(parser.parse_args([
+                'writer-recovery', 'retire', att_long, '--cwd', a, '--issue', 'repo-1',
+                f'--run-id={long_id}', '--confirm-local-ledger',
+            ]), db)
+            self.assertEqual((code_rl, retired_l['status'], retired_l['run_id']), (0, 'closed', long_id))
+
+            code_rw, retired_w = cmd_recovery(parser.parse_args([
+                'writer-recovery', 'retire', att_ws, '--cwd', b, '--issue', 'repo-2',
+                f'--run-id={ws_punct_id}', '--confirm-local-ledger',
+            ]), db)
+            self.assertEqual((code_rw, retired_w['status'], retired_w['run_id']), (0, 'closed', ws_punct_id))
+
+    def test_writer_recovery_rejects_outer_whitespace_xdg_state_home_before_evidence_and_db(self) -> None:
+        a, b = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        wt_b_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-b').resolve())
+
+        trimmed_xdg = Path(self.tmp.name) / 'trimmed-xdg'
+        trimmed_db = trimmed_xdg / 'pi-team-run' / 'state.db'
+        test_home = Path(self.tmp.name) / 'test-home'
+        test_home.mkdir()
+        default_db = test_home / '.local' / 'state' / 'pi-team-run' / 'state.db'
+
+        script = runpy.run_path(str(BIN_PATH))
+        cmd_recovery = script['cmd_writer_recovery']
+        parser = script['build_parser']()
+        boot_1 = '11111111-1111-4111-8111-111111111111'
+
+        att_arm = 'wa-' + '6a' * 16
+        att_retire = 'wa-' + '6b' * 16
+        base_env = {k: v for k, v in self.env.items() if k != 'XDG_STATE_HOME'}
+        fixtures = [
+            (trimmed_db, {**base_env, 'HOME': str(test_home), 'XDG_STATE_HOME': str(trimmed_xdg)}),
+            (default_db, {**base_env, 'HOME': str(test_home)}),
+        ]
+        run_b_by_db: dict[Path, str] = {}
+        for db_file, f_env in fixtures:
+            s_a = subprocess.run(
+                [sys.executable, str(BIN_PATH), 'start', a, '--issue', 'repo-1', '--json'],
+                env=f_env, text=True, capture_output=True, check=True,
+            )
+            run_a = json.loads(s_a.stdout)['run_id']
+            subprocess.run(
+                [sys.executable, str(BIN_PATH), 'cancel', run_a, 'admit', '--json'],
+                env=f_env, text=True, capture_output=True, check=True,
+            )
+            s_b = subprocess.run(
+                [sys.executable, str(BIN_PATH), 'start', b, '--issue', 'repo-2', '--json'],
+                env=f_env, text=True, capture_output=True, check=True,
+            )
+            run_b = json.loads(s_b.stdout)['run_id']
+            run_b_by_db[db_file] = run_b
+
+            with closing(sqlite3.connect(db_file)) as conn, conn:
+                conn.execute(
+                    "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                    "VALUES (?, ?, ?, 'repo-1', 0, NULL, 'open', '2026-11-27T09:00:00Z')",
+                    (att_arm, repo_key, wt_a_admin),
+                )
+                conn.execute(
+                    "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                    "VALUES (?, ?, ?, 'repo-2', 1, ?, 'open', '2026-11-27T09:05:00Z')",
+                    (att_retire, repo_key, wt_b_admin, run_b),
+                )
+
+            with self._recovery_host_patches(cmd_recovery, db_file, boot_id=boot_1):
+                code, armed = cmd_recovery(parser.parse_args([
+                    'writer-recovery', 'arm', att_retire, '--cwd', b, '--issue', 'repo-2',
+                    '--run-id', run_b, '--confirm-local-ledger',
+                ]), db_file)
+                self.assertEqual((code, armed['action']), (0, 'arm'))
+
+            self.assertTrue(db_file.is_file())
+            with closing(sqlite3.connect(f'{db_file.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+                self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 3)
+                self.assertEqual(
+                    conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_arm,)).fetchone()[:],
+                    ('open', None, None),
+                )
+                self.assertEqual(
+                    conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_retire,)).fetchone()[:],
+                    ('open', None, None),
+                )
+                self.assertEqual(
+                    [r[0] for r in conn.execute('SELECT action FROM writer_recovery_events WHERE attempt_id = ?', (att_retire,)).fetchall()],
+                    ['arm'],
+                )
+
+        norm_repo = Path(self.tmp.name) / 'norm-repo'
+        ws_repo = Path(self.tmp.name) / 'ws-repo'
+        norm_repo.mkdir()
+        ws_repo.mkdir()
+        norm_start = subprocess.run(
+            [sys.executable, str(BIN_PATH), 'start', str(norm_repo), '--json'],
+            env={**base_env, 'HOME': str(test_home), 'XDG_STATE_HOME': f' {trimmed_xdg} '},
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(norm_start.returncode, 0, msg=norm_start.stderr)
+        ws_start = subprocess.run(
+            [sys.executable, str(BIN_PATH), 'start', str(ws_repo), '--json'],
+            env={**base_env, 'HOME': str(test_home), 'XDG_STATE_HOME': '   '},
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(ws_start.returncode, 0, msg=ws_start.stderr)
+
+        bad_xdg_values = (
+            (f' {trimmed_xdg}', trimmed_db),
+            (f'{trimmed_xdg} ', trimmed_db),
+            (f' {trimmed_xdg} ', trimmed_db),
+            (f'\t{trimmed_xdg}\n', trimmed_db),
+            (' ', default_db),
+            ('\t', default_db),
+            ('  \n', default_db),
+        )
+        for bad_xdg, target_db in bad_xdg_values:
+            bad_env = {**base_env, 'HOME': str(test_home), 'XDG_STATE_HOME': bad_xdg}
+            run_b = run_b_by_db[target_db]
+            cli_cases = (
+                ['writer-recovery', 'arm', att_arm, '--cwd', a, '--issue', 'repo-1', '--unbound', '--confirm-local-ledger'],
+                ['writer-recovery', 'retire', att_retire, '--cwd', b, '--issue', 'repo-2', '--run-id', run_b, '--confirm-local-ledger'],
+                ['writer-recovery', 'status', att_arm],
+            )
+            for argv in cli_cases:
+                with self.subTest(bad_xdg=bad_xdg, action=argv[1]):
+                    proc = subprocess.run(
+                        [sys.executable, str(BIN_PATH), *argv],
+                        env=bad_env, text=True, capture_output=True, check=False,
+                    )
+                    self.assertNotEqual(proc.returncode, 0)
+                    self.assertIn('xdg_state_home', proc.stderr.lower())
+                    self.assertIn('surrounding whitespace', proc.stderr.lower())
+                    self.assertNotIn('missing', proc.stderr.lower())
+                    self.assertNotIn('not an allowed local durable filesystem', proc.stderr.lower())
+
+        calls: list[str] = []
+
+        def fail_if_called(name: str):
+            def _boom(*_args, **_kwargs):
+                calls.append(name)
+                raise AssertionError(f'{name} must not run when XDG_STATE_HOME has outer whitespace')
+            return _boom
+
+        with patch.dict(os.environ, {'HOME': str(test_home), 'XDG_STATE_HOME': f' {trimmed_xdg} '}):
+            with patch.dict(script['main'].__globals__, {
+                'resolve_state_db_path': fail_if_called('resolve_state_db_path'),
+                '_open_pinned_proc_root': fail_if_called('_open_pinned_proc_root'),
+                '_read_machine_id_raw': fail_if_called('_read_machine_id_raw'),
+            }):
+                with patch('sqlite3.connect', side_effect=fail_if_called('sqlite3.connect')):
+                    for argv in (
+                        ['writer-recovery', 'arm', att_arm, '--cwd', a, '--issue', 'repo-1', '--unbound', '--confirm-local-ledger'],
+                        ['writer-recovery', 'retire', att_retire, '--cwd', b, '--issue', 'repo-2', '--run-id', run_b_by_db[trimmed_db], '--confirm-local-ledger'],
+                        ['writer-recovery', 'status', att_arm],
+                    ):
+                        err_buf = io.StringIO()
+                        with patch('sys.stderr', err_buf):
+                            rc = script['main'](argv)
+                        self.assertEqual(rc, 1)
+                        self.assertIn('surrounding whitespace', err_buf.getvalue().lower())
+                        with self.assertRaisesRegex(script['CliError'], 'surrounding whitespace'):
+                            cmd_recovery(parser.parse_args(argv), trimmed_db)
+        self.assertEqual(calls, [])
+
+        for db_file, _ in fixtures:
+            with closing(sqlite3.connect(f'{db_file.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+                self.assertEqual(
+                    conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_arm,)).fetchone()[:],
+                    ('open', None, None),
+                )
+                self.assertEqual(
+                    conn.execute('SELECT count(*) FROM writer_recovery_events WHERE attempt_id = ?', (att_arm,)).fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_retire,)).fetchone()[:],
+                    ('open', None, None),
+                )
+                self.assertEqual(
+                    [r[0] for r in conn.execute('SELECT action FROM writer_recovery_events WHERE attempt_id = ?', (att_retire,)).fetchall()],
+                    ['arm'],
+                )
+
+    def test_writer_recovery_machine_id_fd_complete_read_overflow_and_canonical_validation(self) -> None:
+        a, _ = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        seed = self.run_json('start', a, '--issue', 'repo-1')
+        self.run_json('cancel', seed['run_id'], 'admit')
+
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        att_id = 'wa-' + '7b' * 16
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id, repo_key, worktree, issue, bound, run_id, status, created_at) "
+                "VALUES (?, ?, ?, 'repo-1', 0, NULL, 'open', '2026-11-27T09:00:00Z')",
+                (att_id, repo_key, wt_a_admin),
+            )
+
+        mid_dir = Path(self.tmp.name) / 'machine-ids'
+        mid_dir.mkdir()
+        id_1 = '1' * 32
+        id_2 = '2' * 32
+
+        def write_mid(name: str, payload: bytes) -> Path:
+            p = mid_dir / name
+            p.write_bytes(payload)
+            return p
+
+        valid_nl = write_mid('valid-nl', (id_1 + '\n').encode('ascii'))
+        valid_no_nl = write_mid('valid-no-nl', id_2.encode('ascii'))
+        overflow_ws_second = write_mid('overflow-ws-second', (id_1 + ' ' * 100 + id_2 + '\n').encode('ascii'))
+        within_cap_ws_second = write_mid('within-cap-ws-second', (id_1 + ' ' * 10 + id_2 + '\n').encode('ascii'))
+        non_utf8 = write_mid('non-utf8', b'\xff' * 32 + b'\n')
+        bad_payloads = [
+            ('leading-space', (' ' + id_1 + '\n').encode('ascii')),
+            ('trailing-space-nl', (id_1 + ' \n').encode('ascii')),
+            ('trailing-space', (id_1 + ' ').encode('ascii')),
+            ('trailing-tab', (id_1 + '\t').encode('ascii')),
+            ('crlf', (id_1 + '\r\n').encode('ascii')),
+            ('double-nl', (id_1 + '\n\n').encode('ascii')),
+            ('nl-space', (id_1 + '\n ').encode('ascii')),
+            ('two-lines', (id_1 + '\n' + id_2 + '\n').encode('ascii')),
+            ('all-zero', ('0' * 32 + '\n').encode('ascii')),
+            ('uppercase', ('A' * 32 + '\n').encode('ascii')),
+        ]
+        bad_files = [(name, write_mid(name, data)) for name, data in bad_payloads]
+
+        script = runpy.run_path(str(BIN_PATH))
+        read_mid_fd = script['_read_machine_id_fd']
+        real_read_mid_raw = script['_read_machine_id_raw']
+        cmd_recovery = script['cmd_writer_recovery']
+        parser = script['build_parser']()
+
+        self.assertEqual(read_mid_fd(os.open(valid_nl, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)), id_1)
+        self.assertEqual(read_mid_fd(os.open(valid_no_nl, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)), id_2)
+
+        real_os_read = os.read
+        with patch('os.read', side_effect=lambda fd, n: real_os_read(fd, min(n, 7))):
+            self.assertEqual(read_mid_fd(os.open(valid_nl, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)), id_1)
+            with self.assertRaisesRegex(script['CliError'], 'exceeded 128 bytes'):
+                read_mid_fd(os.open(overflow_ws_second, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC))
+
+        with self.assertRaisesRegex(script['CliError'], 'exceeded 128 bytes'):
+            read_mid_fd(os.open(overflow_ws_second, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC))
+        with self.assertRaisesRegex(script['CliError'], 'invalid or zero /etc/machine-id'):
+            read_mid_fd(os.open(within_cap_ws_second, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC))
+        with self.assertRaisesRegex(script['CliError'], 'not valid UTF-8'):
+            read_mid_fd(os.open(non_utf8, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC))
+        for name, bad_path in bad_files:
+            with self.subTest(bad_machine_id=name):
+                with self.assertRaisesRegex(script['CliError'], 'invalid or zero /etc/machine-id'):
+                    read_mid_fd(os.open(bad_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC))
+
+        r_fd, w_fd = os.pipe()
+        try:
+            with self.assertRaisesRegex(script['CliError'], 'regular file'):
+                read_mid_fd(r_fd)
+        finally:
+            os.close(w_fd)
+
+        for invalid_val in ('0' * 32, id_1 + '\n', '1' * 31, 123):
+            with self.assertRaisesRegex(script['CliError'], 'invalid or zero /etc/machine-id'):
+                script['_validate_machine_id'](invalid_val)
+            with self.assertRaisesRegex(script['CliError'], 'invalid or zero /etc/machine-id'):
+                script['_hash_machine_id'](invalid_val)
+
+        boot_1 = '11111111-1111-4111-8111-111111111111'
+        boot_2 = '22222222-2222-4222-8222-222222222222'
+        arm_args = parser.parse_args([
+            'writer-recovery', 'arm', att_id, '--cwd', a, '--issue', 'repo-1',
+            '--unbound', '--confirm-local-ledger',
+        ])
+        retire_args = parser.parse_args([
+            'writer-recovery', 'retire', att_id, '--cwd', a, '--issue', 'repo-1',
+            '--unbound', '--confirm-local-ledger',
+        ])
+
+        def open_temp_mid(path: Path):
+            return lambda: os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_1):
+            for bad_path in (overflow_ws_second, within_cap_ws_second, bad_files[1][1]):
+                with patch.dict(cmd_recovery.__globals__, {
+                    '_read_machine_id_raw': real_read_mid_raw,
+                    '_open_machine_id_fd': open_temp_mid(bad_path),
+                }):
+                    with self.assertRaises(script['CliError']):
+                        cmd_recovery(arm_args, db)
+
+            with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+                self.assertIsNone(
+                    conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_recovery_events'").fetchone()
+                )
+                self.assertEqual(
+                    conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_id,)).fetchone()[:],
+                    ('open', None, None),
+                )
+
+            with patch.dict(cmd_recovery.__globals__, {
+                '_read_machine_id_raw': real_read_mid_raw,
+                '_open_machine_id_fd': open_temp_mid(valid_nl),
+            }):
+                with patch('os.read', side_effect=lambda fd, n: real_os_read(fd, min(n, 7))):
+                    code_arm, armed = cmd_recovery(arm_args, db)
+            self.assertEqual((code_arm, armed['action']), (0, 'arm'))
+
+        with self._recovery_host_patches(cmd_recovery, db, boot_id=boot_2):
+            for bad_path in (overflow_ws_second, within_cap_ws_second, bad_files[4][1]):
+                with patch.dict(cmd_recovery.__globals__, {
+                    '_read_machine_id_raw': real_read_mid_raw,
+                    '_open_machine_id_fd': open_temp_mid(bad_path),
+                }):
+                    with self.assertRaises(script['CliError']):
+                        cmd_recovery(retire_args, db)
+
+            with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
+                self.assertEqual(
+                    conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_id,)).fetchone()[:],
+                    ('open', None, None),
+                )
+                self.assertEqual(
+                    [r[0] for r in conn.execute('SELECT action FROM writer_recovery_events WHERE attempt_id = ?', (att_id,)).fetchall()],
+                    ['arm'],
+                )
+
+            with patch.dict(cmd_recovery.__globals__, {
+                '_read_machine_id_raw': real_read_mid_raw,
+                '_open_machine_id_fd': open_temp_mid(valid_nl),
+            }):
+                code_retire, retired = cmd_recovery(retire_args, db)
+            self.assertEqual((code_retire, retired['status'], retired['disposition']), (0, 'closed', 'interrupted'))
+            self.assertIsNone(retired['exit_code'])
 
 
 if __name__ == '__main__':

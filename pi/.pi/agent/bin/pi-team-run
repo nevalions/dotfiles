@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import ctypes
 from datetime import datetime, timedelta, timezone
+import errno
 from hashlib import sha256
 import json
 import os
@@ -18,6 +20,7 @@ import stat
 import subprocess
 import sys
 import time
+import uuid
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -246,6 +249,81 @@ V3_MIGRATION = (
     )
     BEGIN
         SELECT RAISE(ABORT, 'writer fence active for repository');
+    END
+    """,
+)
+
+
+ATTEMPT_ID_RE = re.compile(r'^wa-[0-9a-f]{32}$')
+UUID_LOWER_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+MACHINE_ID_RE = re.compile(r'\A[0-9a-f]{32}\Z')
+NSFS_MOUNT_ROOT_RE = re.compile(r'^[a-z][a-z0-9_]*:\[[0-9]+\]$')
+PROC_PID_INIT_INO = 0xEFFFFFFC
+PROC_ROOT_INO = 1
+PROC_SUPER_MAGIC = 0x9FA0
+OPENAT2_SYSCALL_NR = {'x86_64': 437, 'aarch64': 437}
+RESOLVE_NO_XDEV = 0x01
+RESOLVE_NO_SYMLINKS = 0x04
+RESOLVE_BENEATH = 0x08
+LOCAL_DURABLE_FS_MAGICS = {
+    'ext4': 0xEF53,
+    'xfs': 0x58465342,
+    'btrfs': 0x9123683E,
+    'f2fs': 0xF2F52010,
+}
+LOCAL_DURABLE_FS_TYPES = frozenset(LOCAL_DURABLE_FS_MAGICS)
+LOCAL_LEDGER_ATTESTATION = (
+    'original host, same original private local ledger and scope, '
+    'no sharing, copying, restore, cloned machine-ID, or replay'
+)
+
+WRITER_RECOVERY_EVENTS_SCHEMA = (
+    """
+    CREATE TABLE IF NOT EXISTS writer_recovery_events (
+        attempt_id TEXT NOT NULL REFERENCES writer_attempts(attempt_id),
+        action TEXT NOT NULL CHECK (action IN ('arm', 'retire')),
+        disposition TEXT CHECK (
+            (action = 'arm' AND disposition IS NULL)
+            OR (action = 'retire' AND disposition = 'interrupted')
+        ),
+        attempt_repo_key TEXT NOT NULL,
+        attempt_worktree TEXT NOT NULL,
+        attempt_issue TEXT NOT NULL,
+        attempt_bound INTEGER NOT NULL CHECK (attempt_bound IN (0, 1)),
+        attempt_run_id TEXT,
+        attempt_status TEXT NOT NULL CHECK (attempt_status IN ('open', 'closed')),
+        attempt_exit_code INTEGER CHECK (attempt_exit_code IS NULL),
+        attempt_created_at TEXT NOT NULL,
+        attempt_closed_at TEXT,
+        boot_id TEXT NOT NULL,
+        machine_id_hash TEXT NOT NULL,
+        pid_ns_inode INTEGER NOT NULL,
+        ledger_path TEXT NOT NULL,
+        ledger_fs_type TEXT NOT NULL,
+        ledger_fsid TEXT NOT NULL,
+        ledger_ino INTEGER NOT NULL,
+        operator_attestation TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (attempt_id, action),
+        CHECK (
+            (action = 'arm' AND attempt_status = 'open' AND attempt_closed_at IS NULL)
+            OR (action = 'retire' AND attempt_status = 'closed' AND attempt_closed_at IS NOT NULL)
+        ),
+        CHECK ((attempt_bound = 0 AND attempt_run_id IS NULL) OR (attempt_bound = 1 AND attempt_run_id IS NOT NULL))
+    )
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS writer_recovery_events_no_update
+    BEFORE UPDATE ON writer_recovery_events
+    BEGIN
+        SELECT RAISE(ABORT, 'writer_recovery_events is append-only');
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS writer_recovery_events_no_delete
+    BEFORE DELETE ON writer_recovery_events
+    BEGIN
+        SELECT RAISE(ABORT, 'writer_recovery_events is append-only');
     END
     """,
 )
@@ -738,6 +816,73 @@ def compute_next_step(
         'authorized': False,
         'message': f'Next step for {run_id}: {hint}.',
     }
+
+
+def _read_fd_text(fd: int, label: str, *, max_bytes: int = 1048576) -> str:
+    """Read bounded UTF-8 text from an open regular file descriptor and close it."""
+    try:
+        fst = os.fstat(fd)
+        if not stat.S_ISREG(fst.st_mode):
+            raise CliError(f'{label} must be a regular file')
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(fd, min(65536, max_bytes + 1 - total))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise CliError(f'{label} exceeded {max_bytes} bytes')
+            chunks.append(chunk)
+        data = b''.join(chunks)
+    except OSError as exc:
+        raise CliError(f'unable to read {label}: {exc}') from None
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    try:
+        return data.decode('utf-8')
+    except UnicodeDecodeError:
+        raise CliError(f'{label} is not valid UTF-8') from None
+
+
+def _verify_linked_worktree_backlink(root: Path, admin: Path) -> None:
+    """Verify admin dir gitdir backlink resolves to exact linked worktree .git file."""
+    root_git = root / '.git'
+    try:
+        root_git_lst = os.lstat(root_git)
+    except OSError:
+        raise CliError('--issue requires the root of a linked Git worktree') from None
+    if stat.S_ISLNK(root_git_lst.st_mode) or not stat.S_ISREG(root_git_lst.st_mode):
+        raise CliError('--issue requires the root of a linked Git worktree (.git must be a regular gitfile)')
+    try:
+        root_git_resolved = root_git.resolve(strict=True)
+    except OSError:
+        raise CliError('--issue requires the root of a linked Git worktree') from None
+
+    gitdir_file = admin / 'gitdir'
+    try:
+        fd = os.open(gitdir_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        raise CliError('--issue requires a valid linked Git worktree admin gitdir backlink') from None
+    raw_text = _read_fd_text(fd, 'worktree admin gitdir', max_bytes=8192)
+    if '\x00' in raw_text or '\r' in raw_text:
+        raise CliError('malformed linked Git worktree admin gitdir metadata')
+    if raw_text.count('\n') > 1 or ('\n' in raw_text and not raw_text.endswith('\n')):
+        raise CliError('ambiguous or malformed linked Git worktree admin gitdir metadata')
+    target_raw = raw_text[:-1] if raw_text.endswith('\n') else raw_text
+    if not target_raw or target_raw != target_raw.strip():
+        raise CliError('empty or malformed linked Git worktree admin gitdir metadata')
+    try:
+        target_resolved = (admin / target_raw).resolve(strict=True)
+    except OSError:
+        raise CliError('unresolvable linked Git worktree admin gitdir backlink') from None
+    if target_resolved.name != '.git' or target_resolved != root_git_resolved:
+        raise CliError(
+            '--issue requires the exact linked Git worktree root matching admin gitdir backlink'
+        )
 
 
 def scoped_worktree(repo: str, repo_key: str, issue: str, *, git_bin: str = 'git') -> str:
@@ -1692,6 +1837,970 @@ def cmd_writer_exec(args: argparse.Namespace, db_path: Path) -> tuple[int, None]
                 pass
 
 
+class _OpenHow(ctypes.Structure):
+    """Linux struct open_how layout for openat2(2)."""
+
+    _fields_ = [
+        ('flags', ctypes.c_uint64),
+        ('mode', ctypes.c_uint64),
+        ('resolve', ctypes.c_uint64),
+    ]
+
+
+class _StatFsBuf(ctypes.Structure):
+    """Aligned 64-bit Linux struct statfs buffer with native long f_type."""
+
+    _fields_ = [
+        ('f_type', ctypes.c_long),
+        ('_pad', ctypes.c_long * 31),
+    ]
+
+
+def _require_supported_linux_abi(feature: str) -> str:
+    """Require Linux on a supported 64-bit LP64 architecture and ABI."""
+    if sys.platform != 'linux':
+        raise CliError(f'{feature} requires Linux (got {sys.platform!r})')
+    machine = os.uname().machine
+    if machine not in OPENAT2_SYSCALL_NR:
+        raise CliError(f'{feature} is not supported on architecture {machine!r}')
+    if ctypes.sizeof(ctypes.c_long) != 8 or ctypes.sizeof(ctypes.c_void_p) != 8:
+        raise CliError(f'{feature} requires 64-bit LP64 ABI on {machine!r}')
+    return machine
+
+
+def _fstatfs_magic(fd: int) -> int:
+    """Inspect kernel filesystem magic for an open FD via pinned libc fstatfs(2)."""
+    _require_supported_linux_abi('fstatfs')
+    if not isinstance(fd, int) or isinstance(fd, bool) or fd < 0:
+        raise CliError(f'fstatfs requires a valid open file descriptor (got {fd!r})')
+    buf = _StatFsBuf()
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        fstatfs_fn = libc.fstatfs
+    except (OSError, AttributeError) as exc:
+        raise CliError(f'unable to resolve libc fstatfs: {exc}') from None
+    fstatfs_fn.argtypes = [ctypes.c_int, ctypes.POINTER(_StatFsBuf)]
+    fstatfs_fn.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    rc = fstatfs_fn(fd, ctypes.byref(buf))
+    if rc != 0:
+        err = ctypes.get_errno() or errno.EIO
+        raise CliError(f'unable to inspect filesystem magic via fstatfs: {os.strerror(err)}')
+    return int(buf.f_type)
+
+
+def _linux_openat2(dir_fd: int, rel_path: str, flags: int, resolve: int) -> int:
+    """Open rel_path beneath dir_fd using Linux openat2(2) with explicit resolve flags."""
+    machine = _require_supported_linux_abi('openat2')
+    nr = OPENAT2_SYSCALL_NR[machine]
+    if not rel_path or os.path.isabs(rel_path) or '\x00' in rel_path:
+        raise CliError(f'openat2 requires a non-empty relative path (got {rel_path!r})')
+    how = _OpenHow(flags=flags, mode=0, resolve=resolve)
+    libc = ctypes.CDLL(None, use_errno=True)
+    syscall_fn = libc.syscall
+    syscall_fn.argtypes = [
+        ctypes.c_long,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.POINTER(_OpenHow),
+        ctypes.c_size_t,
+    ]
+    syscall_fn.restype = ctypes.c_long
+    ctypes.set_errno(0)
+    fd = syscall_fn(
+        nr,
+        dir_fd,
+        rel_path.encode('utf-8'),
+        ctypes.byref(how),
+        ctypes.sizeof(how),
+    )
+    if fd < 0:
+        err = ctypes.get_errno() or errno.EIO
+        raise OSError(err, os.strerror(err))
+    return int(fd)
+
+
+def _open_pinned_proc_root() -> tuple[int, os.stat_result]:
+    """Open /proc without following symlinks and verify its procfs inode and kernel magic."""
+    try:
+        proc_fd = os.open('/proc', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        raise CliError(f'unable to open /proc directory: {exc}') from None
+    try:
+        try:
+            st = os.fstat(proc_fd)
+        except OSError as exc:
+            raise CliError(f'unable to fstat /proc directory: {exc}') from None
+        if not stat.S_ISDIR(st.st_mode) or st.st_ino != PROC_ROOT_INO:
+            raise CliError(
+                f'untrusted /proc root inode (expected dir inode {PROC_ROOT_INO}, got mode={oct(st.st_mode)} ino={st.st_ino})'
+            )
+        fs_magic = _fstatfs_magic(proc_fd)
+        if fs_magic != PROC_SUPER_MAGIC:
+            raise CliError(
+                f'untrusted /proc filesystem magic (expected {PROC_SUPER_MAGIC:#x}, got {fs_magic:#x})'
+            )
+    except Exception:
+        os.close(proc_fd)
+        raise
+    return proc_fd, st
+
+
+def _read_host_boot_id(proc_fd: int) -> str:
+    """Read the raw host boot_id string from a pinned real procfs root FD without crossing mounts or symlinks."""
+    try:
+        fd = _linux_openat2(
+            proc_fd,
+            'sys/kernel/random/boot_id',
+            os.O_RDONLY | os.O_CLOEXEC,
+            RESOLVE_BENEATH | RESOLVE_NO_XDEV | RESOLVE_NO_SYMLINKS,
+        )
+    except OSError as exc:
+        raise CliError(f'unable to read host boot_id from pinned procfs root: {exc}') from None
+    return _read_fd_text(fd, '/proc/sys/kernel/random/boot_id', max_bytes=128).strip()
+
+
+def _validate_boot_id(raw: object) -> str:
+    """Validate a typed nonzero lowercase Linux kernel boot UUID."""
+    if not isinstance(raw, str):
+        raise CliError('invalid or zero host boot_id')
+    text = raw.strip()
+    if not UUID_LOWER_RE.fullmatch(text):
+        raise CliError('invalid or zero host boot_id')
+    try:
+        parsed = uuid.UUID(text)
+    except ValueError:
+        raise CliError('invalid or zero host boot_id') from None
+    if parsed.int == 0 or str(parsed) != text:
+        raise CliError('invalid or zero host boot_id')
+    return str(parsed)
+
+
+def _validate_machine_id(raw: object) -> str:
+    """Validate an exact canonical nonzero 32-hex lowercase host machine ID."""
+    if not isinstance(raw, str) or not MACHINE_ID_RE.fullmatch(raw):
+        raise CliError('invalid or zero /etc/machine-id')
+    try:
+        parsed = uuid.UUID(hex=raw)
+    except ValueError:
+        raise CliError('invalid or zero /etc/machine-id') from None
+    if parsed.int == 0 or parsed.hex != raw:
+        raise CliError('invalid or zero /etc/machine-id')
+    return parsed.hex
+
+
+def _open_machine_id_fd() -> int:
+    """Open /etc/machine-id read-only without following symlinks."""
+    try:
+        return os.open('/etc/machine-id', os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        raise CliError(f'unable to read /etc/machine-id: {exc}') from None
+
+
+def _read_machine_id_fd(fd: int) -> str:
+    """Read and validate the host machine ID from a pinned regular FD through EOF."""
+    raw_text = _read_fd_text(fd, '/etc/machine-id', max_bytes=128)
+    candidate = raw_text[:-1] if raw_text.endswith('\n') else raw_text
+    return _validate_machine_id(candidate)
+
+
+def _read_machine_id_raw() -> str:
+    """Read and validate the host machine ID without following symlinks."""
+    return _read_machine_id_fd(_open_machine_id_fd())
+
+
+def _hash_machine_id(raw: object) -> str:
+    """Return a domain-separated SHA-256 digest of a validated machine ID."""
+    validated = _validate_machine_id(raw)
+    return sha256(f'pi-team-run:machine-id:v1:{validated}'.encode('utf-8')).hexdigest()
+
+
+def _read_proc_self_pid(proc_fd: int) -> int:
+    """Read /proc/self symlink on an authenticated pinned procfs FD and verify it matches os.getpid()."""
+    try:
+        lst = os.lstat('self', dir_fd=proc_fd)
+        if not stat.S_ISLNK(lst.st_mode):
+            raise CliError('/proc/self must be a procfs symlink')
+        self_target = os.readlink('self', dir_fd=proc_fd)
+    except OSError as exc:
+        raise CliError(f'unable to read /proc/self symlink: {exc}') from None
+    expected_pid = os.getpid()
+    if not self_target.isascii() or not self_target.isdigit() or self_target != str(expected_pid):
+        raise CliError(
+            f'/proc/self PID mismatch against caller PID (expected {expected_pid}, got {self_target!r})'
+        )
+    return expected_pid
+
+
+def _read_proc_self_mountinfo(proc_fd: int) -> str:
+    """Read /proc/<pid>/mountinfo relative to a pinned procfs root FD without crossing mounts or symlinks."""
+    pid = _read_proc_self_pid(proc_fd)
+    try:
+        fd = _linux_openat2(
+            proc_fd,
+            f'{pid}/mountinfo',
+            os.O_RDONLY | os.O_CLOEXEC,
+            RESOLVE_BENEATH | RESOLVE_NO_XDEV | RESOLVE_NO_SYMLINKS,
+        )
+    except OSError as exc:
+        raise CliError(f'unable to read /proc/self/mountinfo: {exc}') from None
+    return _read_fd_text(fd, '/proc/self/mountinfo', max_bytes=4 * 1024 * 1024)
+
+
+def _read_proc_self_status(proc_fd: int) -> str:
+    """Read /proc/<pid>/status relative to a pinned procfs root FD without crossing mounts or symlinks."""
+    pid = _read_proc_self_pid(proc_fd)
+    try:
+        fd = _linux_openat2(
+            proc_fd,
+            f'{pid}/status',
+            os.O_RDONLY | os.O_CLOEXEC,
+            RESOLVE_BENEATH | RESOLVE_NO_XDEV | RESOLVE_NO_SYMLINKS,
+        )
+    except OSError as exc:
+        raise CliError(f'unable to read /proc/self/status: {exc}') from None
+    return _read_fd_text(fd, '/proc/self/status', max_bytes=262144)
+
+
+def _read_proc_self_ns_pid(proc_fd: int) -> tuple[str, int]:
+    """Read /proc/<pid>/ns/pid symlink target and inode relative to a pinned procfs root FD."""
+    pid = _read_proc_self_pid(proc_fd)
+    try:
+        ns_fd = _linux_openat2(
+            proc_fd,
+            f'{pid}/ns',
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+            RESOLVE_BENEATH | RESOLVE_NO_XDEV | RESOLVE_NO_SYMLINKS,
+        )
+    except OSError as exc:
+        raise CliError(f'unable to open /proc/self/ns: {exc}') from None
+    try:
+        lst = os.lstat('pid', dir_fd=ns_fd)
+        if not stat.S_ISLNK(lst.st_mode):
+            raise CliError('/proc/self/ns/pid must be a procfs namespace symlink')
+        link = os.readlink('pid', dir_fd=ns_fd)
+        st = os.stat('pid', dir_fd=ns_fd, follow_symlinks=True)
+    except OSError as exc:
+        raise CliError(f'unable to inspect /proc/self/ns/pid: {exc}') from None
+    finally:
+        os.close(ns_fd)
+    return link, st.st_ino
+
+
+def _read_fd_statvfs_fsid(fd: int) -> int:
+    """Read os.fstatvfs(fd).f_fsid for an open ledger file descriptor."""
+    try:
+        return int(os.fstatvfs(fd).f_fsid)
+    except OSError as exc:
+        raise CliError(f'unable to inspect ledger filesystem ID: {exc}') from None
+
+
+def _read_path_statvfs_fsid(path: Path) -> int:
+    """Read os.statvfs(path).f_fsid without opening a file descriptor."""
+    try:
+        return int(os.statvfs(path).f_fsid)
+    except OSError as exc:
+        raise CliError(f'unable to inspect ledger filesystem ID: {exc}') from None
+
+
+def _unescape_mountinfo(token: str) -> str:
+    """Decode octal escapes used in /proc/self/mountinfo paths."""
+    return re.sub(r'\\([0-7]{3})', lambda m: chr(int(m.group(1), 8)), token)
+
+
+def _parse_mountinfo(text: str) -> list[tuple[str, str, str, str]]:
+    """Parse /proc/self/mountinfo into (dev_maj_min, mount_root, mount_point, fs_type) tuples."""
+    entries: list[tuple[str, str, str, str]] = []
+    for line in text.splitlines():
+        if not line:
+            continue
+        parts = line.split(' - ')
+        if len(parts) != 2:
+            raise CliError('malformed /proc/self/mountinfo entry')
+        left = parts[0].split(' ')
+        right = parts[1].split(' ')
+        if len(left) < 6 or len(right) < 2:
+            raise CliError('incomplete /proc/self/mountinfo entry')
+        if not left[0].isdigit() or not left[1].isdigit():
+            raise CliError('invalid mount ID in /proc/self/mountinfo')
+        dev_maj_min = left[2]
+        if not re.fullmatch(r'[0-9]+:[0-9]+', dev_maj_min):
+            raise CliError('invalid device major:minor in /proc/self/mountinfo')
+        mount_root = _unescape_mountinfo(left[3])
+        mount_point = _unescape_mountinfo(left[4])
+        fs_type = right[0]
+        if not fs_type or not mount_point.startswith('/') or '\x00' in mount_root or '\x00' in mount_point:
+            raise CliError('invalid mount path or filesystem type in /proc/self/mountinfo')
+        valid_root = mount_root.startswith('/') or (
+            fs_type == 'nsfs' and NSFS_MOUNT_ROOT_RE.fullmatch(mount_root) is not None
+        )
+        if not valid_root:
+            raise CliError('invalid mount root in /proc/self/mountinfo')
+        entries.append((dev_maj_min, mount_root, mount_point, fs_type))
+    if not entries:
+        raise CliError('empty /proc/self/mountinfo')
+    return entries
+
+
+def _verify_initial_pid_namespace_and_procfs(
+    proc_fd: int,
+    proc_st: os.stat_result,
+) -> tuple[int, list[tuple[str, str, str, str]]]:
+    """Verify authenticated /proc mountinfo against pinned /proc FD and initial host PID namespace."""
+    if not stat.S_ISDIR(proc_st.st_mode) or proc_st.st_ino != PROC_ROOT_INO:
+        raise CliError(f'untrusted /proc root inode ({proc_st.st_ino})')
+    fs_magic = _fstatfs_magic(proc_fd)
+    if fs_magic != PROC_SUPER_MAGIC:
+        raise CliError(
+            f'untrusted /proc filesystem magic (expected {PROC_SUPER_MAGIC:#x}, got {fs_magic:#x})'
+        )
+    pid_str = str(_read_proc_self_pid(proc_fd))
+
+    mounts = _parse_mountinfo(_read_proc_self_mountinfo(proc_fd))
+    proc_mounts = [m for m in mounts if m[2] == '/proc']
+    if len(proc_mounts) != 1:
+        raise CliError(
+            f'expected unique /proc mount in /proc/self/mountinfo (found {len(proc_mounts)})'
+        )
+    proc_dev_maj_min, proc_root, _, proc_fs = proc_mounts[0]
+    if proc_fs != 'proc' or proc_root != '/':
+        raise CliError(f'untrusted /proc mount ({proc_fs}, root={proc_root!r})')
+    actual_proc_maj_min = f'{os.major(proc_st.st_dev)}:{os.minor(proc_st.st_dev)}'
+    if actual_proc_maj_min != proc_dev_maj_min:
+        raise CliError(
+            f'pinned /proc root device mismatch against mountinfo ({actual_proc_maj_min} != {proc_dev_maj_min})'
+        )
+
+    shadowed_proc_paths = {
+        '/proc/sys',
+        '/proc/sys/kernel',
+        '/proc/sys/kernel/random',
+        '/proc/sys/kernel/random/boot_id',
+        '/proc/self',
+        '/proc/self/ns',
+        '/proc/self/ns/pid',
+        '/proc/self/status',
+        '/proc/self/mountinfo',
+        f'/proc/{pid_str}',
+        f'/proc/{pid_str}/ns',
+        f'/proc/{pid_str}/ns/pid',
+        f'/proc/{pid_str}/status',
+        f'/proc/{pid_str}/mountinfo',
+    }
+    for _, _, mp, _ in mounts:
+        if mp in shadowed_proc_paths:
+            raise CliError(f'untrusted shadowed mount over {mp}')
+
+    status_text = _read_proc_self_status(proc_fd)
+    nstgid: tuple[int, ...] = ()
+    for line in status_text.splitlines():
+        if line.startswith('NStgid:'):
+            try:
+                nstgid = tuple(int(tok) for tok in line.split(':', 1)[1].split())
+            except ValueError:
+                raise CliError('malformed NStgid in /proc/self/status') from None
+            break
+    if len(nstgid) != 1:
+        raise CliError(f'writer-recovery requires the initial host PID namespace (NStgid={nstgid})')
+
+    ns_link, ns_ino = _read_proc_self_ns_pid(proc_fd)
+    expected_link = f'pid:[{PROC_PID_INIT_INO}]'
+    if ns_link != expected_link or ns_ino != PROC_PID_INIT_INO:
+        raise CliError(f'writer-recovery requires the initial host PID namespace (got {ns_link}, ino={ns_ino})')
+    return PROC_PID_INIT_INO, mounts
+
+
+def _verify_private_mode(st: os.stat_result, label: str, *, is_dir: bool, euid: int) -> None:
+    """Require current-user ownership and no group or other permission bits."""
+    if stat.S_ISLNK(st.st_mode) or (not stat.S_ISDIR(st.st_mode) if is_dir else not stat.S_ISREG(st.st_mode)):
+        kind = 'directory' if is_dir else 'regular file'
+        raise CliError(f'{label} must be a {kind}')
+    if st.st_uid != euid:
+        raise CliError(f'{label} is not owned by the current user')
+    if stat.S_IMODE(st.st_mode) & (stat.S_IRWXG | stat.S_IRWXO):
+        raise CliError(f'{label} must have private permissions (no group/other bits)')
+
+
+def _inspect_ledger_provenance(
+    db_path: Path,
+    resolved_cwd: Path,
+    mounts: list[tuple[str, str, str, str]],
+) -> dict:
+    """Verify symlink-free private local durable ledger file and return pinned provenance."""
+    pre_dev, pre_ino = _validate_writer_state_path(db_path, resolved_cwd, require_exists=True)
+    norm_path = Path(os.path.normpath(str(db_path)))
+    try:
+        resolved_norm = norm_path.resolve(strict=True)
+    except OSError as exc:
+        raise CliError(f'unable to resolve writer ledger path: {exc}') from None
+    if resolved_norm != norm_path:
+        raise CliError(f'writer ledger path must be normalized and symlink-free: {db_path}')
+
+    try:
+        parent_st = os.lstat(norm_path.parent)
+    except OSError as exc:
+        raise CliError(f'unable to inspect writer ledger directory: {exc}') from None
+    euid = os.geteuid()
+    _verify_private_mode(parent_st, 'writer ledger directory', is_dir=True, euid=euid)
+
+    try:
+        fd = os.open(norm_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        raise CliError(f'unable to open writer ledger for provenance verification: {exc}') from None
+    try:
+        fst = os.fstat(fd)
+        _verify_private_mode(fst, 'writer ledger file', is_dir=False, euid=euid)
+        if fst.st_nlink != 1:
+            raise CliError(f'writer ledger path must not have hardlink aliases (st_nlink={fst.st_nlink})')
+        if (fst.st_dev, fst.st_ino) != (pre_dev, pre_ino):
+            raise CliError('writer ledger inode changed during provenance verification')
+
+        matching_mounts = [
+            m for m in mounts
+            if norm_path == Path(m[2]) or norm_path.is_relative_to(Path(m[2]))
+        ]
+        if not matching_mounts:
+            raise CliError(f'no mount entry found for writer ledger path: {norm_path}')
+        max_depth = max(len(Path(m[2]).parts) for m in matching_mounts)
+        dev_maj_min, _, _, fs_type = [
+            m for m in matching_mounts if len(Path(m[2]).parts) == max_depth
+        ][-1]
+        expected_magic = LOCAL_DURABLE_FS_MAGICS.get(fs_type)
+        if expected_magic is None:
+            raise CliError(
+                f'writer ledger filesystem {fs_type!r} is not an allowed local durable filesystem'
+            )
+        actual_magic = _fstatfs_magic(fd)
+        if actual_magic != expected_magic:
+            raise CliError(
+                f'writer ledger filesystem magic mismatch for {fs_type!r} '
+                f'(expected {expected_magic:#x}, got {actual_magic:#x})'
+            )
+        actual_maj_min = f'{os.major(fst.st_dev)}:{os.minor(fst.st_dev)}'
+        if fs_type != 'btrfs':
+            if dev_maj_min != actual_maj_min:
+                raise CliError(
+                    f'writer ledger device mismatch against mountinfo ({actual_maj_min} != {dev_maj_min})'
+                )
+        elif os.major(fst.st_dev) != 0 and dev_maj_min != actual_maj_min:
+            raise CliError(
+                f'writer ledger btrfs device mismatch against mountinfo ({actual_maj_min} != {dev_maj_min})'
+            )
+
+        fsid = _read_fd_statvfs_fsid(fd)
+        if not isinstance(fsid, int) or isinstance(fsid, bool) or fsid <= 0:
+            raise CliError(f'writer ledger filesystem ID is unavailable or zero ({fsid!r})')
+    finally:
+        os.close(fd)
+
+    return {
+        'ledger_path': str(norm_path),
+        'ledger_dev': fst.st_dev,
+        'ledger_ino': fst.st_ino,
+        'ledger_fs_type': fs_type,
+        'ledger_fsid': f'{fsid:016x}',
+    }
+
+
+def _verify_pinned_ledger_under_tx(db_path: Path, expected: dict) -> None:
+    """Recheck ledger path, private permissions, single-link inode, and fsid without opening any DB fd."""
+    norm_path = Path(expected['ledger_path'])
+    euid = os.geteuid()
+
+    def inspect_once() -> tuple[tuple[int, int, int, int], tuple[int, int, int, int, int]]:
+        try:
+            resolved = db_path.resolve(strict=True)
+        except OSError as exc:
+            raise CliError(f'writer ledger disappeared under mutation boundary: {exc}') from None
+        if resolved != norm_path:
+            raise CliError('writer ledger path changed under mutation boundary')
+        try:
+            parent_st = os.lstat(norm_path.parent)
+            st = os.lstat(norm_path)
+        except OSError as exc:
+            raise CliError(f'writer ledger disappeared under mutation boundary: {exc}') from None
+        _verify_private_mode(parent_st, 'writer ledger directory under mutation boundary', is_dir=True, euid=euid)
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise CliError('writer ledger failed single-link regular file check under mutation boundary')
+        _verify_private_mode(st, 'writer ledger file under mutation boundary', is_dir=False, euid=euid)
+        if (st.st_dev, st.st_ino) != (expected['ledger_dev'], expected['ledger_ino']):
+            raise CliError('writer ledger inode changed under mutation boundary')
+        return (
+            (parent_st.st_dev, parent_st.st_ino, parent_st.st_mode, parent_st.st_uid),
+            (st.st_dev, st.st_ino, st.st_mode, st.st_uid, st.st_nlink),
+        )
+
+    before = inspect_once()
+    fsid = _read_path_statvfs_fsid(norm_path)
+    if not isinstance(fsid, int) or isinstance(fsid, bool) or f'{fsid:016x}' != expected['ledger_fsid']:
+        raise CliError('writer ledger filesystem ID changed under mutation boundary')
+    after = inspect_once()
+    if after != before:
+        raise CliError('writer ledger path changed under mutation boundary')
+
+
+@contextmanager
+def _open_recovery_write_tx(db_path: Path, expected_ledger: dict):
+    """Open an existing v3 state database rw inside BEGIN IMMEDIATE without creating or migrating."""
+    _verify_pinned_ledger_under_tx(db_path, expected_ledger)
+    norm_path = Path(expected_ledger['ledger_path'])
+    conn = sqlite3.connect(f'{norm_path.as_uri()}?mode=rw', uri=True, timeout=5.0, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    try:
+        _verify_pinned_ledger_under_tx(db_path, expected_ledger)
+        conn.execute('PRAGMA busy_timeout = 5000')
+        conn.execute('PRAGMA foreign_keys = ON')
+        conn.execute('PRAGMA synchronous = EXTRA')
+        sync_mode = conn.execute('PRAGMA synchronous').fetchone()[0]
+        if sync_mode != 3:
+            raise CliError(f'writer-recovery requires SQLite PRAGMA synchronous=EXTRA (got {sync_mode!r})')
+        conn.execute('BEGIN IMMEDIATE')
+        _verify_pinned_ledger_under_tx(db_path, expected_ledger)
+        journal_mode = str(conn.execute('PRAGMA journal_mode').fetchone()[0]).lower()
+        if journal_mode not in ('delete', 'truncate', 'persist'):
+            raise CliError(
+                f'writer-recovery requires an existing SQLite rollback journal mode; got {journal_mode!r}'
+            )
+        version = conn.execute('PRAGMA user_version').fetchone()[0]
+        if version != SCHEMA_VERSION:
+            raise CliError(
+                f'writer-recovery requires SQLite schema version {SCHEMA_VERSION}; got {version} '
+                '(refusing without migrating)'
+            )
+        yield conn
+        _verify_pinned_ledger_under_tx(db_path, expected_ledger)
+        conn.execute('COMMIT')
+    except Exception:
+        try:
+            if conn.in_transaction:
+                conn.execute('ROLLBACK')
+        except sqlite3.Error:
+            pass
+        raise
+    finally:
+        conn.close()
+
+
+def _validate_recovery_xdg_state_home() -> None:
+    """Reject nonempty XDG_STATE_HOME values with surrounding whitespace during writer-recovery."""
+    raw_xdg = os.environ.get('XDG_STATE_HOME')
+    if raw_xdg and raw_xdg != raw_xdg.strip():
+        raise CliError(
+            f'writer-recovery rejects XDG_STATE_HOME with surrounding whitespace: {raw_xdg!r}'
+        )
+
+
+def _validate_recovery_request(args: argparse.Namespace, db_path: Path) -> dict:
+    """Validate recovery CLI inputs, Git scope, and host/ledger provenance before DB transaction."""
+    _validate_recovery_xdg_state_home()
+    attempt_id = args.attempt_id if args.attempt_id is not None else ''
+    if not ATTEMPT_ID_RE.fullmatch(attempt_id):
+        raise CliError(
+            f'invalid writer attempt ID {args.attempt_id!r}; expected exact wa-<32 lowercase hex> '
+            'with no surrounding whitespace'
+        )
+    if not getattr(args, 'confirm_local_ledger', False):
+        raise CliError(
+            f'--confirm-local-ledger is required to attest: {LOCAL_LEDGER_ATTESTATION}'
+        )
+    raw_cwd = args.cwd if args.cwd is not None else ''
+    if not raw_cwd.strip():
+        raise CliError('--cwd requires an existing linked Git worktree root')
+    if raw_cwd != raw_cwd.strip():
+        raise CliError(
+            f'--cwd must name the exact linked Git worktree root without surrounding whitespace: {args.cwd!r}'
+        )
+    cwd_expanded = Path(raw_cwd).expanduser()
+    if not os.path.isdir(cwd_expanded):
+        raise CliError(f'worktree path does not exist or is not a directory: {args.cwd!r}')
+
+    if args.unbound and args.run_id is not None:
+        raise CliError('--run-id and --unbound are mutually exclusive')
+    if not args.unbound and args.run_id is None:
+        raise CliError('exactly one of --run-id or --unbound is required')
+    if args.unbound:
+        expected_bound = 0
+        expected_run_id = None
+    else:
+        if not args.run_id:
+            raise CliError('--run-id must not be empty')
+        expected_bound = 1
+        expected_run_id = args.run_id
+
+    repo_key = canonicalize_repo(raw_cwd, git_bin=TRUSTED_GIT_BIN)
+    if not (Path(repo_key) / 'HEAD').is_file() or not (Path(repo_key) / 'objects').is_dir():
+        raise CliError(f'--cwd must belong to a real Git repository: {args.cwd!r}')
+    worktree = scoped_worktree(raw_cwd, repo_key, args.issue, git_bin=TRUSTED_GIT_BIN)
+    resolved_cwd = cwd_expanded.resolve()
+    _verify_linked_worktree_backlink(resolved_cwd, Path(worktree))
+
+    proc_fd, proc_st = _open_pinned_proc_root()
+    try:
+        pid_ns_inode, mounts = _verify_initial_pid_namespace_and_procfs(proc_fd, proc_st)
+        boot_id = _validate_boot_id(_read_host_boot_id(proc_fd))
+    finally:
+        os.close(proc_fd)
+    machine_id_hash = _hash_machine_id(_read_machine_id_raw())
+    ledger = _inspect_ledger_provenance(db_path, resolved_cwd, mounts)
+
+    return {
+        'attempt_id': attempt_id,
+        'repo_key': repo_key,
+        'worktree': worktree,
+        'issue': args.issue,
+        'bound': expected_bound,
+        'run_id': expected_run_id,
+        'boot_id': boot_id,
+        'machine_id_hash': machine_id_hash,
+        'pid_ns_inode': pid_ns_inode,
+        **ledger,
+    }
+
+
+def _has_recovery_table(conn: sqlite3.Connection) -> bool:
+    """Return True if the additive writer_recovery_events table exists."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_recovery_events'"
+        ).fetchone()
+        is not None
+    )
+
+
+def _load_and_verify_attempt_scope(conn: sqlite3.Connection, req: dict) -> sqlite3.Row:
+    """Fetch and verify a single open writer attempt and any bound run scope."""
+    att = conn.execute(
+        'SELECT * FROM writer_attempts WHERE attempt_id = ?',
+        (req['attempt_id'],),
+    ).fetchone()
+    if att is None:
+        raise CliError(f'writer attempt not found: {req["attempt_id"]}')
+    if att['status'] != 'open' or att['exit_code'] is not None or att['closed_at'] is not None:
+        raise CliError(
+            f'writer attempt {req["attempt_id"]} is not open '
+            f'(status={att["status"]!r}, exit_code={att["exit_code"]!r})'
+        )
+    if (
+        att['repo_key'] != req['repo_key']
+        or att['worktree'] != req['worktree']
+        or att['issue'] != req['issue']
+        or int(att['bound']) != req['bound']
+        or att['run_id'] != req['run_id']
+    ):
+        raise CliError(f'writer attempt {req["attempt_id"]} scope does not match requested --cwd/--issue/binding')
+    if req['bound']:
+        run = conn.execute('SELECT * FROM runs WHERE run_id = ?', (req['run_id'],)).fetchone()
+        if run is None:
+            raise CliError(f'bound run {req["run_id"]} missing for attempt {req["attempt_id"]}')
+        if (
+            run['repo_key'] != req['repo_key']
+            or run['issue'] != req['issue']
+            or run['worktree'] != req['worktree']
+        ):
+            raise CliError(f'bound run {req["run_id"]} scope does not match attempt {req["attempt_id"]}')
+    return att
+
+
+def _insert_recovery_event(
+    conn: sqlite3.Connection,
+    *,
+    action: str,
+    disposition: str | None,
+    att: sqlite3.Row,
+    attempt_status: str,
+    attempt_closed_at: str | None,
+    req: dict,
+    created_at: str,
+) -> None:
+    """Insert an append-only arm or retire audit record into writer_recovery_events."""
+    conn.execute(
+        """
+        INSERT INTO writer_recovery_events (
+            attempt_id, action, disposition,
+            attempt_repo_key, attempt_worktree, attempt_issue, attempt_bound, attempt_run_id,
+            attempt_status, attempt_exit_code, attempt_created_at, attempt_closed_at,
+            boot_id, machine_id_hash, pid_ns_inode,
+            ledger_path, ledger_fs_type, ledger_fsid, ledger_ino,
+            operator_attestation, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            att['attempt_id'],
+            action,
+            disposition,
+            att['repo_key'],
+            att['worktree'],
+            att['issue'],
+            int(att['bound']),
+            att['run_id'],
+            attempt_status,
+            att['created_at'],
+            attempt_closed_at,
+            req['boot_id'],
+            req['machine_id_hash'],
+            req['pid_ns_inode'],
+            req['ledger_path'],
+            req['ledger_fs_type'],
+            req['ledger_fsid'],
+            req['ledger_ino'],
+            LOCAL_LEDGER_ATTESTATION,
+            created_at,
+        ),
+    )
+
+
+def cmd_writer_recovery_arm(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    """Arm a single open writer attempt for post-reboot retirement after proving host and ledger provenance."""
+    req = _validate_recovery_request(args, db_path)
+    now = format_utc(utc_now())
+    with _open_recovery_write_tx(db_path, req) as conn:
+        att = _load_and_verify_attempt_scope(conn, req)
+        if _has_recovery_table(conn):
+            existing = conn.execute(
+                'SELECT action FROM writer_recovery_events WHERE attempt_id = ?',
+                (req['attempt_id'],),
+            ).fetchone()
+            if existing is not None:
+                raise CliError(
+                    f'writer attempt {req["attempt_id"]} already has recovery event ({existing["action"]})'
+                )
+        for stmt in WRITER_RECOVERY_EVENTS_SCHEMA:
+            conn.execute(stmt)
+        _insert_recovery_event(
+            conn,
+            action='arm',
+            disposition=None,
+            att=att,
+            attempt_status='open',
+            attempt_closed_at=None,
+            req=req,
+            created_at=now,
+        )
+    return 0, {
+        'attempt_id': req['attempt_id'],
+        'action': 'arm',
+        'status': 'open',
+        'exit_code': None,
+        'disposition': None,
+        'repo_key': req['repo_key'],
+        'worktree': req['worktree'],
+        'issue': req['issue'],
+        'bound': bool(req['bound']),
+        'run_id': req['run_id'],
+        'observed_boot_id': req['boot_id'],
+        'machine_id_hash': req['machine_id_hash'],
+        'pid_ns_inode': req['pid_ns_inode'],
+        'ledger_path': req['ledger_path'],
+        'ledger_fs_type': req['ledger_fs_type'],
+        'ledger_fsid': req['ledger_fsid'],
+        'ledger_ino': req['ledger_ino'],
+        'armed_at': now,
+        'attestation_confirmed': True,
+    }
+
+
+def cmd_writer_recovery_retire(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    """Retire one armed open writer attempt as interrupted only after a verified host reboot."""
+    req = _validate_recovery_request(args, db_path)
+    now = format_utc(utc_now())
+    with _open_recovery_write_tx(db_path, req) as conn:
+        if not _has_recovery_table(conn):
+            raise CliError(f'writer attempt {req["attempt_id"]} is not armed (missing recovery table)')
+        events = conn.execute(
+            'SELECT * FROM writer_recovery_events WHERE attempt_id = ?',
+            (req['attempt_id'],),
+        ).fetchall()
+        arm_row = next((ev for ev in events if ev['action'] == 'arm'), None)
+        retire_row = next((ev for ev in events if ev['action'] == 'retire'), None)
+        if arm_row is None:
+            raise CliError(f'writer attempt {req["attempt_id"]} must be armed before retiring')
+        if retire_row is not None:
+            raise CliError(f'writer attempt {req["attempt_id"]} has already been retired')
+
+        att = _load_and_verify_attempt_scope(conn, req)
+        if (
+            arm_row['attempt_repo_key'] != att['repo_key']
+            or arm_row['attempt_worktree'] != att['worktree']
+            or arm_row['attempt_issue'] != att['issue']
+            or int(arm_row['attempt_bound']) != int(att['bound'])
+            or arm_row['attempt_run_id'] != att['run_id']
+            or arm_row['attempt_status'] != 'open'
+            or arm_row['attempt_exit_code'] is not None
+            or arm_row['attempt_closed_at'] is not None
+            or arm_row['attempt_created_at'] != att['created_at']
+        ):
+            raise CliError(f'writer attempt {req["attempt_id"]} changed since arm; refusing to retire')
+
+        if arm_row['machine_id_hash'] != req['machine_id_hash']:
+            raise CliError('host machine identity mismatch between arm and retire')
+        if int(arm_row['pid_ns_inode']) != req['pid_ns_inode'] or req['pid_ns_inode'] != PROC_PID_INIT_INO:
+            raise CliError('PID namespace mismatch between arm and retire')
+        if (
+            arm_row['ledger_path'] != req['ledger_path']
+            or arm_row['ledger_fs_type'] != req['ledger_fs_type']
+            or arm_row['ledger_fsid'] != req['ledger_fsid']
+            or int(arm_row['ledger_ino']) != req['ledger_ino']
+        ):
+            raise CliError('ledger continuity mismatch between arm and retire')
+        arm_boot_id = _validate_boot_id(arm_row['boot_id'])
+        if arm_boot_id == req['boot_id']:
+            raise CliError(
+                'same host boot observed as arm; a completed reboot of the original host is required before retire'
+            )
+
+        cur = conn.execute(
+            """
+            UPDATE writer_attempts
+            SET status = 'closed', closed_at = ?, exit_code = NULL
+            WHERE attempt_id = ?
+              AND status = 'open'
+              AND exit_code IS NULL
+              AND closed_at IS NULL
+              AND repo_key = ?
+              AND worktree = ?
+              AND issue = ?
+              AND bound = ?
+              AND run_id IS ?
+              AND created_at = ?
+            """,
+            (
+                now,
+                att['attempt_id'],
+                att['repo_key'],
+                att['worktree'],
+                att['issue'],
+                int(att['bound']),
+                att['run_id'],
+                att['created_at'],
+            ),
+        )
+        if cur.rowcount != 1:
+            raise CliError(f'writer attempt {req["attempt_id"]} changed during retirement update')
+
+        _insert_recovery_event(
+            conn,
+            action='retire',
+            disposition='interrupted',
+            att=att,
+            attempt_status='closed',
+            attempt_closed_at=now,
+            req=req,
+            created_at=now,
+        )
+    return 0, {
+        'attempt_id': req['attempt_id'],
+        'action': 'retire',
+        'status': 'closed',
+        'exit_code': None,
+        'closed_at': now,
+        'disposition': 'interrupted',
+        'repo_key': req['repo_key'],
+        'worktree': req['worktree'],
+        'issue': req['issue'],
+        'bound': bool(req['bound']),
+        'run_id': req['run_id'],
+        'armed_boot_id': arm_row['boot_id'],
+        'retired_boot_id': req['boot_id'],
+        'armed_at': arm_row['created_at'],
+        'retired_at': now,
+        'machine_id_hash': req['machine_id_hash'],
+        'pid_ns_inode': req['pid_ns_inode'],
+        'ledger_path': req['ledger_path'],
+        'ledger_fs_type': req['ledger_fs_type'],
+        'ledger_fsid': req['ledger_fsid'],
+        'ledger_ino': req['ledger_ino'],
+        'attestation_confirmed': True,
+    }
+
+
+def _build_recovery_attempt_dict(att: sqlite3.Row, events: list[sqlite3.Row]) -> dict:
+    """Build a safe read-only recovery status payload for one writer attempt."""
+    ev_list = [
+        {
+            'action': ev['action'],
+            'disposition': ev['disposition'],
+            'boot_id': ev['boot_id'],
+            'machine_id_hash': ev['machine_id_hash'],
+            'pid_ns_inode': ev['pid_ns_inode'],
+            'ledger_path': ev['ledger_path'],
+            'ledger_fs_type': ev['ledger_fs_type'],
+            'ledger_fsid': ev['ledger_fsid'],
+            'ledger_ino': ev['ledger_ino'],
+            'created_at': ev['created_at'],
+        }
+        for ev in events
+    ]
+    actions = {ev['action'] for ev in events}
+    if 'retire' in actions:
+        recovery_state = 'retired'
+        disposition = next((ev['disposition'] for ev in events if ev['action'] == 'retire'), None)
+    elif 'arm' in actions:
+        recovery_state = 'armed'
+        disposition = None
+    else:
+        recovery_state = 'unarmed'
+        disposition = None
+    return {
+        'attempt_id': att['attempt_id'],
+        'repo_key': att['repo_key'],
+        'worktree': att['worktree'],
+        'issue': att['issue'],
+        'bound': bool(att['bound']),
+        'run_id': att['run_id'],
+        'status': att['status'],
+        'exit_code': att['exit_code'],
+        'created_at': att['created_at'],
+        'closed_at': att['closed_at'],
+        'recovery_state': recovery_state,
+        'disposition': disposition,
+        'recovery_events': ev_list,
+    }
+
+
+def cmd_writer_recovery_status(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    """Read-only inspection of one writer attempt's recovery state; never initializes or migrates."""
+    _validate_recovery_xdg_state_home()
+    attempt_id = (args.attempt_id or '').strip()
+    if not ATTEMPT_ID_RE.fullmatch(attempt_id):
+        raise CliError(f'invalid writer attempt ID {args.attempt_id!r}; expected wa-<32 lowercase hex>')
+    if not db_path.exists():
+        raise CliError(f'writer ledger missing: {db_path}')
+    _verify_ledger_inode(db_path, require_exists=True)
+    with open_read_only(db_path) as conn:
+        version = conn.execute('PRAGMA user_version').fetchone()[0]
+        if version != SCHEMA_VERSION:
+            raise CliError(
+                f'writer-recovery requires SQLite schema version {SCHEMA_VERSION}; got {version}'
+            )
+        att = conn.execute(
+            'SELECT * FROM writer_attempts WHERE attempt_id = ?',
+            (attempt_id,),
+        ).fetchone()
+        if att is None:
+            raise CliError(f'writer attempt not found: {attempt_id}')
+        events = (
+            conn.execute(
+                'SELECT * FROM writer_recovery_events WHERE attempt_id = ? ORDER BY created_at ASC, action ASC',
+                (attempt_id,),
+            ).fetchall()
+            if _has_recovery_table(conn)
+            else []
+        )
+        return 0, _build_recovery_attempt_dict(att, events)
+
+
+def cmd_writer_recovery(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    """Dispatch writer-recovery subcommands."""
+    _validate_recovery_xdg_state_home()
+    if args.recovery_action == 'arm':
+        return cmd_writer_recovery_arm(args, db_path)
+    if args.recovery_action == 'retire':
+        return cmd_writer_recovery_retire(args, db_path)
+    if args.recovery_action == 'status':
+        return cmd_writer_recovery_status(args, db_path)
+    raise CliError(f'unknown writer-recovery action: {args.recovery_action!r}')
+
+
 def cmd_cancel(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     """Cancel a non-terminal run at its current stage and free its repo key."""
     stage = validate_stage(args.stage)
@@ -1869,6 +2978,20 @@ def format_human(command: str, data: object) -> str:
     return json.dumps(data, indent=2, sort_keys=True)
 
 
+class _RecoverySingleStoreAction(argparse.Action):
+    """Store a writer-recovery scope option once; repeats are refused instead of last-wins."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        seen = getattr(namespace, '_writer_recovery_seen_options', None)
+        if seen is None:
+            seen = set()
+            setattr(namespace, '_writer_recovery_seen_options', seen)
+        if self.dest in seen:
+            parser.error(f'{option_string} may be given only once for writer-recovery arm/retire')
+        seen.add(self.dest)
+        setattr(namespace, self.dest, values)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Construct the CLI argument parser."""
     parser = argparse.ArgumentParser(
@@ -1959,6 +3082,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_wexec.add_argument('--issue', required=True)
     p_wexec.add_argument('argv', nargs=argparse.REMAINDER)
 
+    p_wrec = sub.add_parser(
+        'writer-recovery',
+        parents=[common],
+        help='Inspect or recover an interrupted open writer attempt',
+    )
+    wrec_sub = p_wrec.add_subparsers(dest='recovery_action', required=True)
+    for action_name, action_help in (
+        ('arm', 'Arm an interrupted open writer attempt for post-reboot retirement'),
+        ('retire', 'Retire an armed open writer attempt after a confirmed host reboot'),
+    ):
+        p_act = wrec_sub.add_parser(action_name, parents=[common], help=action_help)
+        p_act.add_argument('attempt_id', help='Writer attempt identifier (wa-<32-hex>)')
+        p_act.add_argument('--cwd', required=True, action=_RecoverySingleStoreAction,
+                           help='Linked Git worktree root path')
+        p_act.add_argument('--issue', required=True, action=_RecoverySingleStoreAction,
+                           help='Exact Beads issue ID')
+        scope_grp = p_act.add_mutually_exclusive_group(required=True)
+        scope_grp.add_argument('--run-id', action=_RecoverySingleStoreAction,
+                               help='Bound pipeline run identifier')
+        scope_grp.add_argument('--unbound', action='store_true', help='Explicitly target an unbound attempt')
+        p_act.add_argument(
+            '--confirm-local-ledger',
+            action='store_true',
+            help='Operator attestation: original host, same private local ledger and scope, no sharing/copy/restore/cloned machine-id/replay',
+        )
+    p_wrec_status = wrec_sub.add_parser('status', parents=[common], help='Read-only writer recovery status')
+    p_wrec_status.add_argument('attempt_id', help='Writer attempt identifier (wa-<32-hex>)')
+
     return parser
 
 
@@ -1980,9 +3131,12 @@ def main(argv: list[str] | None = None) -> int:
         'monitor': cmd_monitor,
         'cancel': cmd_cancel,
         'writer-exec': cmd_writer_exec,
+        'writer-recovery': cmd_writer_recovery,
     }
     os.umask(0o077)
     try:
+        if args.command == 'writer-recovery':
+            _validate_recovery_xdg_state_home()
         db_path = resolve_state_db_path()
         code, result = handlers[args.command](args, db_path)
     except CliError as exc:

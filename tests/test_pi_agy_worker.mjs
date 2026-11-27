@@ -925,6 +925,74 @@ test('interrupting writer after ready keeps attempt open and fences exclusive si
   assert.match(denied.output, /writer fence/i);
 });
 
+test('interrupted scoped supervisor refuses a same-scope replacement', async t => {
+  const f = await setupFenceFixture(t);
+  if (!f) return;
+  f.assertBaselineControl();
+
+  const issue = 'SBB-review-fence-1';
+  const runId = 'review-fence-run';
+  const started = f.cli(f.wt1, 'start', f.wt1, '--issue', issue, '--json', '--run-id', runId);
+  assert.equal(started.code, 0, started.output);
+  let review = { current_stage: 'admit' };
+  for (const stage of ['admit', 'implement', 'check']) {
+    const checkpointed = f.cli(f.wt1, 'checkpoint', runId, stage, '--evidence', `ev:${stage}`, '--json');
+    assert.equal(checkpointed.code, 0, `checkpoint ${stage} failed: ${checkpointed.output}`);
+    review = JSON.parse(checkpointed.stdout);
+  }
+  assert.equal(review.current_stage, 'review');
+
+  const tool = f.createTool();
+  const writer = launchGatedWriter(t, tool, { cwd: f.wt1, issue, actor: 'pi:review-fence' });
+  await writer.assertReady();
+
+  const [live] = f.readLedger().writer_attempts;
+  assert.deepEqual(
+    { bound: live.bound, run_id: live.run_id, issue: live.issue, status: live.status },
+    { bound: 1, run_id: runId, issue, status: 'open' },
+  );
+
+  writer.abort();
+  await assert.rejects(writer.promise, /cancelled/i);
+  assert.equal(spawnSync('/usr/bin/flock', ['--nonblock', f.wt1, '/usr/bin/true'], { timeout: 5000 }).status, 0,
+    'per-worktree lock must be free after supervisor cancellation');
+
+  const gate = join(f.wt1, '.pi-agy-gate');
+  await rm(gate, { recursive: true, force: true });
+
+  const interrupted = f.readLedger();
+  assert.equal(interrupted.writer_attempts.length, 1);
+  assert.deepEqual(
+    {
+      attempt_id: interrupted.writer_attempts[0].attempt_id,
+      bound: interrupted.writer_attempts[0].bound,
+      run_id: interrupted.writer_attempts[0].run_id,
+      issue: interrupted.writer_attempts[0].issue,
+      status: interrupted.writer_attempts[0].status,
+      exit_code: interrupted.writer_attempts[0].exit_code,
+    },
+    { attempt_id: live.attempt_id, bound: 1, run_id: runId, issue, status: 'open', exit_code: null },
+  );
+  const run = interrupted.runs.find(row => row.run_id === runId);
+  assert.equal(run.status, 'active');
+  assert.equal(run.current_stage, 'review');
+
+  await assert.rejects(
+    tool.execute('review-fence-replacement', { task: 'Replace the interrupted writer.', cwd: f.wt1, issue, actor: 'pi:review-fence' },
+      undefined, undefined, { cwd: f.wt1 }),
+    /writer fence/i,
+  );
+  await assert.rejects(access(join(gate, 'ready')), { code: 'ENOENT' });
+  await assert.rejects(access(gate), { code: 'ENOENT' });
+
+  const replaced = f.readLedger();
+  assert.equal(replaced.writer_attempts.length, 1);
+  assert.equal(replaced.writer_attempts[0].attempt_id, live.attempt_id);
+  assert.equal(replaced.writer_attempts[0].status, 'open');
+  assert.equal(replaced.runs.find(row => row.run_id === runId).current_stage, 'review');
+  assert.equal(f.cli(f.wt1, 'cancel', runId, 'review', '--json').code, 0);
+});
+
 test('stale writer completion rejects close mismatch and leaves replacement attempt fenced', async t => {
   const f = await setupFenceFixture(t);
   if (!f) return;

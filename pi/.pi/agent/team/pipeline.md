@@ -17,7 +17,7 @@
   - **Sandbox & host requirements**: Requires Linux `os.pidfd_open` (host pidfd) and trusted system host paths (`/usr/bin/python3 -I -S` for team writer supervision and isolated bootstrap; `/usr/bin/bd` for team claim heartbeats before launch and during delegation; `/usr/bin/flock` for team lock checks and per-worktree locking; `/usr/bin/git` with cleaned Git identity environment for `start`, `writer-exec`, and `preflight` host identity resolution; and `/usr/bin/bwrap` with `--unshare-pid`, `--die-with-parent`, `--ro-bind / /`, `--bind <cwd> <cwd>`, `--dev /dev`, `--proc /proc`, plus paired `--overlay-src`/`--tmp-overlay` for restricted Pi writers). The ledger pathname (`XDG_STATE_HOME`, the `pi-team-run` state directory, and `state.db`) must be a direct, symlink-free lexical path that never traverses symlinks or the writable worktree bind, and an existing `state.db` must be a single-link regular file (`st_nlink == 1`, rejecting hardlink aliases, symlinks, and non-regular files). `writer-exec` rechecks the actual `state.db` inode after registration commit before spawning `bwrap` (leaving the open attempt row intact if late validation fails), verifies the nested namespace init via `--info-fd` and host pidfd before releasing execution, and bypasses closing only on a negative `Popen.wait()` return (actual signal-killed outer launcher); any nonnegative launcher exit (including high exit codes such as `200`) still requires pinned namespace-init pidfd exit verification and closes only the matching `open` attempt row.
   - **Fence boundary**: Only ledger callers (`pi-team-run` / SQLite triggers) and new Team writer launchers sharing the same `XDG_STATE_HOME` state database are fenced. Plain Pi (`--agy-team` disabled), manual edits/CLI runs outside Team, and callers using a different `XDG_STATE_HOME` are excluded.
   - **Cutover & mixed-version policy**: Mixed-version operation is unsupported. Before enabling or upgrading to v3, drain or restart all older writer-capable sessions and positively verify that their in-flight `agy`, `pi.managed`, `bwrap`, and `flock` writer processes are gone.
-  - **Uncertain attempts persist**: If a supervisor is interrupted/killed, stopped at a work deadline without a verified exit receipt, fails pidfd exit verification, or encounters a close mismatch, the `writer_attempts` row stays `open` (unjournaled as closed). `agy_worker` never offers `resumeAfterTimeout` on such an interrupted deadline and rejects explicit `resumeAfterTimeout` requests before launch. There is no automatic recovery, takeover, or CLI cancellation/clear command for open writer attempts.
+  - **Uncertain attempts persist**: If a supervisor is interrupted/killed, stopped at a work deadline without a verified exit receipt, fails pidfd exit verification, or encounters a close mismatch, the `writer_attempts` row stays `open` (unjournaled as closed). `agy_worker` never offers `resumeAfterTimeout` on such an interrupted deadline and rejects explicit `resumeAfterTimeout` requests before launch. There is no automatic recovery, takeover, cancellation, or reset/clear command for open writer attempts; only the explicit post-reboot `writer-recovery arm`/`retire` procedure below can close one, and it records the attempt as interrupted rather than successful.
 - **No remote state sync or cross-host takeover**: State belongs strictly to the local host and XDG user state directory. There is no automatic authority transfer or distributed lock.
 - **Journal-only best-effort notices**: `pi-team-run watch` deduplicates emitted notices once per `(run_id, wait_generation)` inside SQLite and prints one JSON object per line to stdout (captured by the systemd user journal when enabled). If stdout is dropped or not monitored, notices are not replayed.
 - **Explicit authorization & no timeout success**:
@@ -34,6 +34,37 @@ A ledger reservation is local, advisory, and owned by the run. It grants no perm
 4. Explicit waits and coordinator exits do not free an acquired reservation. On restart inspect `status RUN_ID`, recheck ownership, approvals and external results, then continue without replaying writes. Repeating `reserve` at the same stage is safe. Cancel only with authority and after confirming no writer or delivery operation remains in flight.
 
 Shared-delivery reservations (`reserve` / `runs.reserved`) are unchanged by the v3 writer fence, and `cancel` or `checkpoint` on a run never clears or closes `open` rows in `writer_attempts`.
+
+## Recovering an interrupted writer attempt after a reboot
+
+Use this procedure only for an `open` `writer_attempts` row left by an interrupted Team writer supervisor. It is a bookkeeping receipt, not a takeover or reset: a schema-v3 attempt shipped by this release needs no earlier boot, PID, or process evidence, because `arm` records the current host boot, machine identity, and PID-namespace observation in an append-only `writer_recovery_events` row. Address the attempt by its exact ID (`wa-` plus 32 lowercase hex characters) and start with the read-only check:
+
+```bash
+pi-team-run writer-recovery status wa-<32-lowercase-hex>
+```
+
+1. **Arm on the original host**, from the original linked worktree, with the exact issue and the same binding as the `open` row:
+
+   ```bash
+   pi-team-run writer-recovery arm wa-<32-lowercase-hex> --cwd /path/to/linked-worktree \
+     --issue REPO-123 --run-id PIPELINE_RUN_ID --confirm-local-ledger
+   # Unbound attempt: use --unbound instead of --run-id PIPELINE_RUN_ID.
+   ```
+
+2. **Reboot the original host separately.** This is a distinct, explicitly authorized operator action; `arm` and `retire` never reboot, restart, or signal any host or process.
+
+3. **Retire after that reboot has completed**, with the same attempt ID, `--cwd`, `--issue`, binding, and attestation, then confirm with `status`:
+
+   ```bash
+   pi-team-run writer-recovery retire wa-<32-lowercase-hex> --cwd /path/to/linked-worktree \
+     --issue REPO-123 --run-id PIPELINE_RUN_ID --confirm-local-ledger
+   ```
+
+`--confirm-local-ledger` is the operator attestation: `original host, same original private local ledger and scope, no sharing, copying, restore, cloned machine-ID, or replay`. Both actions require Linux on `x86_64` or `aarch64` with `openat2(2)` (`RESOLVE_BENEATH | RESOLVE_NO_XDEV | RESOLVE_NO_SYMLINKS`) and independently verify the session's lowercase host boot UUID (read relative to a pinned `/proc` root FD verified against the unique `proc` mount in `mountinfo`), hashed machine identity, initial host PID namespace, the exact linked worktree `.git` gitfile matching the pinned worktree admin directory's `gitdir` backlink (copied sibling `.git` pointers and missing/malformed `gitdir` metadata refuse), and the ledger file as a normalized symlink-free path with private `0700`/`0600` permissions, a single-link inode, a filesystem ID, and a supported persistent local filesystem (`ext4`, `xfs`, `btrfs`, `f2fs`). `--run-id` is matched verbatim against the bound run ID without trimming or length truncation (use `--run-id=VALUE` when punctuation or leading `-` is present). The ledger must be the same existing file and inode in the same repository and worktree scope. There is no ledger copy, restore, clone, alternate path, or proc-shadow fallback: unsupported architectures, mount/symlink crossings under `/proc`, non-private, non-local, network, overlay, or `nsfs`-masked evidence, a changed inode or filesystem, a v1/v2 or unknown ledger version, or any other unsupported or ambiguous input refuses before any write. Keep the verified linked worktree admin directory and issue/run scope unchanged; do not move, re-link, re-create, or re-point them between `arm` and `retire`.
+
+`retire` additionally requires the same machine identity, initial PID namespace, and ledger provenance, and a boot UUID different from the one `arm` observed. A matching boot UUID refuses, so retirement is never a same-boot override and cannot substitute for the separately authorized reboot. On success the row becomes `closed` with `exit_code` NULL and the receipt records the `interrupted` disposition: that marks an interrupted writer, not a successful one, and it is never a success outcome for the attempt.
+
+Neither action advances a run or review stage, completes a wait, or takes, releases, or alters a reservation. Run rows stay untouched, so a run left `waiting` for the same issue/worktree can still block a new writer after retirement. Nothing is reset or cleared automatically, and repeating `arm` or `retire` on an attempt that already has that event refuses.
 
 ## Stage Sequence
 
