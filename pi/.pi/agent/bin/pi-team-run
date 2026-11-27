@@ -19,7 +19,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+LANDING_STAGES = frozenset({'integrate', 'verify', 'deploy'})
+SHARED_STAGES = LANDING_STAGES | {'beads_close', 'wiki', 'honcho'}
 
 STAGES = (
     'admit',
@@ -54,7 +56,7 @@ GIT_ENV_OVERRIDES = (
     'GIT_CONFIG_COUNT',
 )
 
-SCHEMA_STATEMENTS = (
+V1_SCHEMA = (
     """
     CREATE TABLE runs (
         run_id TEXT PRIMARY KEY,
@@ -137,6 +139,24 @@ SCHEMA_STATEMENTS = (
         created_at TEXT NOT NULL
     )
     """,
+)
+
+
+V2_MIGRATION = (
+    'ALTER TABLE runs ADD COLUMN issue TEXT',
+    'ALTER TABLE runs ADD COLUMN worktree TEXT',
+    'ALTER TABLE runs ADD COLUMN reserved INTEGER NOT NULL DEFAULT 0 CHECK (reserved IN (0, 1))',
+    'DROP INDEX idx_runs_active_repo',
+    """CREATE TRIGGER exclusive_unscoped_start BEFORE INSERT ON runs
+       WHEN NEW.status IN ('active', 'waiting') AND EXISTS (
+           SELECT 1 FROM runs WHERE repo_key = NEW.repo_key AND status IN ('active', 'waiting')
+           AND (issue IS NULL OR NEW.issue IS NULL))
+       BEGIN SELECT RAISE(ABORT, 'repository has an exclusive run'); END""",
+    """CREATE UNIQUE INDEX idx_active_issue ON runs(repo_key, COALESCE(issue, ''))
+       WHERE status IN ('active', 'waiting')""",
+    """CREATE UNIQUE INDEX idx_active_worktree ON runs(worktree)
+       WHERE status IN ('active', 'waiting')""",
+    'CREATE UNIQUE INDEX idx_repo_reservation ON runs(repo_key) WHERE reserved = 1',
 )
 
 
@@ -300,7 +320,13 @@ def check_schema_version(conn: sqlite3.Connection, *, allow_init: bool) -> None:
         ).fetchone()[0]
         if existing > 0:
             raise CliError('unsupported unversioned SQLite schema (PRAGMA user_version=0)')
-        for stmt in SCHEMA_STATEMENTS:
+        for stmt in V1_SCHEMA:
+            conn.execute(stmt)
+        version = 1
+    if version == 1:
+        if not allow_init:
+            return
+        for stmt in V2_MIGRATION:
             conn.execute(stmt)
         conn.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
         return
@@ -443,6 +469,9 @@ def build_run_dict(conn: sqlite3.Connection, run: sqlite3.Row) -> dict:
     return {
         'run_id': run['run_id'],
         'repo_key': run['repo_key'],
+        'issue': run['issue'] if 'issue' in run.keys() else None,
+        'worktree': run['worktree'] if 'worktree' in run.keys() else None,
+        'reserved': bool(run['reserved']) if 'reserved' in run.keys() else False,
         'status': run['status'],
         'current_stage': run['current_stage'],
         'wait_generation': run['wait_generation'],
@@ -506,7 +535,8 @@ def compute_next_step(
                 'authorized': False,
                 'message': (
                     f'Waiting on {target} at stage {stage!r} (gen {active_wait["generation"]}); '
-                    f'resume does not authorize this wait. After explicit {target} approval, run '
+                    f'resume does not authorize this wait. After explicit {target} approval, '
+                    f'{"reserve before shared work, then run" if needs_reservation(run) else "run"} '
                     f'`pi-team-run checkpoint {run_id} {stage} --evidence <locator>` or '
                     f'`pi-team-run cancel {run_id} {stage}`.'
                 ),
@@ -543,6 +573,9 @@ def compute_next_step(
                 f'`pi-team-run wait {run_id} ci --target ci --rev <full_sha> --deadline <iso8601>`.'
             ),
         }
+    if needs_reservation(run) and not run['reserved']:
+        return {'run_id': run_id, 'status': run['status'], 'current_stage': stage, 'action': 'reserve',
+                'authorized': False, 'message': f'Before shared work: pi-team-run reserve {run_id} {stage}'}
     hint = f'`pi-team-run checkpoint {run_id} {stage} --evidence <locator>`'
     if stage in OPTIONAL_STAGES:
         hint += f' (or `--skip --evidence <locator>`)'
@@ -556,19 +589,41 @@ def compute_next_step(
     }
 
 
+def scoped_worktree(repo: str, repo_key: str, issue: str) -> str:
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*-[A-Za-z0-9][A-Za-z0-9.]*', issue) or len(issue) > 128:
+        raise CliError('--issue requires the full Beads issue ID')
+    root = Path(repo).expanduser().resolve()
+    try:
+        result = subprocess.run(
+            ['git', '-C', str(root), 'rev-parse', '--path-format=absolute', '--show-toplevel', '--git-dir'],
+            capture_output=True, text=True, env=_clean_git_env(), timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        raise CliError('worktree lookup timed out') from None
+    paths = result.stdout.splitlines()
+    if (result.returncode or len(paths) != 2 or Path(paths[0]).resolve() != root
+            or Path(paths[1]).resolve().parent != Path(repo_key) / 'worktrees'):
+        raise CliError('--issue requires the root of a linked Git worktree')
+    return str(Path(paths[1]).resolve())
+
+
 def cmd_start(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     """Start a new active pipeline run for a repository."""
     if args.commit_only and (args.no_ci or args.with_deploy):
         raise CliError('--commit-only cannot be combined with --no-ci or --with-deploy')
     repo_key = canonicalize_repo(args.repo)
+    worktree = scoped_worktree(args.repo, repo_key, args.issue) if args.issue is not None else None
     now = format_utc(utc_now())
     run_id = args.run_id or f'run-{utc_now().strftime("%Y%m%dT%H%M%SZ")}-{secrets.token_hex(4)}'
     with open_write_tx(db_path) as conn:
         active_rows = conn.execute(
-            "SELECT run_id, repo_key, status FROM runs WHERE status IN ('active', 'waiting')"
+            "SELECT run_id, repo_key, status, issue, worktree FROM runs WHERE status IN ('active', 'waiting')"
         ).fetchall()
         for existing in active_rows:
             if existing['repo_key'] == repo_key or canonicalize_repo(existing['repo_key']) == repo_key:
+                if (existing['repo_key'] == repo_key and args.issue and existing['issue'] and args.issue != existing['issue']
+                        and worktree != existing['worktree']):
+                    continue
                 raise CliError(
                     f'active run already exists for {repo_key}: {existing["run_id"]} ({existing["status"]})'
                 )
@@ -576,13 +631,15 @@ def cmd_start(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
             conn.execute(
                 """
                 INSERT INTO runs (
-                    run_id, repo_key, status, current_stage, wait_generation,
+                    run_id, repo_key, issue, worktree, status, current_stage, wait_generation,
                     commit_only, no_ci, with_deploy, with_honcho, with_wiki, note, created_at, updated_at
-                ) VALUES (?, ?, 'active', ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, 'active', ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
                     repo_key,
+                    args.issue,
+                    worktree,
                     STAGES[0],
                     int(args.commit_only),
                     int(args.no_ci),
@@ -697,6 +754,26 @@ def cmd_wait(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     return 0, payload
 
 
+def needs_reservation(run: sqlite3.Row) -> bool:
+    return ('issue' in run.keys() and run['issue'] is not None and
+            (run['current_stage'] in SHARED_STAGES or (run['no_ci'] and run['current_stage'] == 'publish')))
+
+
+def cmd_reserve(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    with open_write_tx(db_path) as conn:
+        run = fetch_run(conn, args.run_id)
+        require_interactive_run(conn, args.run_id)
+        require_writable_stage(run, args.stage)
+        if not run['issue'] or args.stage == 'ci':
+            raise CliError('reserve requires an issue-scoped run outside PR CI')
+        owner = conn.execute('SELECT run_id FROM runs WHERE repo_key = ? AND reserved = 1',
+                             (run['repo_key'],)).fetchone()
+        if owner and owner['run_id'] != args.run_id:
+            raise CliError(f'repository reserved by {owner["run_id"]}; retry before any shared operation')
+        conn.execute('UPDATE runs SET reserved = 1 WHERE run_id = ?', (args.run_id,))
+        return 0, build_run_dict(conn, fetch_run(conn, args.run_id))
+
+
 def cmd_checkpoint(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
     """Record a stage checkpoint with required evidence and advance the pipeline."""
     stage = validate_stage(args.stage)
@@ -712,6 +789,8 @@ def cmd_checkpoint(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
         require_interactive_run(conn, run['run_id'])
         require_writable_stage(run, stage)
         active_wait = fetch_active_wait(conn, run['run_id'])
+        if needs_reservation(run) and not run['reserved'] and not args.skip:
+            raise CliError(f'reserve {args.run_id} {stage} before shared operations')
         generation = getattr(args, 'generation', None)
         if generation is not None and (active_wait is None or active_wait['generation'] != generation):
             raise CliError('CI wait changed during monitoring; refusing to checkpoint')
@@ -737,6 +816,8 @@ def cmd_checkpoint(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
             (run['run_id'], stage, disposition, evidence, provided_rev, args.note, now),
         )
         nxt = next_stage_after(run, stage)
+        if run['reserved'] and nxt not in LANDING_STAGES:
+            conn.execute('UPDATE runs SET reserved = 0 WHERE run_id = ?', (run['run_id'],))
         if nxt is None:
             conn.execute(
                 """
@@ -958,7 +1039,7 @@ def cmd_cancel(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
         conn.execute(
             """
             UPDATE runs
-            SET status = 'cancelled', current_stage = NULL, cancelled_stage = ?,
+            SET status = 'cancelled', reserved = 0, current_stage = NULL, cancelled_stage = ?,
                 updated_at = ?, completed_at = ?
             WHERE run_id = ?
             """,
@@ -1127,6 +1208,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_start = sub.add_parser('start', parents=[common], help='Start a pipeline run for a repo')
     p_start.add_argument('repo', help='Repository path or identifier')
+    p_start.add_argument('--issue', help='Exact Beads issue ID; repo must be the linked task worktree root')
     p_start.add_argument('--run-id', help='Optional explicit run identifier')
     p_start.add_argument(
         '--commit-only',
@@ -1158,6 +1240,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_wait.add_argument('--deadline', help='ISO-8601 deadline with timezone or Z (required for CI)')
     p_wait.add_argument('--reason', help='Optional nonsecret wait reason')
     p_wait.add_argument('--replace', action='store_true', help='Supersede an existing active wait')
+
+    p_reserve = sub.add_parser('reserve', parents=[common], help='Reserve this repo before a shared operation')
+    p_reserve.add_argument('run_id')
+    p_reserve.add_argument('stage', choices=STAGES)
 
     p_ckpt = sub.add_parser('checkpoint', parents=[common], help='Checkpoint the current stage')
     p_ckpt.add_argument('run_id', help='Run identifier')
@@ -1205,6 +1291,7 @@ def main(argv: list[str] | None = None) -> int:
         'resume': cmd_resume,
         'wait': cmd_wait,
         'checkpoint': cmd_checkpoint,
+        'reserve': cmd_reserve,
         'watch': cmd_watch,
         'monitor': cmd_monitor,
         'cancel': cmd_cancel,

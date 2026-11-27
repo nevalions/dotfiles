@@ -11,13 +11,22 @@
 ## Boundaries and Guarantees
 
 - **Interactive continuation**: the coordinator starts `monitor` immediately after publishing and continues authorized work on success. `monitor` queries Forgejo and records a successful PR CI checkpoint when attached to a run. Add `--queue` to the same command to register a durable PR wait on git.butakov.su and return immediately. The enabled systemd user watcher polls that wait independently of Pi and records success against its exact generation and SHA. Neither command merges, deploys, starts or resumes a coordinator, or performs Honcho/wiki publication. Post-merge monitoring remains interactive. Use only sanitized locators and reminders: never include tokens, raw logs, or private transcripts in command arguments, state, or journal notices.
-- **Local private XDG state**: State is stored in `${XDG_STATE_HOME:-~/.local/state}/pi-team-run/state.db` (`0700` directory, `0600` database file), gated by `PRAGMA user_version = 1`. Unknown schema versions are rejected.
-- **One active run per repository**: Enforced transactionally via SQLite (`BEGIN IMMEDIATE` + partial unique index on `repo_key` for `active`/`waiting` runs). Terminal runs (`completed`, `cancelled`) free the repository key.
+- **Local private XDG state**: State is stored in `${XDG_STATE_HOME:-~/.local/state}/pi-team-run/state.db` (`0700` directory, `0600` database file), with SQLite schema v2. A v1 ledger is readable without migration and upgrades atomically on the next successful write. Existing runs keep their original scope and history. Unknown versions are rejected; use matching ledger, dispatcher and watcher versions.
+- **Parallel issue runs**: `start LINKED_WORKTREE --issue FULL_ID` reserves that issue and Git worktree for one active or waiting interactive run. Both must differ for a second run in the same repository. The CLI checks the Git identity, not Beads ownership; verify the claim separately. Starts without `--issue`, pre-upgrade runs, and dispatcher reservations remain repository-exclusive. Do not relabel or cancel them to make room.
 - **No remote state sync or cross-host takeover**: State belongs strictly to the local host and XDG user state directory. There is no automatic authority transfer or distributed lock.
 - **Journal-only best-effort notices**: `pi-team-run watch` deduplicates emitted notices once per `(run_id, wait_generation)` inside SQLite and prints one JSON object per line to stdout (captured by the systemd user journal when enabled). If stdout is dropped or not monitored, notices are not replayed.
 - **Explicit authorization & no timeout success**:
   - `resume` is strictly read-only and never authorizes a `user` or `coordinator` wait.
   - `ci` waits remain silent in `watch` before `--deadline`, emit a `coordinator` notice once overdue, and **never** auto-succeed on timeout. Forgejo `monitor --run-id` creates the CI wait and checkpoints success automatically. Other providers retain the explicit `checkpoint RUN ci --rev <exact-full-sha> --evidence <locator>` path.
+
+## Coordinating shared writes
+
+A ledger reservation is local, advisory, and owned by the run. It grants no permission to act. Task-branch edits, local checks, review and PR CI need no shared reservation. For an issue-scoped run:
+
+1. Before a repository-wide operation, run `pi-team-run reserve RUN_ID CURRENT_STAGE`. A busy result names the holder: do not perform the operation; retry when it is free. There is no background queue or automatic takeover. Reserve even at an earlier stage if the repository calls for shared tracker sync there. Do not sync unrelated pending tracker changes.
+2. Reserve before integrating, and before publishing if `--no-ci` (a direct-to-main flow may land at publish). **After acquiring**, fetch and compare the actual destination tip and candidate with the reviewed and tested revisions. If the base moved, reconcile against it and rerun affected checks and review; if the head changes, old CI evidence does not apply. Obtain fresh exact-head evidence before landing. Never force a stale push. A reservation cannot lock external Git clients or other hosts.
+3. A successful checkpoint releases the reservation, except that landing retains it through verification and any in-scope deploy. Reserve again before Beads closure/sync or an actual Honcho/wiki publication; an optional skip needs no reservation. This guards operations for this repository only, not a shared destination used from another repo.
+4. Explicit waits and coordinator exits do not free an acquired reservation. On restart inspect `status RUN_ID`, recheck ownership, approvals and external results, then continue without replaying writes. Repeating `reserve` at the same stage is safe. Cancel only with authority and after confirming no writer or delivery operation remains in flight.
 
 ## Stage Sequence
 
@@ -61,7 +70,8 @@ For a deployment in scope, use the application's `docs/release-checklist.md`: ti
 ```bash
 # Start a run (add --with-deploy / --with-honcho / --with-wiki as needed;
 # --commit-only may combine with --with-honcho and/or --with-wiki)
-pi-team-run start /path/to/repo
+pi-team-run start /path/to/linked-task-worktree --issue repo-123
+# Without --issue, start retains the exclusive repo-wide behavior.
 
 # Inspect status or read-only next step
 pi-team-run status [RUN_ID]

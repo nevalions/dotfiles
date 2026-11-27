@@ -1173,7 +1173,7 @@ class PiTeamDispatchTests(unittest.TestCase):
 
         i2 = self._create_issue('Interactive blocks dispatch')
         p2 = self._write_policy('p2.json', repo=self.repo, issue_allowlist=[i2])
-        start_wt = self._run_ledger('start', str(self.worktree), '--json')
+        start_wt = self._run_ledger('start', str(self.worktree), '--issue', i1, '--json')
         self.assertEqual(start_wt.returncode, 0, msg=start_wt.stderr)
         dup_main = self._run_ledger('start', str(self.repo), '--json')
         self.assertNotEqual(dup_main.returncode, 0)

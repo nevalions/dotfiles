@@ -178,7 +178,7 @@ class PiTeamRunTests(unittest.TestCase):
 
         with closing(sqlite3.connect(str(db_path))) as conn, conn:
             version = conn.execute('PRAGMA user_version').fetchone()[0]
-            self.assertEqual(version, 1)
+            self.assertEqual(version, 2)
             conn.execute('PRAGMA user_version = 99')
 
         bad = self.run_cli('status', run['run_id'])
@@ -223,6 +223,99 @@ class PiTeamRunTests(unittest.TestCase):
 
         restarted = self.run_json('start', str(self.repo_dir))
         self.assertNotEqual(restarted['run_id'], run_id)
+
+    def linked_pair(self):
+        def git(*args):
+            subprocess.run(['git', '-C', str(self.repo_dir), '-c', 'user.name=Test',
+                            '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', *args],
+                           check=True, capture_output=True)
+        git('init')
+        git('commit', '--allow-empty', '-m', 'base')
+        a, b = (str(Path(self.tmp.name) / name) for name in ('task-a', 'task-b'))
+        for path in (a, b):
+            git('worktree', 'add', path)
+        return a, b
+
+    def test_scoped_admission_and_shared_delivery_race(self):
+        a, b = self.linked_pair()
+        self.assertNotEqual(self.run_cli('start', str(self.repo_dir), '--issue', 'repo-1').returncode, 0)
+        with ThreadPoolExecutor(2) as pool:
+            futures = [pool.submit(self.run_cli, 'start', path, '--issue', 'repo-1') for path in (a, b)]
+            results = [f.result() for f in futures]
+        self.assertEqual(sorted(p.returncode for p in results), [0, 1])
+        win = next(i for i, p in enumerate(results) if not p.returncode)
+        first = json.loads(results[win].stdout)['run_id']
+        alias = Path(self.tmp.name) / 'alias'
+        alias.symlink_to((a, b)[win])
+        self.assertNotEqual(self.run_cli('start', str(alias), '--issue', 'repo-2').returncode, 0)
+        self.assertNotEqual(self.run_cli('start', str(self.repo_dir)).returncode, 0)
+        for stage in ('admit', 'implement', 'check', 'review', 'commit', 'publish'):
+            self.run_json('checkpoint', first, stage, '--evidence', stage)
+        self.run_json('wait', first, 'ci', '--target', 'ci', '--rev', SHA_A,
+                      '--deadline', '2030-01-01T00:00:00Z')
+        other = self.run_json('start', (a, b)[1-win], '--issue', 'repo-2')['run_id']
+        for stage in ('admit', 'implement', 'check', 'review', 'commit', 'publish'):
+            self.run_json('checkpoint', other, stage, '--evidence', stage)
+        self.run_json('wait', other, 'ci', '--target', 'ci', '--rev', SHA_B,
+                      '--deadline', '2030-01-01T00:00:00Z')
+        for run, rev in ((first, SHA_A), (other, SHA_B)):
+            self.run_json('checkpoint', run, 'ci', '--rev', rev, '--evidence', rev)
+            self.assertEqual(self.run_json('resume', run)['action'], 'reserve')
+            self.assertNotEqual(self.run_cli('checkpoint', run, 'integrate', '--evidence', 'early').returncode, 0)
+        with ThreadPoolExecutor(2) as pool:
+            futures = [pool.submit(self.run_cli, 'reserve', run, 'integrate') for run in (first, other)]
+            results = [f.result() for f in futures]
+        self.assertEqual(sorted(p.returncode for p in results), [0, 1])
+        owner, waiter = (first, other) if results[0].returncode == 0 else (other, first)
+        self.run_json('reserve', owner, 'integrate')
+        self.run_json('checkpoint', owner, 'integrate', '--evidence', 'merged')
+        self.assertIn(owner, self.run_cli('reserve', waiter, 'integrate').stderr)
+        self.run_json('checkpoint', owner, 'verify', '--evidence', 'verified')
+        self.run_json('reserve', waiter, 'integrate')
+        self.assertIn(waiter, self.run_cli('reserve', owner, 'beads_close').stderr)
+        self.run_json('cancel', waiter, 'integrate')
+        self.run_json('reserve', owner, 'beads_close')
+        self.assertFalse(self.run_json('checkpoint', owner, 'beads_close', '--evidence', 'sync')['reserved'])
+        self.run_json('start', str(self.repo_dir))
+
+    def test_no_ci_publish_and_optional_closeout_reservations(self):
+        a, b = self.linked_pair()
+        run = self.run_json('start', a, '--issue', 'repo-1', '--no-ci', '--with-deploy', '--with-wiki')['run_id']
+        other = self.run_json('start', b, '--issue', 'repo-2', '--commit-only')['run_id']
+        for stage in ('admit', 'implement', 'check', 'review', 'commit'):
+            self.run_json('checkpoint', run, stage, '--evidence', stage)
+        self.assertNotEqual(self.run_cli('checkpoint', run, 'publish', '--evidence', 'early').returncode, 0)
+        self.run_json('reserve', run, 'publish')
+        self.run_json('wait', run, 'publish', '--target', 'coordinator')
+        self.assertIn(run, self.run_cli('reserve', other, 'admit').stderr)
+        for stage in ('publish', 'integrate', 'verify', 'deploy'):
+            result = self.run_json('checkpoint', run, stage, '--evidence', stage)
+            self.assertEqual(result['reserved'], stage != 'deploy')
+        self.run_json('reserve', run, 'beads_close')
+        self.run_json('checkpoint', run, 'beads_close', '--evidence', 'synced')
+        self.run_json('reserve', other, 'admit')
+        self.assertNotEqual(self.run_cli('checkpoint', run, 'wiki', '--evidence', 'published').returncode, 0)
+        self.run_json('checkpoint', run, 'wiki', '--skip', '--evidence', 'skip:not-applicable')
+        self.assertFalse(self.run_json('checkpoint', other, 'admit', '--evidence', 'claimed')['reserved'])
+
+    def test_v1_run_stays_exclusive_across_migration(self):
+        a, _ = self.linked_pair()
+        db = self.xdg_state / 'pi-team-run/state.db'
+        db.parent.mkdir(parents=True)
+        with closing(sqlite3.connect(db)) as conn, conn:
+            for stmt in runpy.run_path(str(BIN_PATH))['V1_SCHEMA']:
+                conn.execute(stmt)
+            conn.execute('PRAGMA user_version = 1')
+            conn.execute("INSERT INTO runs(run_id,repo_key,status,current_stage,created_at,updated_at) "
+                         "VALUES ('legacy',?,'active','implement','now','now')", (str(self.repo_dir),))
+        self.assertIsNone(self.run_json('status', 'legacy')['issue'])
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 1)
+        self.assertIn('legacy', self.run_cli('start', a, '--issue', 'repo-1').stderr)
+        self.run_json('checkpoint', 'legacy', 'implement', '--evidence', 'old-work')
+        self.assertIn('legacy', self.run_cli('start', a, '--issue', 'repo-1').stderr)
+        self.run_json('cancel', 'legacy', 'check')
+        self.run_json('start', a, '--issue', 'repo-1')
 
     def test_duplicates_and_stale_operations(self) -> None:
         run_id = self.run_json('start', str(self.repo_dir) + '/')['run_id']
