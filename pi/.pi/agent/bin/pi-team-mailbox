@@ -1,0 +1,591 @@
+#!/usr/bin/env python3
+"""Standalone offline local mailbox CLI for cooperative same-UID peers."""
+
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, timezone
+import json
+import os
+import re
+import sqlite3
+import stat
+import sys
+
+
+RUN_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", re.ASCII)
+LABEL_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}", re.ASCII)
+DIGITS_PATTERN = re.compile(r"-?[0-9]+", re.ASCII)
+
+MAX_BODY_BYTES = 4096
+MAX_SQLITE_INT = (1 << 63) - 1
+DEFAULT_LIMIT = 20
+MAX_LIMIT = 100
+LOCK_TIMEOUT_SECONDS = 5.0
+LOCK_TIMEOUT_MS = 5000
+SQLITE_SYNC_EXTRA = 3
+
+MAILBOX_DIR_NAME = "pi-team-mailbox"
+DB_FILE_NAME = "mailbox.sqlite3"
+
+
+class MailboxError(Exception):
+    """Error raised for validation, filesystem safety, or storage failures."""
+
+
+def utc_now_iso() -> str:
+    """Return current UTC timestamp in ISO-8601 format."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def validate_run(value: str) -> str:
+    """Validate an ASCII run identifier."""
+    if RUN_PATTERN.fullmatch(value) is None:
+        raise MailboxError("invalid run identifier")
+    return value
+
+
+def validate_label(value: str, field: str) -> str:
+    """Validate an ASCII peer or retry-key identifier."""
+    if LABEL_PATTERN.fullmatch(value) is None:
+        raise MailboxError(f"invalid {field} identifier")
+    return value
+
+
+def parse_bounded_int(value: str, field: str, minimum: int, maximum: int) -> int:
+    """Parse a strict ASCII integer within [minimum, maximum] without unbounded conversion."""
+    if DIGITS_PATTERN.fullmatch(value) is None:
+        raise MailboxError(f"invalid {field} integer")
+    negative = value.startswith("-")
+    digits = value[1:] if negative else value
+    significant = digits.lstrip("0") or "0"
+    if len(significant) > len(str(abs(maximum))):
+        raise MailboxError(f"{field} out of allowed range")
+    parsed = int(significant)
+    if negative:
+        parsed = -parsed
+    if parsed < minimum or parsed > maximum:
+        raise MailboxError(f"{field} out of allowed range")
+    return parsed
+
+
+def read_stdin_body() -> str:
+    """Read 1..4096 UTF-8 bytes from binary stdin without NUL bytes."""
+    chunks: list[bytes] = []
+    total = 0
+    stream = sys.stdin.buffer
+    while total <= MAX_BODY_BYTES:
+        chunk = stream.read(MAX_BODY_BYTES + 1 - total)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    raw = b"".join(chunks)
+    if len(raw) == 0:
+        raise MailboxError("message body must not be empty")
+    if len(raw) > MAX_BODY_BYTES:
+        raise MailboxError("message body exceeds 4096 bytes")
+    if b"\x00" in raw:
+        raise MailboxError("message body must not contain NUL bytes")
+    try:
+        return raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise MailboxError("message body must be valid UTF-8") from exc
+
+
+def resolve_state_root() -> str:
+    """Resolve and validate the configured XDG state directory path."""
+    xdg = os.environ.get("XDG_STATE_HOME", "")
+    if xdg:
+        raw = xdg
+        source = "XDG_STATE_HOME"
+    else:
+        home = os.environ.get("HOME", "")
+        if not home:
+            raise MailboxError("HOME or XDG_STATE_HOME must be set")
+        if "\x00" in home or not os.path.isabs(home):
+            raise MailboxError("HOME must be an absolute path")
+        raw = os.path.join(home, ".local", "state")
+        source = "HOME"
+
+    if "\x00" in raw or not os.path.isabs(raw):
+        raise MailboxError(f"{source} must resolve to an absolute path")
+
+    parts = [part for part in raw.split("/") if part != ""]
+    for part in parts:
+        if part in (".", ".."):
+            raise MailboxError("state root path must not contain '.' or '..'")
+    return "/" + "/".join(parts)
+
+
+def validate_ancestor_stat(st: os.stat_result, euid: int, path: str) -> None:
+    """Reject non-directories, symlinks, foreign owners, and unsafe writable ancestors."""
+    if not stat.S_ISDIR(st.st_mode):
+        raise MailboxError(f"unsafe non-directory path: {path}")
+    if st.st_uid not in (0, euid):
+        raise MailboxError(f"unsafe owner on ancestor directory: {path}")
+    if (st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)) != 0:
+        is_root_sticky = st.st_uid == 0 and bool(st.st_mode & stat.S_ISVTX)
+        if not is_root_sticky:
+            raise MailboxError(f"unsafe writable ancestor directory: {path}")
+
+
+def validate_mailbox_dir_stat(st: os.stat_result, euid: int, path: str) -> None:
+    """Validate that the mailbox root is an euid-owned 0700 directory."""
+    if not stat.S_ISDIR(st.st_mode):
+        raise MailboxError(f"unsafe mailbox directory type: {path}")
+    if st.st_uid != euid:
+        raise MailboxError(f"unsafe mailbox directory owner: {path}")
+    if stat.S_IMODE(st.st_mode) != 0o700:
+        raise MailboxError(f"unsafe mailbox directory mode: {path}")
+
+
+def validate_private_file_stat(st: os.stat_result, euid: int, path: str) -> None:
+    """Validate that a database or journal file is euid-owned, 0600, regular, single-link."""
+    if not stat.S_ISREG(st.st_mode):
+        raise MailboxError(f"unsafe file type: {path}")
+    if st.st_uid != euid:
+        raise MailboxError(f"unsafe file owner: {path}")
+    if stat.S_IMODE(st.st_mode) != 0o600:
+        raise MailboxError(f"unsafe file mode: {path}")
+    if st.st_nlink != 1:
+        raise MailboxError(f"unsafe hardlink count on file: {path}")
+
+
+def validate_sidecars(db_path: str, euid: int) -> None:
+    """Reject WAL sidecars and validate any existing rollback journal."""
+    for suffix in ("-wal", "-shm"):
+        sidecar = db_path + suffix
+        try:
+            os.lstat(sidecar)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise MailboxError(f"failed to inspect sidecar: {sidecar}") from exc
+        raise MailboxError(f"unexpected WAL sidecar present: {sidecar}")
+
+    journal_path = db_path + "-journal"
+    try:
+        st = os.lstat(journal_path)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise MailboxError(f"failed to inspect journal: {journal_path}") from exc
+    validate_private_file_stat(st, euid, journal_path)
+
+
+def ensure_state_dirs(state_root: str, euid: int) -> str:
+    """Validate ancestors from root through state_root and ensure mailbox dir exists."""
+    try:
+        root_st = os.lstat("/")
+    except OSError as exc:
+        raise MailboxError("failed to inspect root directory") from exc
+    validate_ancestor_stat(root_st, euid, "/")
+
+    cur = "/"
+    for part in [segment for segment in state_root.split("/") if segment]:
+        cur = os.path.join(cur, part)
+        try:
+            st = os.lstat(cur)
+        except FileNotFoundError:
+            try:
+                os.mkdir(cur, 0o700)
+            except FileExistsError:
+                pass
+            except OSError as exc:
+                raise MailboxError(f"failed to create directory: {cur}") from exc
+            try:
+                st = os.lstat(cur)
+            except OSError as exc:
+                raise MailboxError(f"failed to inspect directory: {cur}") from exc
+            validate_mailbox_dir_stat(st, euid, cur)
+        except OSError as exc:
+            raise MailboxError(f"failed to inspect directory: {cur}") from exc
+        else:
+            validate_ancestor_stat(st, euid, cur)
+
+    mailbox_dir = os.path.join(state_root, MAILBOX_DIR_NAME)
+    try:
+        st = os.lstat(mailbox_dir)
+    except FileNotFoundError:
+        try:
+            os.mkdir(mailbox_dir, 0o700)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise MailboxError(f"failed to create mailbox directory: {mailbox_dir}") from exc
+        try:
+            st = os.lstat(mailbox_dir)
+        except OSError as exc:
+            raise MailboxError(f"failed to inspect mailbox directory: {mailbox_dir}") from exc
+    except OSError as exc:
+        raise MailboxError(f"failed to inspect mailbox directory: {mailbox_dir}") from exc
+
+    validate_mailbox_dir_stat(st, euid, mailbox_dir)
+    return os.path.join(mailbox_dir, DB_FILE_NAME)
+
+
+def ensure_db_file(db_path: str, euid: int) -> None:
+    """Validate existing database file or atomically create a private 0600 file."""
+    try:
+        st = os.lstat(db_path)
+    except FileNotFoundError:
+        try:
+            fd = os.open(db_path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        except FileExistsError:
+            try:
+                st = os.lstat(db_path)
+            except OSError as exc:
+                raise MailboxError(f"failed to inspect database file: {db_path}") from exc
+            validate_private_file_stat(st, euid, db_path)
+            return
+        except OSError as exc:
+            raise MailboxError(f"failed to create database file: {db_path}") from exc
+        try:
+            fst = os.fstat(fd)
+            validate_private_file_stat(fst, euid, db_path)
+        finally:
+            os.close(fd)
+        return
+    except OSError as exc:
+        raise MailboxError(f"failed to inspect database file: {db_path}") from exc
+
+    validate_private_file_stat(st, euid, db_path)
+
+
+def ancestor_dirs_for(mailbox_dir: str) -> list[str]:
+    """Return the validated absolute directory chain from root through mailbox_dir."""
+    dirs = ["/"]
+    cur = "/"
+    for part in [segment for segment in mailbox_dir.split("/") if segment]:
+        cur = os.path.join(cur, part)
+        dirs.append(cur)
+    return dirs
+
+
+def sync_directory(path: str, euid: int, *, is_mailbox_dir: bool = False) -> None:
+    """Open a directory read-only without following symlinks, verify invariants, and fsync it."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise MailboxError(f"failed to open directory for sync: {path}") from exc
+    try:
+        st = os.fstat(fd)
+        if is_mailbox_dir:
+            validate_mailbox_dir_stat(st, euid, path)
+        else:
+            validate_ancestor_stat(st, euid, path)
+        os.fsync(fd)
+    except OSError as exc:
+        raise MailboxError(f"failed to sync directory: {path}") from exc
+    finally:
+        os.close(fd)
+
+
+def sync_directory_chain(mailbox_dir: str, euid: int) -> None:
+    """Fsync the validated directory chain top-down from root through mailbox_dir."""
+    dirs = ancestor_dirs_for(mailbox_dir)
+    for index, path in enumerate(dirs):
+        sync_directory(path, euid, is_mailbox_dir=index == len(dirs) - 1)
+
+
+def prepare_database_path() -> tuple[str, int]:
+    """Validate all paths and return (db_path, euid)."""
+    euid = os.geteuid()
+    state_root = resolve_state_root()
+    db_path = ensure_state_dirs(state_root, euid)
+    validate_sidecars(db_path, euid)
+    ensure_db_file(db_path, euid)
+    return db_path, euid
+
+
+def open_connection(db_path: str) -> sqlite3.Connection:
+    """Open SQLite connection in rollback-journal EXTRA-sync mode and ensure schema exists."""
+    conn = sqlite3.connect(db_path, timeout=LOCK_TIMEOUT_SECONDS, isolation_level=None)
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {LOCK_TIMEOUT_MS}")
+        conn.execute("PRAGMA synchronous = EXTRA")
+        mode_row = conn.execute("PRAGMA journal_mode").fetchone()
+        if mode_row is None or str(mode_row[0]).lower() != "delete":
+            updated_row = conn.execute("PRAGMA journal_mode = DELETE").fetchone()
+            if updated_row is None or str(updated_row[0]).lower() != "delete":
+                raise MailboxError("failed to enforce rollback journal mode")
+        sync_row = conn.execute("PRAGMA synchronous").fetchone()
+        if (
+            sync_row is None
+            or type(sync_row[0]) is bool
+            or sync_row[0] not in (SQLITE_SYNC_EXTRA, str(SQLITE_SYNC_EXTRA))
+        ):
+            raise MailboxError("failed to enforce synchronous EXTRA mode")
+
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages'"
+        ).fetchone()
+        if has_table is None:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        run TEXT NOT NULL,
+                        sender TEXT NOT NULL,
+                        recipient TEXT NOT NULL,
+                        retry_key TEXT NOT NULL,
+                        body TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        acked_at TEXT,
+                        UNIQUE(run, sender, retry_key)
+                    )
+                    """
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_messages_inbox ON messages(run, recipient, id)"
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+    except Exception:
+        conn.close()
+        raise
+    return conn
+
+
+def cmd_send(
+    conn: sqlite3.Connection,
+    run: str,
+    sender: str,
+    recipient: str,
+    retry_key: str,
+    body: str,
+) -> dict[str, object]:
+    """Insert a message or return existing ID on identical retry."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        existing = conn.execute(
+            "SELECT id, recipient, body FROM messages WHERE run = ? AND sender = ? AND retry_key = ?",
+            (run, sender, retry_key),
+        ).fetchone()
+        if existing is not None:
+            existing_id = int(existing[0])
+            existing_recipient = existing[1]
+            existing_body = existing[2]
+            if existing_recipient != recipient or existing_body != body:
+                conn.execute("ROLLBACK")
+                raise MailboxError("retry key conflict with existing message")
+            conn.execute("COMMIT")
+            return {"run": run, "id": existing_id}
+
+        created_at = utc_now_iso()
+        cur = conn.execute(
+            """
+            INSERT INTO messages (run, sender, recipient, retry_key, body, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (run, sender, recipient, retry_key, body, created_at),
+        )
+        msg_id = int(cur.lastrowid)
+        conn.execute("COMMIT")
+        return {"run": run, "id": msg_id}
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def cmd_inbox(
+    conn: sqlite3.Connection,
+    run: str,
+    peer: str,
+    after: int,
+    through: int | None,
+    limit: int,
+) -> dict[str, object]:
+    """Read an ordered snapshot page of messages addressed to peer in run."""
+    conn.execute("BEGIN")
+    try:
+        if through is None:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM messages WHERE run = ? AND recipient = ?",
+                (run, peer),
+            ).fetchone()
+            effective_through = int(row[0]) if row is not None else 0
+        else:
+            effective_through = through
+
+        rows = conn.execute(
+            """
+            SELECT id, run, sender, recipient, retry_key, body, created_at, acked_at
+            FROM messages
+            WHERE run = ? AND recipient = ? AND id > ? AND id <= ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (run, peer, after, effective_through, limit + 1),
+        ).fetchall()
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]
+    messages = [
+        {
+            "id": int(r[0]),
+            "run": r[1],
+            "from": r[2],
+            "to": r[3],
+            "key": r[4],
+            "body": r[5],
+            "created_at": r[6],
+            "acked_at": r[7],
+        }
+        for r in page_rows
+    ]
+    next_after = messages[-1]["id"] if messages else after
+    return {
+        "run": run,
+        "peer": peer,
+        "after": after,
+        "through": effective_through,
+        "limit": limit,
+        "next_after": next_after,
+        "has_more": has_more,
+        "messages": messages,
+    }
+
+
+def cmd_ack(conn: sqlite3.Connection, run: str, peer: str, msg_id: int) -> dict[str, object]:
+    """Record receipt timestamp once for a message matching (run, peer, id)."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT acked_at FROM messages WHERE run = ? AND recipient = ? AND id = ?",
+            (run, peer, msg_id),
+        ).fetchone()
+        if row is None:
+            conn.execute("ROLLBACK")
+            raise MailboxError("message not found")
+
+        acked_at = row[0]
+        if acked_at is None:
+            acked_at = utc_now_iso()
+            conn.execute(
+                "UPDATE messages SET acked_at = ? WHERE run = ? AND recipient = ? AND id = ? AND acked_at IS NULL",
+                (acked_at, run, peer, msg_id),
+            )
+        conn.execute("COMMIT")
+        return {"run": run, "peer": peer, "id": msg_id, "acked_at": acked_at}
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
+    parser = argparse.ArgumentParser(prog="pi-team-mailbox", allow_abbrev=False)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    send_parser = subparsers.add_parser("send", allow_abbrev=False)
+    send_parser.add_argument("--run", required=True)
+    send_parser.add_argument("--from", dest="sender", required=True)
+    send_parser.add_argument("--to", dest="recipient", required=True)
+    send_parser.add_argument("--key", dest="retry_key", required=True)
+
+    inbox_parser = subparsers.add_parser("inbox", allow_abbrev=False)
+    inbox_parser.add_argument("--run", required=True)
+    inbox_parser.add_argument("--peer", required=True)
+    inbox_parser.add_argument("--after", default="0")
+    inbox_parser.add_argument("--through", default=None)
+    inbox_parser.add_argument("--limit", default=str(DEFAULT_LIMIT))
+
+    ack_parser = subparsers.add_parser("ack", allow_abbrev=False)
+    ack_parser.add_argument("--run", required=True)
+    ack_parser.add_argument("--peer", required=True)
+    ack_parser.add_argument("--id", dest="msg_id", required=True)
+
+    return parser
+
+
+def emit_json(payload: dict[str, object]) -> None:
+    """Write ASCII-escaped JSON to stdout."""
+    encoded = json.dumps(payload, ensure_ascii=True).replace("\x7f", "\\u007f")
+    sys.stdout.write(encoded + "\n")
+
+
+def execute_with_db(operation, *, sync_dirs: bool = False) -> dict[str, object]:
+    """Prepare private DB path, run a database operation, and re-verify file invariants."""
+    db_path, euid = prepare_database_path()
+    try:
+        conn = open_connection(db_path)
+        try:
+            result = operation(conn)
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        raise MailboxError("database operation failed") from exc
+    validate_private_file_stat(os.lstat(db_path), euid, db_path)
+    validate_sidecars(db_path, euid)
+    if sync_dirs:
+        sync_directory_chain(os.path.dirname(db_path), euid)
+    return result
+
+
+def run_cli(argv: list[str]) -> dict[str, object]:
+    """Parse arguments, validate inputs and paths, and execute the requested command."""
+    os.umask(0o077)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    run = validate_run(args.run)
+    if args.command == "send":
+        sender = validate_label(args.sender, "from")
+        recipient = validate_label(args.recipient, "to")
+        retry_key = validate_label(args.retry_key, "key")
+        body = read_stdin_body()
+        return execute_with_db(
+            lambda conn: cmd_send(conn, run, sender, recipient, retry_key, body),
+            sync_dirs=True,
+        )
+
+    if args.command == "inbox":
+        peer = validate_label(args.peer, "peer")
+        after = parse_bounded_int(args.after, "after", 0, MAX_SQLITE_INT)
+        through = (
+            parse_bounded_int(args.through, "through", 0, MAX_SQLITE_INT)
+            if args.through is not None
+            else None
+        )
+        limit = parse_bounded_int(args.limit, "limit", 1, MAX_LIMIT)
+        return execute_with_db(lambda conn: cmd_inbox(conn, run, peer, after, through, limit))
+
+    if args.command == "ack":
+        peer = validate_label(args.peer, "peer")
+        msg_id = parse_bounded_int(args.msg_id, "id", 1, MAX_SQLITE_INT)
+        return execute_with_db(
+            lambda conn: cmd_ack(conn, run, peer, msg_id),
+            sync_dirs=True,
+        )
+
+    raise MailboxError("unsupported command")
+
+
+def main() -> int:
+    """CLI entrypoint."""
+    try:
+        payload = run_cli(sys.argv[1:])
+    except MailboxError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 1
+    emit_json(payload)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

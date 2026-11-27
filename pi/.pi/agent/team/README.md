@@ -36,6 +36,35 @@ Repository implementation tasks need a Beads issue and an authorized claim. Bead
 
 Both launch modes preflight worktree writes and use a per-worktree advisory `flock` plus a Linux bubblewrap namespace. AGY sees a read-only host filesystem with its workspace bound writable; the PID namespace cleans up subprocesses when the launcher exits. The lock covers AGY invocations using this extension, not manual writers. The worker can still read user-accessible files and use the network; this is not a confidentiality boundary or a Codex-style escalation prompt. The Pi coordinator's own tools are unchanged. Authenticate AGY outside the worker if its login requires writing configuration. AGY stays in `accept-edits` with no approval bypass. Do not run this as an unattended service. See the [unattended factory plan](factory-plan.md) for the implementation and pilot gates. Policy for the single read-only pre-plan lookup and post-delivery shared closeout is interactive coordinator-driven (and top-level in plain Pi), not a daemon, watcher action, or `pi-team-run` CLI default; `pi-team-run` supports `--with-honcho` and `--with-wiki` opt-ins (including with `--commit-only`) purely to bookkeep closeout disposition. A scoped interactive Honcho publisher is already available for some mapped repositories with an operator grant—see the [operator opt-in](../honcho-cli/README.md)—while ungranted or ineligible cases stay read-only with a draft if appropriate. Automated wiki updates are disabled; wiki writes require separate authorization and follow `wiki-skill` review, lint, and Git rules.
 
+## Local peer mailbox (`pi-team-mailbox`)
+
+The standalone offline CLI `~/.pi/agent/bin/pi-team-mailbox` stores cooperative same-UID messages in `${XDG_STATE_HOME:-$HOME/.local/state}/pi-team-mailbox/mailbox.sqlite3` (`0700` directory, `0600` database file, rollback journal without WAL, `PRAGMA synchronous=EXTRA`). Successful `send` and `ack` commands (including identical replays) also `fsync` the validated ancestor directory chain from `/` through `pi-team-mailbox` before emitting a receipt; a directory-`fsync` failure after commit reports an error and can be retried safely with the same key or `ack` ID, while routine `inbox` reads do not sync the directory tree.
+
+Two-peer offline example (offline, disposable, run from the checkout root):
+
+```sh
+(
+set -eu
+MB=pi/.pi/agent/bin/pi-team-mailbox
+
+state=$(mktemp -d)
+trap 'rm -rf "$state"' EXIT
+XDG_STATE_HOME="$state"
+export XDG_STATE_HOME
+
+send_json=$(printf 'check line 12\n' | "$MB" send --run demo-run --from scout --to writer --key note-1)
+id=$(printf '%s' "$send_json" | python3 -c 'import json, sys; print(json.load(sys.stdin)["id"])')
+"$MB" inbox --run demo-run --peer writer --limit 20
+"$MB" ack --run demo-run --peer writer --id "$id"
+)
+```
+
+The retry key rule: repeating `send` with the same `run`, `from`, `key`, recipient and byte-identical body returns the original `id`; a changed body or recipient is a conflict error. Use the `id` the CLI returned, not one assumed from this example.
+
+Cursors and polling: `--after N` is **exclusive** (`id > N`, default `0`) and `--through H` is **inclusive** (`id <= H`). An initial or fresh-poll `inbox` call omits `--through`, binding `through` to the highest message ID currently addressed to `(run, peer)`. Continue within that snapshot by passing `--after <next_after> --through <through>` until `has_more` is `false` (later arrivals above `through` are excluded, and `ack` updates never hide rows). To fresh-poll for messages arrived after that snapshot, pass `--after <through>` **without** `--through`.
+
+Limits and non-goals: same-UID cooperative assertion only (peer labels are not authentication or identity and trigger no control effects); assumes a trusted local filesystem; plaintext storage (store no secrets); `1..4096` UTF-8 bytes per body without NUL; ASCII run IDs `[A-Za-z0-9][A-Za-z0-9._-]{0,127}` and peer/key labels `[A-Za-z0-9_-]{1,64}`; `--limit` `1..100`. `ack` records receipt only, never approval or workflow state. No daemons, network transport, launcher/role hooks, or automatic wake/dispatch.
+
 ## Roles
 
 | Role | Provider/model | Effort |
