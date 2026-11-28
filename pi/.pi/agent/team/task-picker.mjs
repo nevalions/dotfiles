@@ -38,6 +38,12 @@ export async function teamTaskPicker(pi, event, ctx) {
         busy.push(clean(r.issue));
         continue;
       }
+      if (r.action === "await_external_patch" || r.action === "verify_external_patch") {
+        const pending = r.action === "await_external_patch";
+        choices.set(`${pending ? "External patch required" : "Verify supplied patch"} · ${r.issue}`,
+          `Inspect the durable handoff on ${r.issue} (run ${r.run_id}). ${pending ? "No writer is scheduled. Do not request approval or repeat a repair." : "Recheck the exact supplied candidate and outstanding review findings; do not launch a writer."}`);
+        continue;
+      }
       choices.set(`Continue ${r.issue} · ${clean(r.stage)}`,
         `Continue my existing Pi Team task ${r.issue} (run ${r.run_id}). Recheck the claim, worktree and wait state before doing any work.`);
     }

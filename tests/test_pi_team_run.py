@@ -320,6 +320,65 @@ class PiTeamRunTests(unittest.TestCase):
         self.assertEqual(self.run_json('discover', b)[0]['run_id'], legacy)
         self.assertIsNone(self.run_json('discover', b)[0]['issue'])
 
+    def test_exhausted_patch_handoff_survives_restart_without_replay_or_delivery(self):
+        wt, _ = self.linked_pair()
+        run = self.run_json('start', wt, '--issue', 'repo-1', '--commit-only')['run_id']
+        self.run_json('checkpoint', run, 'admit', '--evidence', 'claim')
+        from hashlib import sha256
+        rejected, corrected, amended = b'rejected diff', b'corrected diff', b'amended diff'
+        bad, fixed, final = (sha256(data).hexdigest() for data in (rejected, corrected, amended))
+        snapshot = Path(self.tmp.name) / 'snapshot.diff'
+        def park(stage, digest, *options):
+            return self.run_json('wait', run, stage, '--target', 'coordinator', '--rejected-patch', digest,
+                                 '--reason', 'review:causal-attribution', *options)
+        def supply(gen, digest, content=None):
+            snapshot.write_bytes(content or {bad: rejected, fixed: corrected, final: amended}[digest])
+            return self.run_cli('supply-patch', run, '--generation', str(gen), '--candidate', digest,
+                                '--snapshot', str(snapshot), '--evidence', 'maintainer:patch')
+        def step(stage, digest, gen=None, *options):
+            args = ['checkpoint', run, stage, '--evidence', 'checks:verified', '--rev', digest]
+            return self.run_cli(*args, *(['--generation', str(gen)] if gen is not None else []), *options)
+        gen = park('implement', bad)['wait_generation']
+        self.assertEqual(park('implement', bad)['wait_generation'], gen)
+        for _ in range(2):
+            self.assertEqual(self.run_json('resume', run)['action'], 'await_external_patch')
+        self.assertEqual(self.run_json('discover', wt)[0]['action'], 'await_external_patch')
+        self.assertEqual([r['reason'] for r in self.watch_notices()], ['external_patch_required'])
+        self.assertEqual(self.watch_notices(), [])
+        self.assertNotEqual(self.run_cli('wait', run, 'implement', '--target', 'user', '--replace').returncode, 0)
+        self.assertNotEqual(step('implement', bad, gen).returncode, 0)
+        self.assertNotEqual(supply(gen, bad).returncode, 0)
+        self.assertNotEqual(supply(gen, fixed, rejected).returncode, 0)
+        self.assertNotEqual(supply(gen + 1, fixed).returncode, 0)
+        self.assertEqual(supply(gen, fixed).returncode, 0)
+        self.assertEqual(supply(gen, fixed).returncode, 0)
+        self.assertNotEqual(supply(gen + 1, final).returncode, 0)
+        self.assertEqual(self.run_json('resume', run)['action'], 'verify_external_patch')
+        self.assertEqual([r['reason'] for r in self.watch_notices()], ['external_patch_ready'])
+        self.assertEqual(self.watch_notices(), [])
+        self.assertNotEqual(step('implement', fixed, gen).returncode, 0)
+        self.assertNotEqual(step('implement', bad, gen + 1).returncode, 0)
+        self.assertEqual(step('implement', fixed, gen + 1).returncode, 0)
+        self.assertNotEqual(step('check', bad).returncode, 0)
+        self.assertEqual(step('check', fixed).returncode, 0)
+        gen2 = park('review', fixed)['wait_generation']
+        self.assertNotEqual(supply(gen2, bad).returncode, 0)
+        self.assertEqual(supply(gen2, final).returncode, 0)
+        self.assertNotEqual(step('review', final, gen2 + 1).returncode, 0)
+        self.assertEqual(step('review', final, gen2 + 1, '--checks-evidence', 'checks:amended').returncode, 0)
+        snapshot = self.run_json('status', run)
+        db = self.xdg_state / 'pi-team-run/state.db'
+        with closing(sqlite3.connect(db)) as conn:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, 'writer budget not reset'):
+                conn.execute("""INSERT INTO writer_attempts(attempt_id,repo_key,worktree,issue,bound,run_id,status,created_at)
+                                VALUES (?,?,?,?,1,?,'open','now')""",
+                             ('test-replay',snapshot['repo_key'],snapshot['worktree'],'repo-1',run))
+            prior = conn.execute("SELECT rejected FROM external_patches JOIN waits ON wait_id=waits.id WHERE run_id=? ORDER BY wait_id", (run,)).fetchall()
+            self.assertEqual(prior, [(bad,), (bad,), (fixed,), (fixed,)])
+        self.assertTrue(snapshot['commit_only'])
+        self.assertEqual(snapshot['current_stage'], 'commit')
+        self.assertEqual(snapshot['checkpoints'][-1]['rev'], final)
+
     def test_v1_run_stays_exclusive_across_migration(self):
         a, _ = self.linked_pair()
         db = self.xdg_state / 'pi-team-run/state.db'

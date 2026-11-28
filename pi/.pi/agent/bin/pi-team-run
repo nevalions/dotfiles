@@ -657,12 +657,41 @@ def require_interactive_run(conn: sqlite3.Connection, run_id: str) -> None:
         )
 
 
-def fetch_active_wait(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row | None:
+def external_patch_table(conn: sqlite3.Connection) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='external_patches'").fetchone() is not None
+
+
+def install_external_patch_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""CREATE TABLE IF NOT EXISTS external_patches (
+        wait_id INTEGER PRIMARY KEY REFERENCES waits(id), rejected TEXT NOT NULL,
+        supplied TEXT, source TEXT)""")
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS external_patch_resolution BEFORE UPDATE OF resolved_at ON waits
+        WHEN EXISTS (SELECT 1 FROM external_patches WHERE wait_id=OLD.id)
+          AND COALESCE(NEW.resolution,'') NOT IN ('cancelled', 'verified_patch', 'rejected_patch', 'patch_received')
+        BEGIN SELECT RAISE(ABORT, 'external patch wait requires exact verification'); END""")
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS external_patch_checkpoint BEFORE INSERT ON checkpoints
+        WHEN NEW.stage IN ('implement','check','review') AND EXISTS (
+            SELECT 1 FROM (SELECT supplied FROM external_patches JOIN waits ON wait_id=waits.id
+                WHERE waits.run_id=NEW.run_id ORDER BY waits.id DESC LIMIT 1)
+            WHERE supplied IS NULL OR supplied IS NOT NEW.rev)
+        BEGIN SELECT RAISE(ABORT, 'checkpoint requires the verified external patch digest'); END""")
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS external_patch_writer BEFORE INSERT ON writer_attempts
+        WHEN EXISTS (SELECT 1 FROM waits JOIN external_patches ON wait_id=waits.id WHERE waits.run_id=NEW.run_id)
+        BEGIN SELECT RAISE(ABORT, 'external patch required; writer budget not reset'); END""")
+
+
+def fetch_active_wait(conn: sqlite3.Connection, run_id: str) -> dict | None:
     """Fetch the unresolved wait for a run if one exists."""
-    return conn.execute(
-        'SELECT * FROM waits WHERE run_id = ? AND resolved_at IS NULL',
-        (run_id,),
-    ).fetchone()
+    row = conn.execute('SELECT * FROM waits WHERE run_id = ? AND resolved_at IS NULL', (run_id,)).fetchone()
+    if row is None:
+        return None
+    wait = dict(row)
+    if external_patch_table(conn):
+        patch = conn.execute('SELECT rejected, supplied, source FROM external_patches WHERE wait_id=?',
+                             (row['id'],)).fetchone()
+        if patch:
+            wait['external_patch'] = dict(patch)
+    return wait
 
 
 def require_writable_stage(run: sqlite3.Row, stage: str) -> str:
@@ -725,7 +754,7 @@ def build_run_dict(conn: sqlite3.Connection, run: sqlite3.Row) -> dict:
 
 def compute_next_step(
     run: sqlite3.Row,
-    active_wait: sqlite3.Row | None,
+    active_wait: dict | None,
     now: datetime,
     *,
     dispatcher_owned: bool = False,
@@ -753,6 +782,14 @@ def compute_next_step(
     stage = run['current_stage']
     if active_wait is not None:
         target = active_wait['target']
+        if patch := active_wait.get('external_patch'):
+            supplied = patch['supplied']
+            return {'run_id': run_id, 'status': run['status'], 'current_stage': stage,
+                    'action': 'verify_external_patch' if supplied else 'await_external_patch',
+                    'wait_generation': active_wait['generation'], 'external_patch': patch,
+                    'findings': active_wait['reason'], 'authorized': False,
+                    'message': (f'Verify supplied candidate {supplied}; no checks or review have been passed by submission.'
+                                if supplied else 'External maintainer patch required. No writer is scheduled; do not retry or ask for approval.')}
         if target in ('user', 'coordinator'):
             return {
                 'run_id': run_id,
@@ -1080,8 +1117,13 @@ def cmd_discover(args: argparse.Namespace, db_path: Path) -> tuple[int, list]:
                             root = str(gitfile.parent)
                     except (OSError, ValueError, CliError):
                         pass
-            result.append({'run_id': row['run_id'], 'issue': issue, 'worktree': root,
-                           'stage': row['current_stage'], 'status': row['status']})
+            info = {'run_id': row['run_id'], 'issue': issue, 'worktree': root,
+                    'stage': row['current_stage'], 'status': row['status']}
+            if row['status'] == 'waiting':
+                wait = fetch_active_wait(conn, row['run_id'])
+                if wait and wait.get('external_patch'):
+                    info['action'] = 'verify_external_patch' if wait['external_patch']['supplied'] else 'await_external_patch'
+            result.append(info)
     return 0, result
 
 
@@ -1106,6 +1148,10 @@ def cmd_wait(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
         raise CliError('stage "ci" requires --target ci')
     if target == 'ci' and stage != 'ci':
         raise CliError('--target ci is only valid for stage "ci"')
+    rejected = getattr(args, 'rejected_patch', None)
+    if rejected and (not re.fullmatch('[0-9a-f]{64}', rejected) or stage not in ('implement', 'check', 'review')
+                     or target != 'coordinator' or not args.reason or not args.reason.strip() or args.deadline):
+        raise CliError('--rejected-patch requires a SHA-256, findings, and a coordinator wait at implement/check/review')
     expected_rev: str | None = None
     deadline_iso: str | None = None
     if target == 'ci':
@@ -1127,7 +1173,20 @@ def cmd_wait(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
         require_interactive_run(conn, run['run_id'])
         require_writable_stage(run, stage)
         active_wait = fetch_active_wait(conn, run['run_id'])
+        if rejected:
+            if not run['issue'] or not run['worktree']:
+                raise CliError('external patch handoffs require an issue-scoped linked worktree')
+            if conn.execute("""SELECT 1 FROM writer_attempts WHERE status='open' AND
+                    (worktree=? OR (repo_key=? AND (issue=? OR bound=0)))""",
+                    (run['worktree'], run['repo_key'], run['issue'])).fetchone():
+                raise CliError('cannot park while a writer fence is open')
+            install_external_patch_table(conn)
         if active_wait is not None:
+            patch = active_wait.get('external_patch')
+            if patch and rejected == patch['rejected'] and args.reason == active_wait['reason']:
+                return 0, build_run_dict(conn, run)
+            if patch and (not rejected or not patch['supplied'] or rejected != patch['supplied'] or not args.replace):
+                raise CliError('cannot replace an external patch wait except to reject its supplied candidate')
             if not args.replace:
                 raise CliError(
                     f'run {run["run_id"]} already has an active wait on {active_wait["stage"]!r} '
@@ -1135,7 +1194,7 @@ def cmd_wait(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
                 )
             conn.execute(
                 'UPDATE waits SET resolved_at = ?, resolution = ? WHERE id = ?',
-                (now, 'superseded', active_wait['id']),
+                (now, 'rejected_patch' if patch else 'superseded', active_wait['id']),
             )
         new_gen = int(run['wait_generation']) + 1
         conn.execute(
@@ -1146,6 +1205,8 @@ def cmd_wait(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
             """,
             (run['run_id'], new_gen, stage, target, expected_rev, deadline_iso, args.reason, now),
         )
+        if rejected:
+            conn.execute('INSERT INTO external_patches(wait_id, rejected) VALUES (last_insert_rowid(), ?)', (rejected,))
         conn.execute(
             "UPDATE runs SET status = 'waiting', wait_generation = ?, updated_at = ? WHERE run_id = ?",
             (new_gen, now, run['run_id']),
@@ -1157,6 +1218,52 @@ def cmd_wait(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
         updated = fetch_run(conn, run['run_id'])
         payload = build_run_dict(conn, updated)
     return 0, payload
+
+
+def cmd_supply_patch(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
+    """Record a maintainer's candidate without authorizing a writer or marking a stage passed."""
+    if not re.fullmatch('[0-9a-f]{64}', args.candidate):
+        raise CliError('candidate must be the full SHA-256 of the exact review diff')
+    source = validate_evidence(args.evidence)
+    fd = os.open(args.snapshot, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as snapshot:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or not st.st_size:
+            raise CliError('expected a nonempty regular diff snapshot')
+        digest = sha256()
+        while chunk := snapshot.read(1024 * 1024):
+            digest.update(chunk)
+        if digest.hexdigest() != args.candidate:
+            raise CliError('supplied diff does not match candidate SHA-256')
+    with open_write_tx(db_path) as conn:
+        run = fetch_run(conn, args.run_id)
+        require_interactive_run(conn, args.run_id)
+        wait = fetch_active_wait(conn, args.run_id)
+        if not wait or not wait.get('external_patch'):
+            raise CliError('no matching external patch wait generation')
+        if wait['generation'] != args.generation:
+            if (wait['generation'] == args.generation + 1 and wait['external_patch']['supplied'] == args.candidate
+                    and wait['external_patch']['source'] == source):
+                return 0, build_run_dict(conn, run)
+            raise CliError('no matching external patch wait generation')
+        if conn.execute("""SELECT 1 FROM external_patches JOIN waits ON wait_id=waits.id
+                           WHERE waits.run_id=? AND rejected=?""", (args.run_id, args.candidate)).fetchone():
+            raise CliError('candidate was already rejected')
+        patch = wait['external_patch']
+        if patch['supplied'] is not None:
+            if (args.candidate, source) != (patch['supplied'], patch['source']):
+                raise CliError('a different handoff is already pending verification')
+            return 0, build_run_dict(conn, run)
+        now = format_utc(utc_now())
+        gen = wait['generation'] + 1
+        conn.execute("UPDATE waits SET resolved_at=?, resolution='patch_received' WHERE id=?", (now, wait['id']))
+        cur = conn.execute("""INSERT INTO waits (run_id,generation,stage,target,reason,created_at)
+                              VALUES (?, ?, ?, 'coordinator', ?, ?)""",
+                           (args.run_id, gen, wait['stage'], wait['reason'], now))
+        conn.execute('INSERT INTO external_patches(wait_id,rejected,supplied,source) VALUES (?,?,?,?)',
+                     (cur.lastrowid, patch['rejected'], args.candidate, source))
+        conn.execute("UPDATE runs SET wait_generation=?, updated_at=? WHERE run_id=?", (gen, now, args.run_id))
+        return 0, build_run_dict(conn, fetch_run(conn, args.run_id))
 
 
 def needs_reservation(run: sqlite3.Row) -> bool:
@@ -1198,7 +1305,24 @@ def cmd_checkpoint(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
             raise CliError(f'reserve {args.run_id} {stage} before shared operations')
         generation = getattr(args, 'generation', None)
         if generation is not None and (active_wait is None or active_wait['generation'] != generation):
-            raise CliError('CI wait changed during monitoring; refusing to checkpoint')
+            raise CliError('wait generation changed; refusing to checkpoint')
+        patch = active_wait.get('external_patch') if active_wait else None
+        if patch and (not patch['supplied'] or provided_rev != patch['supplied'] or generation != active_wait['generation']):
+            raise CliError('external patch checkpoint requires verified supplied candidate --rev and --generation')
+        if stage in ('implement', 'check', 'review') and external_patch_table(conn):
+            latest = conn.execute("""SELECT supplied FROM external_patches JOIN waits ON wait_id=waits.id
+                                   WHERE waits.run_id=? ORDER BY waits.id DESC LIMIT 1""", (args.run_id,)).fetchone()
+            if latest and (not latest['supplied'] or provided_rev != latest['supplied']):
+                raise CliError('checkpoint must verify the exact supplied patch')
+            if latest and stage == 'review' and not conn.execute(
+                "SELECT 1 FROM checkpoints WHERE run_id=? AND stage='check' AND rev=?", (args.run_id, provided_rev)
+            ).fetchone():
+                checks = getattr(args, 'checks_evidence', None)
+                if not checks:
+                    raise CliError('new review candidate requires --checks-evidence for its fresh checks')
+                conn.execute("""INSERT INTO events(run_id,event_type,stage,detail,created_at)
+                                VALUES (?,'patch_rechecked','check',?,?)""",
+                             (args.run_id, json.dumps([provided_rev, validate_evidence(checks)]), now))
         if stage == 'ci':
             if active_wait is None or active_wait['target'] != 'ci' or active_wait['stage'] != 'ci':
                 raise CliError('CI checkpoint requires an active CI wait first')
@@ -1211,7 +1335,7 @@ def cmd_checkpoint(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
         if active_wait is not None:
             conn.execute(
                 'UPDATE waits SET resolved_at = ?, resolution = ? WHERE id = ?',
-                (now, disposition, active_wait['id']),
+                (now, 'verified_patch' if patch else disposition, active_wait['id']),
             )
         conn.execute(
             """
@@ -2933,7 +3057,9 @@ def cmd_watch(args: argparse.Namespace, db_path: Path) -> tuple[int, list[dict]]
                 reason = 'ci_overdue'
             else:
                 notice_target = wait_target
-                reason = 'wait_pending'
+                handoff = (conn.execute('SELECT supplied FROM external_patches WHERE wait_id=?', (wait_row['id'],)).fetchone()
+                           if external_patch_table(conn) else None)
+                reason = ('external_patch_ready' if handoff['supplied'] else 'external_patch_required') if handoff else 'wait_pending'
             notice = {
                 'run_id': wait_row['run_id'],
                 'repo_key': wait_row['repo_key'],
@@ -3040,6 +3166,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_wait.add_argument('--rev', help='Expected full hex revision (required for CI)')
     p_wait.add_argument('--deadline', help='ISO-8601 deadline with timezone or Z (required for CI)')
     p_wait.add_argument('--reason', help='Optional nonsecret wait reason')
+    p_wait.add_argument('--rejected-patch', help='Full rejected diff SHA-256; park for an external maintainer, not approval')
+    p_supply = sub.add_parser('supply-patch', parents=[common], help='Record an external candidate for verification only')
+    p_supply.add_argument('run_id')
+    p_supply.add_argument('--generation', type=int, required=True)
+    p_supply.add_argument('--candidate', required=True)
+    p_supply.add_argument('--snapshot', required=True, help='Local exact diff; bytes are hashed, not stored')
+    p_supply.add_argument('--evidence', required=True, help='Nonsecret locator of the exact supplied patch')
     p_wait.add_argument('--replace', action='store_true', help='Supersede an existing active wait')
 
     p_reserve = sub.add_parser('reserve', parents=[common], help='Reserve this repo before a shared operation')
@@ -3051,6 +3184,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ckpt.add_argument('stage', help='Current stage name')
     p_ckpt.add_argument('--evidence', required=True, help='Required opaque nonsecret evidence locator')
     p_ckpt.add_argument('--rev', help='Full hex revision (required for CI checkpoint)')
+    p_ckpt.add_argument('--checks-evidence', help='Fresh checks receipt for an external patch replacing a reviewed candidate')
+    p_ckpt.add_argument('--generation', type=int, help='Exact wait generation for a scoped checkpoint')
     p_ckpt.add_argument('--skip', action='store_true', help='Explicitly skip an optional stage')
     p_ckpt.add_argument('--note', help='Optional nonsecret note')
 
@@ -3125,6 +3260,7 @@ def main(argv: list[str] | None = None) -> int:
         'delivery-profile': cmd_delivery_profile,
         'resume': cmd_resume,
         'wait': cmd_wait,
+        'supply-patch': cmd_supply_patch,
         'checkpoint': cmd_checkpoint,
         'reserve': cmd_reserve,
         'watch': cmd_watch,

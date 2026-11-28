@@ -35,6 +35,17 @@ test("team startup finds the owned run and prepares, but never executes, continu
   for (const [,args] of r.calls.slice(1)) assert.deepEqual(args.slice(0,2), ["--readonly","--sandbox"]);
 });
 
+for (const [action, label, message] of [
+  ["await_external_patch", "External patch required", /No writer is scheduled/],
+  ["verify_external_patch", "Verify supplied patch", /do not launch a writer/],
+]) {
+  test("parked startup reflects durable " + action, async t => {
+    const r = await pick(t, {runs:[{...run, action}], pick:label});
+    assert.match(r.editor, message);
+    assert.ok(!r.options.some(c => c.startsWith("Continue ")));
+  });
+}
+
 test("other claim and missing worktree are busy, ready issue remains selectable", async t => {
   const r = await pick(t, {runs:[run,{...run,issue:"repo-2",worktree:null}], mine:[],
     ready:[{id:"repo-3",status:"open",title:"fix it"}],pick:"Use"});
