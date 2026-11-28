@@ -184,7 +184,7 @@ class PiTeamRunTests(unittest.TestCase):
 
         with closing(sqlite3.connect(str(db_path))) as conn, conn:
             version = conn.execute('PRAGMA user_version').fetchone()[0]
-            self.assertEqual(version, 3)
+            self.assertEqual(version, 4)
             conn.execute('PRAGMA user_version = 99')
 
         bad = self.run_cli('status', run['run_id'])
@@ -698,7 +698,7 @@ class PiTeamRunTests(unittest.TestCase):
         second = self.run_json('start', b, '--issue', 'repo-2')
         self.assertEqual(second['issue'], 'repo-2')
         with closing(sqlite3.connect(db)) as conn:
-            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 3)
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 4)
             self.assertIsNotNone(
                 conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='writer_attempts'").fetchone()
             )
@@ -1955,7 +1955,17 @@ class PiTeamRunTests(unittest.TestCase):
             with self.assertRaisesRegex(script['CliError'], 'already been retired'):
                 cmd_recovery(retire_args, db)
 
-        self.assertEqual(self.run_json('status', run_a), pre_status_a)
+        post_status_a = self.run_json('status', run_a)
+        expected_status_a = {
+            **pre_status_a,
+            'last_writer_attempt': {
+                **pre_status_a['last_writer_attempt'],
+                'status': 'closed',
+                'exit_code': None,
+                'closed_at': retired['closed_at'],
+            },
+        }
+        self.assertEqual(post_status_a, expected_status_a)
         final_rec = self.run_json('writer-recovery', 'status', att_target)
         self.assertEqual(final_rec['status'], 'closed')
         self.assertIsNone(final_rec['exit_code'])
@@ -1965,7 +1975,7 @@ class PiTeamRunTests(unittest.TestCase):
 
         with closing(sqlite3.connect(f'{db.resolve().as_uri()}?mode=ro', uri=True)) as conn:
             conn.row_factory = sqlite3.Row
-            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 3)
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 4)
             other_row = dict(conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_other,)).fetchone())
             self.assertEqual(other_row, {'status': 'open', 'exit_code': None, 'closed_at': None})
         other_rec = self.run_json('writer-recovery', 'status', att_other)
@@ -2990,10 +3000,21 @@ class PiTeamRunTests(unittest.TestCase):
         long_id = 'r-' + 'x' * 260
         ws_punct_id = '-run with spaces:v3 '
         self.assertGreater(len(long_id), 256)
-        self.assertEqual(self.run_json('start', a, '--issue', 'repo-1', '--run-id', long_id)['run_id'], long_id)
-        self.assertEqual(self.run_json('start', b, '--issue', 'repo-2', f'--run-id={ws_punct_id}')['run_id'], ws_punct_id)
+        seed = self.run_json('start', a, '--issue', 'repo-1')
+        self.run_json('cancel', seed['run_id'], 'admit')
 
         db = self.xdg_state / 'pi-team-run' / 'state.db'
+        with closing(sqlite3.connect(db)) as conn, conn:
+            conn.execute(
+                "INSERT INTO runs(run_id, repo_key, issue, worktree, status, current_stage, created_at, updated_at) "
+                "VALUES (?, ?, 'repo-1', ?, 'active', 'implement', '2026-11-27T09:00:00Z', '2026-11-27T09:00:00Z')",
+                (long_id, repo_key, wt_a_admin),
+            )
+            conn.execute(
+                "INSERT INTO runs(run_id, repo_key, issue, worktree, status, current_stage, created_at, updated_at) "
+                "VALUES (?, ?, 'repo-2', ?, 'active', 'implement', '2026-11-27T09:05:00Z', '2026-11-27T09:05:00Z')",
+                (ws_punct_id, repo_key, wt_b_admin),
+            )
         att_long = 'wa-' + '4d' * 16
         att_ws = 'wa-' + '5e' * 16
         with closing(sqlite3.connect(db)) as conn, conn:
@@ -3120,7 +3141,7 @@ class PiTeamRunTests(unittest.TestCase):
 
             self.assertTrue(db_file.is_file())
             with closing(sqlite3.connect(f'{db_file.resolve().as_uri()}?mode=ro', uri=True)) as conn:
-                self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 3)
+                self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 4)
                 self.assertEqual(
                     conn.execute('SELECT status, exit_code, closed_at FROM writer_attempts WHERE attempt_id = ?', (att_arm,)).fetchone()[:],
                     ('open', None, None),
@@ -3378,6 +3399,286 @@ class PiTeamRunTests(unittest.TestCase):
                 code_retire, retired = cmd_recovery(retire_args, db)
             self.assertEqual((code_retire, retired['status'], retired['disposition']), (0, 'closed', 'interrupted'))
             self.assertIsNone(retired['exit_code'])
+
+    def test_v3_writer_recovery_transactions_and_status_preserve_schema(self) -> None:
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        db.parent.mkdir(parents=True)
+        script = runpy.run_path(str(BIN_PATH))
+        attempt_id = 'wa-' + '31' * 16
+        with closing(sqlite3.connect(db)) as conn, conn:
+            for stmt in (*script['V1_SCHEMA'], *script['V2_MIGRATION'], *script['V3_MIGRATION']):
+                conn.execute(stmt)
+            conn.execute('PRAGMA user_version = 3')
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id,repo_key,worktree,issue,bound,run_id,status,created_at) "
+                "VALUES (?, '/repo/.git', '/repo/.git/worktrees/task', 'repo-1', 0, NULL, 'open', 'now')",
+                (attempt_id,),
+            )
+        db.chmod(0o600)
+        recovery_tx = script['_open_recovery_write_tx']
+        with patch.dict(recovery_tx.__wrapped__.__globals__, {'_verify_pinned_ledger_under_tx': lambda *_: None}):
+            with recovery_tx(db, {'ledger_path': str(db)}) as conn:
+                self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 3)
+                self.assertEqual(conn.execute('SELECT status FROM writer_attempts').fetchone()[0], 'open')
+        status = script['cmd_writer_recovery_status']
+        args = script['build_parser']().parse_args(['writer-recovery', 'status', attempt_id])
+        with patch.dict(status.__globals__, {'_validate_recovery_xdg_state_home': lambda: None}):
+            code, result = status(args, db)
+        self.assertEqual((code, result['status']), (0, 'open'))
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 3)
+            self.assertNotIn('local_only', {row[1] for row in conn.execute('PRAGMA table_info(runs)')})
+
+    def test_v3_read_only_stays_v3_preserves_legacy_ids_and_migrates_to_v4_on_write(self) -> None:
+        a, b = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        db.parent.mkdir(parents=True)
+        script = runpy.run_path(str(BIN_PATH))
+        with closing(sqlite3.connect(db)) as conn, conn:
+            for stmt in (*script['V1_SCHEMA'], *script['V2_MIGRATION'], *script['V3_MIGRATION']):
+                conn.execute(stmt)
+            conn.execute('PRAGMA user_version = 3')
+            conn.execute(
+                "INSERT INTO runs(run_id,repo_key,issue,worktree,status,current_stage,created_at,updated_at) "
+                "VALUES ('_legacy:id/1', ?, 'repo-1', ?, 'active', 'implement', 'now', 'now')",
+                (repo_key, wt_a_admin),
+            )
+            conn.execute(
+                "INSERT INTO checkpoints(run_id,stage,disposition,evidence,rev,note,created_at) "
+                "VALUES ('_legacy:id/1', 'admit', 'completed', 'ev:admit', NULL, NULL, 'now')"
+            )
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id,repo_key,worktree,issue,bound,run_id,status,exit_code,created_at,closed_at) "
+                "VALUES ('wa-hist-1', ?, ?, 'repo-1', 1, '_legacy:id/1', 'closed', 0, 'now', 'now')",
+                (repo_key, wt_a_admin),
+            )
+
+        status_before = self.run_json('status', '_legacy:id/1')
+        self.assertEqual(status_before['run_id'], '_legacy:id/1')
+        self.assertFalse(status_before['local_only'])
+        self.assertEqual(status_before['last_writer_attempt']['attempt_id'], 'wa-hist-1')
+        self.assertEqual(self.run_json('resume', '_legacy:id/1')['action'], 'checkpoint')
+        self.assertEqual(self.run_json('discover', b)[0]['run_id'], '_legacy:id/1')
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 3)
+            cols = {row[1] for row in conn.execute('PRAGMA table_info(runs)').fetchall()}
+            self.assertNotIn('local_only', cols)
+
+        second = self.run_json('start', b, '--issue', 'repo-2')
+        self.assertFalse(second['local_only'])
+        with closing(sqlite3.connect(db)) as conn:
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 4)
+            row = conn.execute("SELECT local_only FROM runs WHERE run_id = '_legacy:id/1'").fetchone()
+            self.assertEqual(row[0], 0)
+            ckpt = conn.execute(
+                "SELECT writer_attempt_id, check_checkpoint_id FROM checkpoints WHERE run_id = '_legacy:id/1'"
+            ).fetchone()
+            self.assertEqual(tuple(ckpt), (None, None))
+
+    def test_run_id_grammar_and_local_only_start_validation(self) -> None:
+        a, b = self.linked_pair()
+        validate_run_id = runpy.run_path(str(BIN_PATH))['validate_run_id']
+        bad_ids = [
+            '',
+            ' ',
+            ' run-1',
+            'run-1 ',
+            'run-1\n',
+            'run-1\t',
+            'run-\u00e9',
+            '-run',
+            '.run',
+            '_run',
+            'a' * 129,
+        ]
+        for bad_id in bad_ids:
+            with self.assertRaisesRegex(Exception, 'run ID must be 1-128 ASCII'):
+                validate_run_id(bad_id)
+
+        for bad_id in bad_ids:
+            proc = self.run_cli('start', a, '--issue', 'repo-1', f'--run-id={bad_id}')
+            self.assertNotEqual(proc.returncode, 0, msg=f'unexpectedly accepted run_id={bad_id!r}')
+            self.assertIn('run id must be 1-128 ascii', proc.stderr.lower())
+
+        for bad_id in bad_ids:
+            proc = self.run_cli(
+                'writer-exec', '--cwd', a, '--issue', 'repo-1', f'--run-id={bad_id}', '--',
+                '/usr/bin/bwrap', '--unshare-pid', '--die-with-parent', '--ro-bind', '/', '/',
+                '--bind', a, a, '--dev', '/dev', '--proc', '/proc', '--', '/bin/true',
+            )
+            self.assertNotEqual(proc.returncode, 0, msg=f'writer-exec accepted run_id={bad_id!r}')
+            self.assertIn('run id must be 1-128 ascii', proc.stderr.lower())
+
+        self.assertNotEqual(self.run_cli('start', a, '--local-only').returncode, 0)
+        self.assertNotEqual(self.run_cli('start', str(self.repo_dir), '--local-only', '--issue', 'repo-1').returncode, 0)
+        for bad_flag in ('--commit-only', '--no-ci', '--with-deploy', '--with-honcho', '--with-wiki'):
+            bad = self.run_cli('start', a, '--local-only', '--issue', 'repo-1', bad_flag)
+            self.assertNotEqual(bad.returncode, 0, msg=f'unexpectedly accepted {bad_flag} with --local-only')
+            self.assertIn('--local-only', bad.stderr)
+
+        max_id = 'A' + '0._-' * 31 + 'abc'
+        self.assertEqual(len(max_id), 128)
+        self.assertEqual(validate_run_id(max_id), max_id)
+        self.assertEqual(validate_run_id('z'), 'z')
+        started = self.run_json('start', a, '--local-only', '--issue', 'repo-1', '--run-id', max_id)
+        self.assertTrue(started['local_only'])
+        self.assertEqual(started['run_id'], max_id)
+        self.assertEqual(started['active_stages'], ['admit', 'implement', 'check', 'review'])
+        self.assertEqual(self.run_json('status', max_id)['local_only'], True)
+
+        min_id_run = self.run_json('start', b, '--local-only', '--issue', 'repo-2', '--run-id', 'z')
+        self.assertEqual(min_id_run['run_id'], 'z')
+
+    def test_local_only_check_and_review_negative_controls_and_terminal_completion(self) -> None:
+        a, b = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        wt_b_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-b').resolve())
+        digest_a = 'A' * 64
+        digest_b = 'b' * 64
+        sha40 = 'c' * 40
+
+        run_id = 'local-only-run-1'
+        self.run_json('start', a, '--local-only', '--issue', 'repo-1', '--run-id', run_id)
+        parallel = self.run_json('start', b, '--local-only', '--issue', 'repo-2', '--run-id', 'local-only-run-2')
+        self.assertEqual(parallel['status'], 'active')
+
+        self.run_json('checkpoint', run_id, 'admit', '--evidence', 'ev:admit')
+        self.run_json('checkpoint', run_id, 'implement', '--evidence', 'ev:impl')
+        self.assertEqual(self.run_json('resume', run_id)['action'], 'checkpoint')
+
+        self.assertNotEqual(self.run_cli('checkpoint', run_id, 'check', '--evidence', 'ev:check').returncode, 0)
+        self.assertNotEqual(self.run_cli('checkpoint', run_id, 'check', '--rev', sha40, '--evidence', 'ev:check').returncode, 0)
+        self.assertNotEqual(self.run_cli('checkpoint', run_id, 'check', '--rev', digest_a, '--evidence', 'ev:check').returncode, 0)
+
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        with closing(sqlite3.connect(str(db))) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id,repo_key,worktree,issue,bound,run_id,status,exit_code,created_at,closed_at) "
+                "VALUES ('wa-open-1', ?, ?, 'repo-1', 1, ?, 'open', NULL, '2026-01-01T00:00:00Z', NULL)",
+                (repo_key, wt_a_admin, run_id),
+            )
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id,repo_key,worktree,issue,bound,run_id,status,exit_code,created_at,closed_at) "
+                "VALUES ('wa-parallel-open', ?, ?, 'repo-2', 1, 'local-only-run-2', 'open', NULL, '2026-01-01T00:00:00Z', NULL)",
+                (repo_key, wt_b_admin),
+            )
+        self.assertIn('open writer attempt', self.run_cli('checkpoint', run_id, 'check', '--rev', digest_a, '--evidence', 'ev:check').stderr.lower())
+
+        with closing(sqlite3.connect(str(db))) as conn, conn:
+            conn.execute(
+                "UPDATE writer_attempts SET status = 'closed', exit_code = 1, closed_at = '2026-01-01T00:00:05Z' "
+                "WHERE attempt_id = 'wa-open-1'"
+            )
+        self.assertIn('expected 0', self.run_cli('checkpoint', run_id, 'check', '--rev', digest_a, '--evidence', 'ev:check').stderr.lower())
+
+        with closing(sqlite3.connect(str(db))) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id,repo_key,worktree,issue,bound,run_id,status,exit_code,created_at,closed_at) "
+                "VALUES ('wa-11111111111111111111111111111111', ?, ?, 'repo-1', 1, ?, 'closed', 0, '2026-01-01T00:01:00Z', '2026-01-01T00:01:05Z')",
+                (repo_key, wt_a_admin, run_id),
+            )
+
+        self.assertIn('--writer-attempt', self.run_json('resume', run_id)['message'])
+        self.assertNotEqual(self.run_cli('checkpoint', run_id, 'check', '--rev', digest_a, '--writer-attempt', 'bad-id', '--evidence', 'check:pass:1').returncode, 0)
+        checked = self.run_json('checkpoint', run_id, 'check', '--rev', digest_a, '--writer-attempt', 'wa-11111111111111111111111111111111', '--evidence', 'check:pass:1')
+        self.assertEqual(checked['current_stage'], 'review')
+        self.assertEqual(checked['checkpoints'][-1]['rev'], digest_a.lower())
+        self.assertEqual(checked['checkpoints'][-1]['writer_attempt_id'], 'wa-11111111111111111111111111111111')
+        self.assertEqual(checked['last_writer_attempt']['attempt_id'], 'wa-11111111111111111111111111111111')
+
+        self.run_json('reserve', run_id, 'review')
+        self.run_json('wait', run_id, 'review', '--target', 'coordinator', '--reason', 'independent review')
+        self.assertIn('review:pass:<locator>', self.run_json('resume', run_id)['message'])
+
+        for bad_args in (
+            ['--evidence', 'review:pass:loc-1'],
+            ['--rev', sha40, '--evidence', 'review:pass:loc-1'],
+            ['--rev', digest_b, '--evidence', 'review:pass:loc-1'],
+            ['--rev', digest_a.lower(), '--evidence', 'ev:review'],
+            ['--rev', digest_a.lower(), '--evidence', 'review:pass:'],
+            ['--rev', digest_a.lower(), '--evidence', 'review:pass:   '],
+            ['--rev', digest_a.lower(), '--evidence', 'review:fail:loc-1'],
+        ):
+            bad = self.run_cli('checkpoint', run_id, 'review', *bad_args)
+            self.assertNotEqual(bad.returncode, 0, msg=f'unexpectedly accepted review args={bad_args}')
+            still = self.run_json('status', run_id)
+            self.assertEqual(still['status'], 'waiting')
+            self.assertTrue(still['reserved'])
+            self.assertIsNotNone(still['active_wait'])
+
+        with closing(sqlite3.connect(str(db))) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id,repo_key,worktree,issue,bound,run_id,status,exit_code,created_at,closed_at) "
+                "VALUES ('wa-22222222222222222222222222222222', ?, ?, 'repo-1', 1, ?, 'closed', 0, '2026-01-01T00:02:00Z', '2026-01-01T00:02:05Z')",
+                (repo_key, wt_a_admin, run_id),
+            )
+        stale_review = self.run_cli('checkpoint', run_id, 'review', '--rev', digest_a.lower(), '--evidence', 'review:pass:loc-1')
+        self.assertNotEqual(stale_review.returncode, 0)
+        self.assertIn('stale check checkpoint', stale_review.stderr.lower())
+        still_after_newer = self.run_json('status', run_id)
+        self.assertEqual(still_after_newer['status'], 'waiting')
+        self.assertTrue(still_after_newer['reserved'])
+        self.assertIsNotNone(still_after_newer['active_wait'])
+
+        with closing(sqlite3.connect(str(db))) as conn, conn:
+            conn.execute("DELETE FROM writer_attempts WHERE attempt_id = 'wa-22222222222222222222222222222222'")
+
+        done = self.run_json('checkpoint', run_id, 'review', '--rev', digest_a.lower(), '--evidence', 'review:pass:loc-1')
+        self.assertEqual(done['status'], 'completed')
+        self.assertIsNone(done['current_stage'])
+        self.assertFalse(done['reserved'])
+        self.assertIsNone(done['active_wait'])
+        self.assertEqual(done['checkpoints'][-1]['writer_attempt_id'], 'wa-11111111111111111111111111111111')
+        self.assertIsInstance(done['checkpoints'][-1]['check_checkpoint_id'], int)
+        self.assertEqual(self.run_json('status', 'local-only-run-2')['status'], 'active')
+
+        with closing(sqlite3.connect(str(db))) as conn, conn:
+            conn.execute(
+                "UPDATE writer_attempts SET status = 'closed', exit_code = 0, closed_at = 'now' "
+                "WHERE attempt_id = 'wa-parallel-open'"
+            )
+        self.run_json('cancel', 'local-only-run-2', 'admit')
+
+
+    def test_local_only_check_rejects_missing_or_stale_writer_attempt_race(self) -> None:
+        a, _ = self.linked_pair()
+        repo_key = str((self.repo_dir / '.git').resolve())
+        wt_a_admin = str((self.repo_dir / '.git' / 'worktrees' / 'task-a').resolve())
+        digest_a = 'a' * 64
+        run_id = 'local-race-cli-1'
+
+        self.run_json('start', a, '--local-only', '--issue', 'repo-1', '--run-id', run_id)
+        self.run_json('checkpoint', run_id, 'admit', '--evidence', 'ev:admit')
+        self.run_json('checkpoint', run_id, 'implement', '--evidence', 'ev:impl')
+
+        db = self.xdg_state / 'pi-team-run' / 'state.db'
+        with closing(sqlite3.connect(str(db))) as conn, conn:
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id,repo_key,worktree,issue,bound,run_id,status,exit_code,created_at,closed_at) "
+                "VALUES ('wa-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', ?, ?, 'repo-1', 1, ?, 'closed', 0, '2026-01-01T00:01:00Z', '2026-01-01T00:01:05Z')",
+                (repo_key, wt_a_admin, run_id),
+            )
+            conn.execute(
+                "INSERT INTO writer_attempts(attempt_id,repo_key,worktree,issue,bound,run_id,status,exit_code,created_at,closed_at) "
+                "VALUES ('wa-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', ?, ?, 'repo-1', 1, ?, 'closed', 0, '2026-01-01T00:02:00Z', '2026-01-01T00:02:05Z')",
+                (repo_key, wt_a_admin, run_id),
+            )
+
+        missing = self.run_cli('checkpoint', run_id, 'check', '--rev', digest_a, '--evidence', 'check:pass:1')
+        self.assertNotEqual(missing.returncode, 0)
+        stale = self.run_cli(
+            'checkpoint', run_id, 'check', '--rev', digest_a,
+            '--writer-attempt', 'wa-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '--evidence', 'check:pass:1',
+        )
+        self.assertNotEqual(stale.returncode, 0)
+        self.assertIn('stale writer attempt', stale.stderr.lower())
+        still = self.run_json('status', run_id)
+        self.assertEqual(still['status'], 'active')
+        self.assertEqual(still['current_stage'], 'check')
+        self.assertNotIn('check', [c['stage'] for c in still['checkpoints']])
 
 
 if __name__ == '__main__':

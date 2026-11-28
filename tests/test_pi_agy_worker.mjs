@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { access, chmod, mkdir, mkdtemp, readFile, realpath, rm, readdir, stat, symlink, writeFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
@@ -543,7 +544,7 @@ function runReal(command, args, { cwd, env, signal, timeout, maxBuffer = 64 * 10
   });
 }
 
-async function setupFenceFixture(t, { extraWorktrees = [], withFlash = false, durable = false, liveSwitch = false } = {}) {
+async function setupFenceFixture(t, { extraWorktrees = [], withFlash = false, trackedEdit = false, durable = false, liveSwitch = false } = {}) {
   const root = await realpath(await mkdtemp(join(durable ? homedir() : tmpdir(), '.pi-agy-fence-')));
   t.after(() => rm(root, { recursive: true, force: true }));
   if (durable) {
@@ -633,6 +634,7 @@ printf '%s\\n' 'edited'
     }
   });
 
+  const editSnippet = trackedEdit ? "printf '%s\\n' 'edited by fake agy' >> README.md\n" : '';
   await writeFile(join(bin, 'agy'), `#!/bin/sh
 set -eu
 gate=".pi-agy-gate"
@@ -644,7 +646,7 @@ while [ ! -f "$gate/release" ]; do
   if [ "$count" -gt 400 ]; then exit 9; fi
   sleep 0.1
 done
-printf '%s\\n' '{"event":"step_update","step_update":{"step_index":1,"step_type":"agent_response","state":"ACTIVE","text_delta":"working"}}'
+${editSnippet}printf '%s\\n' '{"event":"step_update","step_update":{"step_index":1,"step_type":"agent_response","state":"ACTIVE","text_delta":"working"}}'
 printf '%s\\n' '{"event":"result","result":{"status":"SUCCESS","response":"edited"}}'
 `, { mode: 0o755 });
 
@@ -698,7 +700,7 @@ printf '%s\\n' '{"event":"result","result":{"status":"SUCCESS","response":"edite
       'if not p.exists(): print(json.dumps({"runs": [], "writer_attempts": []})); raise SystemExit(0)',
       'conn = sqlite3.connect(f"{p.resolve().as_uri()}?mode=ro", uri=True)',
       'conn.row_factory = sqlite3.Row',
-      'runs = [dict(r) for r in conn.execute("SELECT run_id, repo_key, issue, worktree, status, current_stage FROM runs ORDER BY created_at")]',
+      'runs = [dict(r) for r in conn.execute("SELECT run_id, repo_key, issue, worktree, status, current_stage, reserved, local_only FROM runs ORDER BY created_at")]',
       'attempts = [dict(r) for r in conn.execute("SELECT attempt_id, repo_key, worktree, issue, bound, run_id, status, exit_code FROM writer_attempts ORDER BY created_at")]',
       'print(json.dumps({"runs": runs, "writer_attempts": attempts}))',
     ].join('\n');
@@ -730,12 +732,13 @@ async function assertSandboxedBoundary(cwd, payload, settled) {
   }
 }
 
-function launchGatedWriter(t, tool, { cwd, issue, actor = 'pi:fence', task = 'Hold this worktree until the coordinator releases the gate.' }) {
+function launchGatedWriter(t, tool, { cwd, issue, actor = 'pi:fence', runId, task = 'Hold this worktree until the coordinator releases the gate.' }) {
   const stop = new AbortController();
   const gate = join(cwd, '.pi-agy-gate');
   let settled = false;
   let outcome;
-  const promise = tool.execute('writer-fence', { task, cwd, issue, actor }, stop.signal, undefined, { cwd })
+  const params = { task, cwd, issue, actor, ...(runId !== undefined ? { runId } : {}) };
+  const promise = tool.execute('writer-fence', params, stop.signal, undefined, { cwd })
     .then(value => { settled = true; outcome = { value }; return value; }, error => { settled = true; outcome = { error }; throw error; });
   promise.catch(() => {});
 
@@ -755,6 +758,7 @@ function launchGatedWriter(t, tool, { cwd, issue, actor = 'pi:fence', task = 'Ho
     await writeFile(join(gate, 'release'), '').catch(() => {});
   };
   t.after(async () => {
+    if (settled) return;
     await releaseGateFile();
     await waitFinish(20_000);
     if (!settled) {
@@ -767,6 +771,11 @@ function launchGatedWriter(t, tool, { cwd, issue, actor = 'pi:fence', task = 'Ho
     promise,
     isSettled: () => settled,
     abort: () => stop.abort(),
+    async wait(timeoutMs = 20_000) {
+      await waitFinish(timeoutMs);
+      assert.equal(settled, true, 'writer supervisor did not settle within bounded timeout');
+      return promise;
+    },
     async assertReady(timeoutMs = 20_000) {
       let payload = '';
       const readyBy = Date.now() + timeoutMs;
@@ -899,6 +908,23 @@ sys.exit(m['main'](sys.argv[2:]))`;
   assert.deepEqual(f.readLedger().writer_attempts.map(r=>r.exit_code),[null,0]);
 });
 
+function computeTrackedDiffSha256(cwd) {
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
+  const untracked = spawnSync('/usr/bin/git', ['ls-files', '--others', '--exclude-standard'], {
+    cwd, env: gitEnv, encoding: 'utf8', timeout: 15_000,
+  });
+  assert.equal(untracked.status, 0, `git ls-files failed: ${untracked.stderr}`);
+  assert.equal(untracked.stdout.trim(), '', `unexpected untracked candidate files: ${untracked.stdout}`);
+  const diff = spawnSync('/usr/bin/git', ['diff', 'HEAD'], {
+    cwd, env: gitEnv, encoding: null, timeout: 15_000,
+  });
+  assert.equal(diff.status, 0, `git diff HEAD failed: ${diff.stderr?.toString('utf8')}`);
+  assert.ok(diff.stdout.length > 0, 'expected non-empty tracked byte diff');
+  return {
+    diffBytes: diff.stdout,
+    digest: createHash('sha256').update(diff.stdout).digest('hex'),
+  };
+}
 test('writer-first unbound writer fences exclusive admission', async t => {
   const f = await setupFenceFixture(t);
   if (!f) return;
@@ -1446,4 +1472,428 @@ test('shadowed git and GIT_DIR/GIT_COMMON_DIR overrides cannot bypass fence on s
 
   assert.notEqual(f.cli(f.wt1, 'writer-fence', f.wt1, '--json').code, 0);
   await assert.rejects(access(shadowMarker), { code: 'ENOENT' });
+});
+
+test('agy_worker validates runId grammar, rejects plain Pi runId, and forwards --run-id before --', async t => {
+  const plain = await fixture(t, { team: false });
+  for (const badPlain of ['valid-run-1', '', 'bad id']) {
+    await assert.rejects(
+      plain.execute(undefined, undefined, undefined, undefined, { runId: badPlain }),
+      /omit cwd, issue, actor and runId/i,
+    );
+  }
+  assert.equal(plain.calls.length, 0);
+
+  const team = await fixture(t, { team: true });
+  for (const badId of ['', ' ', ' run-1', 'run-1 ', 'run-1\n', 'run-\u00e9', '-run', '.run', '_run', 'a'.repeat(129)]) {
+    await assert.rejects(
+      team.execute(undefined, undefined, undefined, undefined, { runId: badId }),
+      /runId must be 1-128 ASCII/,
+    );
+  }
+  assert.equal(team.calls.length, 0);
+
+  const withoutRunId = await team.execute();
+  assert.match(withoutRunId.content[0].text, /edited/);
+  const noIdFlock = team.calls.find(([cmd, args]) => cmd === '/usr/bin/flock' && args.includes('writer-exec'));
+  assert.ok(noIdFlock);
+  assert.ok(!noIdFlock[1].includes('--run-id'));
+
+  const validId = 'dotfiles-ac4-01a21c68-local';
+  const withRunId = await team.execute(undefined, undefined, undefined, undefined, { runId: validId });
+  assert.match(withRunId.content[0].text, /edited/);
+  const withIdFlock = team.calls.filter(([cmd, args]) => cmd === '/usr/bin/flock' && args.includes('writer-exec')).at(-1);
+  assert.ok(withIdFlock);
+  const wexecArgs = withIdFlock[1];
+  const runIdIdx = wexecArgs.indexOf('--run-id');
+  const sepIdx = wexecArgs.indexOf('--');
+  assert.ok(runIdIdx > -1 && sepIdx > runIdIdx);
+  assert.equal(wexecArgs[runIdIdx + 1], validId);
+});
+
+test('local-only runs require matching active runId on writer-exec, block on waiting review and terminal replay, and allow parallel scoped issues', async t => {
+  const f = await setupFenceFixture(t);
+  if (!f) return;
+
+  const runId1 = 'local-run-1';
+  const runId2 = 'local-run-2';
+  assert.equal(f.cli(f.wt1, 'start', f.wt1, '--local-only', '--issue', 'SBB-local-1', '--run-id', runId1, '--json').code, 0);
+  assert.equal(f.cli(f.wt2, 'start', f.wt2, '--local-only', '--issue', 'SBB-local-2', '--run-id', runId2, '--json').code, 0);
+
+  const tool = f.createTool();
+  await assert.rejects(
+    tool.execute('missing-run-id', { task: 'Should fail.', cwd: f.wt1, issue: 'SBB-local-1', actor: 'pi:local' }, undefined, undefined, { cwd: f.wt1 }),
+    /writer fence.*requires explicit --run-id/i,
+  );
+  await assert.rejects(
+    tool.execute('wrong-run-id', { task: 'Should fail.', cwd: f.wt1, issue: 'SBB-local-1', actor: 'pi:local', runId: runId2 }, undefined, undefined, { cwd: f.wt1 }),
+    /writer fence.*does not match active run/i,
+  );
+  await assert.rejects(
+    tool.execute('unknown-run-id', { task: 'Should fail.', cwd: f.wt1, issue: 'SBB-local-1', actor: 'pi:local', runId: 'no-such-run' }, undefined, undefined, { cwd: f.wt1 }),
+    /writer fence.*does not match active run/i,
+  );
+  await assert.rejects(access(join(f.wt1, '.pi-agy-gate', 'ready')), { code: 'ENOENT' });
+  assert.equal(f.readLedger().writer_attempts.length, 0);
+
+  const w1 = launchGatedWriter(t, tool, {
+    cwd: f.wt1, issue: 'SBB-local-1', actor: 'pi:local', runId: runId1, task: 'Run matched local-only writer.',
+  });
+  await w1.assertReady();
+
+  const w2 = launchGatedWriter(t, tool, {
+    cwd: f.wt2, issue: 'SBB-local-2', actor: 'pi:local2', runId: runId2, task: 'Run parallel local-only writer.',
+  });
+  await w2.assertReady();
+
+  const [res1, res2] = await Promise.all([w1.release(), w2.release()]);
+  assert.match(res1.content[0].text, /edited/);
+  assert.match(res2.content[0].text, /edited/);
+
+  await rm(join(f.wt1, '.pi-agy-gate'), { recursive: true, force: true });
+
+  const sha = 'd'.repeat(64);
+  assert.equal(f.cli(f.wt1, 'checkpoint', runId1, 'admit', '--evidence', 'ev:admit', '--json').code, 0);
+  assert.equal(f.cli(f.wt1, 'checkpoint', runId1, 'implement', '--evidence', 'ev:impl', '--json').code, 0);
+  const w1Attempt = f.readLedger().writer_attempts.find(a => a.run_id === runId1).attempt_id;
+  assert.equal(f.cli(f.wt1, 'checkpoint', runId1, 'check', '--rev', sha, '--writer-attempt', w1Attempt, '--evidence', 'ev:check', '--json').code, 0);
+  assert.equal(f.cli(f.wt1, 'wait', runId1, 'review', '--target', 'coordinator', '--json').code, 0);
+
+  await assert.rejects(
+    tool.execute('waiting-review', { task: 'Blocked by waiting review.', cwd: f.wt1, issue: 'SBB-local-1', actor: 'pi:local', runId: runId1 }, undefined, undefined, { cwd: f.wt1 }),
+    /writer fence.*waiting, not active/i,
+  );
+  await assert.rejects(access(join(f.wt1, '.pi-agy-gate', 'ready')), { code: 'ENOENT' });
+
+  assert.equal(f.cli(f.wt1, 'checkpoint', runId1, 'review', '--rev', sha, '--evidence', 'review:pass:loc-1', '--json').code, 0);
+
+  await assert.rejects(
+    tool.execute('replay-terminal', { task: 'Cannot replay terminal.', cwd: f.wt1, issue: 'SBB-local-1', actor: 'pi:local', runId: runId1 }, undefined, undefined, { cwd: f.wt1 }),
+    /writer fence.*terminal/i,
+  );
+  await assert.rejects(access(join(f.wt1, '.pi-agy-gate', 'ready')), { code: 'ENOENT' });
+  assert.equal(f.readLedger().writer_attempts.length, 2);
+});
+
+test('local-only real end-to-end computes tracked diff SHA-256, validates review gate, releases reservation, and admits next sibling issue', async t => {
+  const f = await setupFenceFixture(t, { trackedEdit: true });
+  if (!f) return;
+
+  const baseSha = f.git(f.repo, 'rev-parse', 'HEAD').trim();
+  const baseRefs = f.git(f.repo, 'show-ref');
+  assert.equal(f.git(f.repo, 'remote').trim(), '');
+
+  const runId1 = 'local-e2e-1';
+  const issue1 = 'SBB-e2e-1';
+  const start1 = f.cli(f.wt1, 'start', f.wt1, '--local-only', '--issue', issue1, '--run-id', runId1, '--json');
+  assert.equal(start1.code, 0, start1.output);
+  assert.equal(f.cli(f.wt1, 'checkpoint', runId1, 'admit', '--evidence', 'claim:SBB-e2e-1', '--json').code, 0);
+
+  const tool = f.createTool();
+  const writer = launchGatedWriter(t, tool, {
+    cwd: f.wt1, issue: issue1, actor: 'pi:e2e', runId: runId1, task: 'Make a tracked edit in README.md.',
+  });
+  await writer.assertReady();
+
+  const openLedger = f.readLedger();
+  assert.equal(openLedger.writer_attempts.length, 1);
+  assert.equal(openLedger.writer_attempts[0].status, 'open');
+  assert.equal(openLedger.writer_attempts[0].bound, 1);
+  assert.equal(openLedger.writer_attempts[0].run_id, runId1);
+  assert.equal(openLedger.writer_attempts[0].issue, issue1);
+
+  const dupIssue = f.cli(f.wt2, 'start', f.wt2, '--local-only', '--issue', issue1, '--run-id', 'local-e2e-dup', '--json');
+  assert.notEqual(dupIssue.code, 0);
+  assert.match(dupIssue.output, /writer fence/i);
+  const unscoped = f.cli(f.wt2, 'start', f.wt2, '--run-id', 'local-e2e-unscoped', '--json');
+  assert.notEqual(unscoped.code, 0);
+  assert.match(unscoped.output, /writer fence/i);
+
+  const result = await writer.release();
+  assert.notEqual(result.isError, true);
+  assert.match(result.content[0].text, /edited/);
+
+  const closedLedger = f.readLedger();
+  assert.equal(closedLedger.writer_attempts.length, 1);
+  const attemptId = closedLedger.writer_attempts[0].attempt_id;
+  assert.equal(closedLedger.writer_attempts[0].status, 'closed');
+  assert.equal(closedLedger.writer_attempts[0].exit_code, 0);
+
+  assert.ok(f.wt1.startsWith(`${f.root}/`));
+  await rm(join(f.wt1, '.pi-agy-gate'), { recursive: true, force: true });
+  const { diffBytes, digest } = computeTrackedDiffSha256(f.wt1);
+  assert.match(diffBytes.toString('utf8'), /edited by fake agy/);
+  assert.match(digest, /^[0-9a-f]{64}$/);
+
+  assert.equal(f.cli(f.wt1, 'checkpoint', runId1, 'implement', '--evidence', 'impl:tracked-readme', '--json').code, 0);
+  const checked = f.cli(f.wt1, 'checkpoint', runId1, 'check', '--rev', digest, '--writer-attempt', attemptId, '--evidence', 'check:pass:e2e', '--json');
+  assert.equal(checked.code, 0, checked.output);
+
+  const reserved = f.cli(f.wt1, 'reserve', runId1, 'review', '--json');
+  assert.equal(reserved.code, 0, reserved.output);
+  assert.equal(JSON.parse(reserved.stdout).reserved, true);
+
+  const waited = f.cli(f.wt1, 'wait', runId1, 'review', '--target', 'coordinator', '--reason', 'independent review', '--json');
+  assert.equal(waited.code, 0, waited.output);
+
+  const wrongDigest = `${digest[0] === '0' ? '1' : '0'}${digest.slice(1)}`;
+  for (const badArgs of [
+    ['--rev', digest, '--evidence', 'ev:not-review-pass'],
+    ['--rev', digest, '--evidence', 'review:pass:'],
+    ['--rev', wrongDigest, '--evidence', 'review:pass:fixture-e2e-1'],
+  ]) {
+    const bad = f.cli(f.wt1, 'checkpoint', runId1, 'review', ...badArgs, '--json');
+    assert.notEqual(bad.code, 0);
+    const still = JSON.parse(f.cli(f.wt1, 'status', runId1, '--json').stdout);
+    assert.equal(still.status, 'waiting');
+    assert.equal(still.current_stage, 'review');
+    assert.equal(still.reserved, true);
+    assert.ok(still.active_wait);
+  }
+
+  const reviewed = f.cli(f.wt1, 'checkpoint', runId1, 'review', '--rev', digest, '--evidence', 'review:pass:fixture-e2e-1', '--json');
+  assert.equal(reviewed.code, 0, reviewed.output);
+  const done = JSON.parse(reviewed.stdout);
+  assert.equal(done.status, 'completed');
+  assert.equal(done.current_stage, null);
+  assert.equal(done.reserved, false);
+  assert.equal(done.active_wait, null);
+  assert.equal(done.local_only, true);
+  assert.equal(done.last_writer_attempt?.attempt_id, attemptId);
+  assert.equal(done.last_writer_attempt?.status, 'closed');
+  assert.equal(done.last_writer_attempt?.exit_code, 0);
+
+  const checkCkpt = done.checkpoints.find(c => c.stage === 'check');
+  const reviewCkpt = done.checkpoints.find(c => c.stage === 'review');
+  assert.equal(checkCkpt?.rev, digest);
+  assert.equal(checkCkpt?.writer_attempt_id, attemptId);
+  assert.equal(reviewCkpt?.rev, digest);
+  assert.equal(reviewCkpt?.evidence, 'review:pass:fixture-e2e-1');
+  assert.equal(reviewCkpt?.writer_attempt_id, attemptId);
+  assert.equal(typeof reviewCkpt?.check_checkpoint_id, 'number');
+  assert.ok(reviewCkpt.check_checkpoint_id > 0);
+  assert.equal(JSON.parse(f.cli(f.wt1, 'status', runId1, '--json').stdout).status, 'completed');
+
+  assert.equal(f.git(f.repo, 'rev-parse', 'main').trim(), baseSha);
+  assert.equal(f.git(f.wt1, 'rev-parse', 'HEAD').trim(), baseSha);
+  assert.equal(f.git(f.wt2, 'rev-parse', 'HEAD').trim(), baseSha);
+  assert.equal(f.git(f.repo, 'show-ref'), baseRefs);
+  assert.equal(f.git(f.repo, 'remote').trim(), '');
+
+  f.git(f.repo, 'worktree', 'remove', '--force', f.wt1);
+  await assert.rejects(access(f.wt1), { code: 'ENOENT' });
+
+  const runId2 = 'local-e2e-2';
+  const start2 = f.cli(f.wt2, 'start', f.wt2, '--local-only', '--issue', 'SBB-e2e-2', '--run-id', runId2, '--json');
+  assert.equal(start2.code, 0, start2.output);
+  const nextRun = JSON.parse(start2.stdout);
+  assert.equal(nextRun.run_id, runId2);
+  assert.equal(nextRun.repo_key, done.repo_key);
+  assert.equal(nextRun.local_only, true);
+  assert.equal(nextRun.status, 'active');
+  assert.equal(f.cli(f.wt2, 'cancel', runId2, 'admit', '--json').code, 0);
+});
+
+test('local-only uncertain abort at review keeps new attempt open despite free lock and blocks review completion with retained reservation', async t => {
+  const f = await setupFenceFixture(t, { trackedEdit: true });
+  if (!f) return;
+
+  const runId = 'local-uncertain-1';
+  const issue = 'SBB-uncertain-1';
+  assert.equal(f.cli(f.wt1, 'start', f.wt1, '--local-only', '--issue', issue, '--run-id', runId, '--json').code, 0);
+  assert.equal(f.cli(f.wt1, 'checkpoint', runId, 'admit', '--evidence', 'claim:SBB-uncertain-1', '--json').code, 0);
+
+  const tool = f.createTool();
+  const w1 = launchGatedWriter(t, tool, {
+    cwd: f.wt1, issue, actor: 'pi:uncertain', runId, task: 'Produce checked tracked edit.',
+  });
+  await w1.assertReady();
+  const res1 = await w1.release();
+  assert.match(res1.content[0].text, /edited/);
+
+  assert.ok(f.wt1.startsWith(`${f.root}/`));
+  await rm(join(f.wt1, '.pi-agy-gate'), { recursive: true, force: true });
+  const { digest } = computeTrackedDiffSha256(f.wt1);
+
+  assert.equal(f.cli(f.wt1, 'checkpoint', runId, 'implement', '--evidence', 'impl:u1', '--json').code, 0);
+  const w1Attempt = f.readLedger().writer_attempts[0].attempt_id;
+  assert.equal(f.cli(f.wt1, 'checkpoint', runId, 'check', '--rev', digest, '--writer-attempt', w1Attempt, '--evidence', 'check:pass:u1', '--json').code, 0);
+  const reserved = f.cli(f.wt1, 'reserve', runId, 'review', '--json');
+  assert.equal(reserved.code, 0, reserved.output);
+  assert.equal(JSON.parse(reserved.stdout).reserved, true);
+
+  const w2 = launchGatedWriter(t, tool, {
+    cwd: f.wt1, issue, actor: 'pi:uncertain', runId, task: 'Hold gate open during active review stage.',
+  });
+  await w2.assertReady();
+
+  const blockedWhileOpen = f.cli(f.wt1, 'checkpoint', runId, 'review', '--rev', digest, '--evidence', 'review:pass:fixture-u1', '--json');
+  assert.notEqual(blockedWhileOpen.code, 0);
+  assert.match(blockedWhileOpen.output, /open writer attempt/i);
+  const openStatus = JSON.parse(f.cli(f.wt1, 'status', runId, '--json').stdout);
+  assert.equal(openStatus.status, 'active');
+  assert.equal(openStatus.current_stage, 'review');
+  assert.equal(openStatus.reserved, true);
+
+  w2.abort();
+  await assert.rejects(w2.wait(), /cancelled/i);
+
+  assert.equal(spawnSync('/usr/bin/flock', ['--nonblock', f.wt1, '/usr/bin/true'], { timeout: 5000 }).status, 0,
+    'per-worktree lock must be free after supervisor abort');
+
+  const attempts = f.readLedger().writer_attempts;
+  assert.equal(attempts.length, 2);
+  assert.equal(attempts[0].status, 'closed');
+  assert.equal(attempts[0].exit_code, 0);
+  assert.equal(attempts[1].status, 'open');
+  assert.equal(attempts[1].exit_code, null);
+  assert.equal(attempts[1].bound, 1);
+  assert.equal(attempts[1].run_id, runId);
+
+  const blockedAfterAbort = f.cli(f.wt1, 'checkpoint', runId, 'review', '--rev', digest, '--evidence', 'review:pass:fixture-u1', '--json');
+  assert.notEqual(blockedAfterAbort.code, 0);
+  assert.match(blockedAfterAbort.output, /open writer attempt/i);
+
+  const retained = JSON.parse(f.cli(f.wt1, 'status', runId, '--json').stdout);
+  assert.equal(retained.status, 'active');
+  assert.equal(retained.current_stage, 'review');
+  assert.equal(retained.reserved, true);
+  assert.equal(retained.last_writer_attempt?.attempt_id, attempts[1].attempt_id);
+  assert.equal(retained.last_writer_attempt?.status, 'open');
+  assert.deepEqual(retained.checkpoints.map(c => c.stage), ['admit', 'implement', 'check']);
+});
+
+
+test('local-only check race rejects writer A digest after writer B closes as latest attempt', async t => {
+  const f = await setupFenceFixture(t, { trackedEdit: true });
+  if (!f) return;
+
+  const runId = 'local-race-1';
+  const issue = 'SBB-race-1';
+  assert.equal(f.cli(f.wt1, 'start', f.wt1, '--local-only', '--issue', issue, '--run-id', runId, '--json').code, 0);
+  assert.equal(f.cli(f.wt1, 'checkpoint', runId, 'admit', '--evidence', 'claim:SBB-race-1', '--json').code, 0);
+
+  const tool = f.createTool();
+  const wA = launchGatedWriter(t, tool, {
+    cwd: f.wt1, issue, actor: 'pi:race', runId, task: 'Writer A edit.',
+  });
+  await wA.assertReady();
+  await wA.release();
+  await rm(join(f.wt1, '.pi-agy-gate'), { recursive: true, force: true });
+  const { digest: digestA } = computeTrackedDiffSha256(f.wt1);
+  const attemptA = f.readLedger().writer_attempts.at(-1).attempt_id;
+
+  assert.equal(f.cli(f.wt1, 'checkpoint', runId, 'implement', '--evidence', 'impl:A', '--json').code, 0);
+
+  const wB = launchGatedWriter(t, tool, {
+    cwd: f.wt1, issue, actor: 'pi:race', runId, task: 'Writer B edit before check.',
+  });
+  await wB.assertReady();
+  await wB.release();
+  await rm(join(f.wt1, '.pi-agy-gate'), { recursive: true, force: true });
+  const { digest: digestB } = computeTrackedDiffSha256(f.wt1);
+  assert.notEqual(digestB, digestA);
+  const attemptB = f.readLedger().writer_attempts.at(-1).attempt_id;
+  assert.notEqual(attemptB, attemptA);
+
+  const withoutAttempt = f.cli(f.wt1, 'checkpoint', runId, 'check', '--rev', digestA, '--evidence', 'check:pass:A', '--json');
+  assert.notEqual(withoutAttempt.code, 0, 'check without --writer-attempt must fail');
+  assert.equal(JSON.parse(f.cli(f.wt1, 'status', runId, '--json').stdout).current_stage, 'check');
+
+  const staleAttempt = f.cli(
+    f.wt1, 'checkpoint', runId, 'check',
+    '--rev', digestA, '--writer-attempt', attemptA, '--evidence', 'check:pass:A', '--json',
+  );
+  assert.notEqual(staleAttempt.code, 0, 'check bound to writer A must fail after writer B closed');
+  const stillCheck = JSON.parse(f.cli(f.wt1, 'status', runId, '--json').stdout);
+  assert.equal(stillCheck.status, 'active');
+  assert.equal(stillCheck.current_stage, 'check');
+  assert.equal(stillCheck.checkpoints.some(c => c.stage === 'check'), false);
+
+  const directReviewA = f.cli(f.wt1, 'checkpoint', runId, 'review', '--rev', digestA, '--evidence', 'review:pass:stale', '--json');
+  assert.notEqual(directReviewA.code, 0);
+
+  const validCheckB = f.cli(
+    f.wt1, 'checkpoint', runId, 'check',
+    '--rev', digestB, '--writer-attempt', attemptB, '--evidence', 'check:pass:B', '--json',
+  );
+  assert.equal(validCheckB.code, 0, validCheckB.output);
+  const validReviewB = f.cli(f.wt1, 'checkpoint', runId, 'review', '--rev', digestB, '--evidence', 'review:pass:B', '--json');
+  assert.equal(validReviewB.code, 0, validReviewB.output);
+  assert.equal(JSON.parse(validReviewB.stdout).status, 'completed');
+});
+
+test('real writer-fence refusal never leaks run IDs or triggers provider fallback', async t => {
+  const f = await setupFenceFixture(t, {});
+  if (!f) return;
+
+  assert.equal(f.cli(f.wt1, 'start', f.wt1, '--local-only', '--issue', 'SBB-429', '--run-id', 'run-429', '--json').code, 0);
+  const tool = f.createTool();
+
+  await assert.rejects(
+    tool.execute('fence-429-missing', {
+      task: 'Missing runId should hit fence without quota fallback.',
+      cwd: f.wt1, issue: 'SBB-429', actor: 'pi:429',
+    }, undefined, undefined, { cwd: f.wt1, modelRegistry: flashRegistry }),
+    err => {
+      assert.match(err.message, /writer fence/i);
+      assert.doesNotMatch(err.message, /run-429|rate or quota|resumeWithFallback|deepseek/i);
+      return true;
+    },
+  );
+  await assert.rejects(
+    tool.execute('no-fallback-after-fence', {
+      task: 'No fallback should be pending.',
+      cwd: f.wt1, issue: 'SBB-429', actor: 'pi:429', resumeWithFallback: true,
+    }, undefined, undefined, { cwd: f.wt1, modelRegistry: flashRegistry }),
+    /No pending writer fallback/,
+  );
+
+  await assert.rejects(
+    tool.execute('fence-429-mismatch', {
+      task: 'Mismatched runId should hit fence without quota fallback.',
+      cwd: f.wt1, issue: 'SBB-429', actor: 'pi:429', runId: 'other-429',
+    }, undefined, undefined, { cwd: f.wt1, modelRegistry: flashRegistry }),
+    err => {
+      assert.match(err.message, /writer fence/i);
+      assert.doesNotMatch(err.message, /run-429|other-429|rate or quota|resumeWithFallback|deepseek/i);
+      return true;
+    },
+  );
+
+});
+
+test('untrusted writer-fence stderr never leaks markers or triggers provider fallback', async t => {
+  const f = await setupFenceFixture(t, {});
+  if (!f) return;
+  const tool = f.createTool();
+
+  assert.equal(f.cli(f.wt2, 'start', f.wt2, '--local-only', '--issue', 'SBB-stderr', '--run-id', 'run-stderr', '--json').code, 0);
+  for (const [tag, line] of [
+    ['marker-only', 'writer fence: PRIVATE_MARKER_9911_DO_NOT_LEAK'],
+    ['marker-with-429', 'writer fence: PRIVATE_MARKER_9911_DO_NOT_LEAK 429 rate limit exceeded'],
+  ]) {
+    await writeFile(join(f.root, 'bin', 'agy'), `#!/bin/sh
+printf '%s\\n' '${line}' >&2
+exit 1
+`, { mode: 0o755 });
+    await assert.rejects(
+      tool.execute(`untrusted-${tag}`, {
+        task: 'Exit nonzero with untrusted stderr.',
+        cwd: f.wt2, issue: 'SBB-stderr', actor: 'pi:stderr', runId: 'run-stderr',
+      }, undefined, undefined, { cwd: f.wt2, modelRegistry: flashRegistry }),
+      err => {
+        assert.match(err.message, /writer fence/i);
+        assert.doesNotMatch(err.message, /PRIVATE_MARKER_9911_DO_NOT_LEAK|rate or quota|resumeWithFallback|deepseek/i);
+        return true;
+      },
+    );
+    await assert.rejects(
+      tool.execute(`no-fallback-${tag}`, {
+        task: 'No fallback after untrusted stderr.',
+        cwd: f.wt2, issue: 'SBB-stderr', actor: 'pi:stderr', runId: 'run-stderr', resumeWithFallback: true,
+      }, undefined, undefined, { cwd: f.wt2, modelRegistry: flashRegistry }),
+      /No pending writer fallback/,
+    );
+  }
 });

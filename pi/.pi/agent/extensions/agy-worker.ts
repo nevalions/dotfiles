@@ -11,6 +11,29 @@ import { worktreeSampler } from "../team/worktree-activity.mjs";
 import { Type } from "typebox";
 
 const efforts = ["low", "medium", "high", "xhigh", "max"];
+const runIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+function writerFenceDiagnostic(stderr: string): string {
+  if (/requires explicit --run-id/i.test(stderr)) {
+    return "AGY blocked by a durable writer fence (active local-only run requires explicit --run-id); inspect active runs and writers before retrying.";
+  }
+  if (/explicit --run-id .* is terminal/i.test(stderr)) {
+    return "AGY blocked by a durable writer fence (explicit --run-id is terminal); inspect active runs and writers before retrying.";
+  }
+  if (/explicit --run-id .* not found/i.test(stderr)) {
+    return "AGY blocked by a durable writer fence (explicit --run-id not found); inspect active runs and writers before retrying.";
+  }
+  if (/explicit --run-id .* does not match active/i.test(stderr)) {
+    return "AGY blocked by a durable writer fence (explicit --run-id does not match active run); inspect active runs and writers before retrying.";
+  }
+  if (/is waiting, not active/i.test(stderr)) {
+    return "AGY blocked by a durable writer fence (run is waiting, not active); inspect active runs and writers before retrying.";
+  }
+  if (/is [^,\r\n]+, not active/i.test(stderr)) {
+    return "AGY blocked by a durable writer fence (run is not active); inspect active runs and writers before retrying.";
+  }
+  return "AGY blocked by a durable writer fence; inspect active runs and writers before retrying.";
+}
 const timeoutMs = 10 * 60_000;
 const heartbeatMs = 30_000;
 const teamRunner = join(homedir(), ".pi/agent/bin/pi-team-run");
@@ -263,7 +286,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
   pi.registerTool({
     name: "agy_worker",
     label: "AGY Worker",
-    description: "Delegate a coding task to agy. Plain Pi uses its current directory; pi-team requires the linked task worktree root, issue and existing claim actor. Returns up to 16 KiB of the worker's final response.",
+    description: "Delegate a coding task to agy. Plain Pi uses its current directory; pi-team requires the linked task worktree root, issue and existing claim actor (plus runId for active local-only runs). Returns up to 16 KiB of the worker's final response.",
     promptGuidelines: [
       "In plain Pi, use agy_worker only when the user explicitly requests AGY delegation. In pi-team, follow the team workflow. Send a self-contained assignment, not chat history or secrets.",
       "Do not write to the workspace while agy_worker is running. Inspect the actual diff and independently verify the result before reporting success.",
@@ -278,8 +301,9 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       cwd: Type.Optional(Type.String({ description: "Absolute linked task worktree root (required in pi-team; omit in plain Pi)" })),
       issue: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", description: "Existing Beads issue claimed by the coordinator (pi-team only)" })),
       actor: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9:._-]{0,159}$", description: "Exact unique Beads claim actor (pi-team only)" })),
+      runId: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", description: "Optional explicit run ID assertion for active scoped pi-team runs (required for local-only runs; omit in plain Pi)" })),
     }, { additionalProperties: false }),
-    async execute(_id, { task, cwd: worktree, issue, actor, flashFirst, resumeWithFallback, resumeAfterTimeout, switchFrom }, signal, onUpdate, ctx) {
+    async execute(_id, { task, cwd: worktree, issue, actor, runId, flashFirst, resumeWithFallback, resumeAfterTimeout, switchFrom }, signal, onUpdate, ctx) {
       const team = pi.getFlag("agy-team") === true;
       let model = team ? defaultModel : pi.getFlag("agy-model");
       let effort = team ? defaultEffort : pi.getFlag("agy-effort");
@@ -297,6 +321,9 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       }
       if (team && (!issue || !actor)) throw new Error("Provide the Beads issue and exact existing claim actor; AGY does not claim issues.");
       if (team) {
+        if (runId !== undefined && (typeof runId !== "string" || !runIdPattern.test(runId))) {
+          throw new Error("runId must be 1-128 ASCII characters matching [A-Za-z0-9][A-Za-z0-9._-]{0,127}.");
+        }
         if (!worktree || !isAbsolute(worktree)) throw new Error("Provide the absolute linked task worktree root.");
         cwd = await realpath(worktree);
         const git = await pi.exec(gitBin, ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir"], {
@@ -306,10 +333,10 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
         if (git.code !== 0 || root !== cwd || !gitDir || !commonDir || gitDir === commonDir) {
           throw new Error("AGY team worker requires the root of a linked Git worktree, not the primary checkout.");
         }
-      } else if (flashFirst !== undefined || resumeAfterTimeout !== undefined || resumeWithFallback !== undefined || worktree !== undefined || issue !== undefined || actor !== undefined) {
-        throw new Error("Start plain Pi in the desired workspace and omit cwd, issue and actor.");
+      } else if (flashFirst !== undefined || resumeAfterTimeout !== undefined || resumeWithFallback !== undefined || worktree !== undefined || issue !== undefined || actor !== undefined || runId !== undefined) {
+        throw new Error("Start plain Pi in the desired workspace and omit cwd, issue, actor and runId.");
       }
-      const key = JSON.stringify([cwd, issue, actor]);
+      const key = JSON.stringify([cwd, issue, actor, runId ?? null]);
       if (resumeAfterTimeout) {
         throw new Error("Timeout continuation (resumeAfterTimeout) is disabled for fenced team writers because an interrupted deadline has no verified completion receipt; no worker was started. Inspect partial edits, verify no active writer and the ledger/claim, and start a fresh assignment if safe.");
       }
@@ -430,7 +457,13 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
             recovery = undefined;
           }
           runningSignal.throwIfAborted();
-          const runnerArgs = ["/usr/bin/python3", "-I", "-S", teamRunner, "writer-exec", "--cwd", cwd, "--issue", issue!, "--claim-actor", actor!, ...(switchFrom ? ["--switch-from", switchFrom] : []), "--", "/usr/bin/bwrap", ...sandbox, ...writerArgs];
+          const runnerArgs = [
+            "/usr/bin/python3", "-I", "-S", teamRunner, "writer-exec",
+            "--cwd", cwd, "--issue", issue!, "--claim-actor", actor!,
+            ...(switchFrom ? ["--switch-from", switchFrom] : []),
+            ...(runId !== undefined ? ["--run-id", runId] : []),
+            "--", "/usr/bin/bwrap", ...sandbox, ...writerArgs,
+          ];
           const args = ["--no-fork", "--nonblock", "--conflict-exit-code", "73", cwd, ...(team ? runnerArgs : ["bwrap", ...sandbox, ...writerArgs])];
           if (switchFrom) return await pi.exec(runnerArgs[0], runnerArgs.slice(1), { cwd, signal: runningSignal, maxBuffer: 256 * 1024 });
           if (restricted) return await pi.exec(flockBin, args, { cwd, signal: runningSignal, maxBuffer: 256 * 1024 });
@@ -466,6 +499,12 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
         throw new Error(`Writer timed out (${expiry}); no continuation offered. Inspect partial changes and verify active writer, ledger, and claim state.`);
       }
       if (result.killed && !("protocolError" in result && result.protocolError)) throw new Error("AGY exceeded its 10-minute timeout; inspect the workspace for partial changes.");
+      if (team && result.code !== 0 && !result.stdout && /writer fence/i.test(result.stderr)) {
+        throw new Error(writerFenceDiagnostic(result.stderr));
+      }
+      if (switchFrom && result.code !== 0 && !result.stdout && /writer switch/i.test(result.stderr)) {
+        throw new Error("Switch refused or replacement failed. Inspect last_writer and the exact attempt before retrying; never infer exit from approval.");
+      }
       if (team && (result.code !== 0 || (report?.status && report.status !== "SUCCESS"))) {
         const diagnostic = [result.stderr, report?.error && JSON.stringify(report.error),
           !restricted && (report ? report.response : result.stdout)].filter(Boolean).join("\n");
@@ -485,9 +524,6 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       }
       if (switchFrom && result.code !== 0 && !result.stdout) {
         throw new Error("Switch refused or replacement failed. Inspect last_writer and the exact attempt before retrying; never infer exit from approval.");
-      }
-      if (team && result.code !== 0 && !result.stdout && /writer fence/i.test(result.stderr)) {
-        throw new Error("AGY blocked by a durable writer fence; inspect active runs and writers before retrying.");
       }
       if (result.code !== 0) throw new Error(`Worker exited with code ${result.code}; inspect the workspace for partial changes.`);
       if ("protocolError" in result && result.protocolError) throw new Error("Invalid AGY event stream; inspect the workspace for partial changes.");
