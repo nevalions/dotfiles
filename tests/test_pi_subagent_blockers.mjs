@@ -75,6 +75,21 @@ test("only a structured AGY deadline leaves a scoped same-turn recovery path", (
   assert.equal(call(resume).block,true);
 });
 
+test("mqy: a structured routing offer allows only the matching fallback in this turn", () => {
+  const {hooks,ctx} = guard();
+  const end = hooks.get("tool_execution_end"), call = hooks.get("tool_call");
+  const scope = {cwd:"/work/issue",issue:"issue",actor:"owner"};
+  const offer = {toolName:"agy_worker",isError:true,result:{details:{scope,recoveryKind:"inspect-worker-route"}}};
+  end(offer,ctx);
+  for (const input of [scope,{...scope,resumeWithFallback:true,actor:"other"},{...scope,flashFirst:true}])
+    assert.equal(call({toolName:"agy_worker",input}).block,true);
+  assert.equal(call({toolName:"subagent"}).block,true);
+  assert.equal(call({toolName:"read"}),undefined);
+  assert.equal(call({toolName:"agy_worker",input:{...scope,resumeWithFallback:true}}),undefined);
+  end({toolName:"agy_worker",isError:true,result:{}},ctx);
+  assert.equal(call({toolName:"agy_worker",input:{...scope,resumeWithFallback:true}}).block,true);
+});
+
 test("classification distinguishes launch and output limits without using successful response text as diagnostics", () => {
   assert.match(childBlocker({ status: "failed" }, { spawnError: new Error("private path") }), /CLI could not start/);
   const last = { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "Rate limit exceeded is an example." }] };

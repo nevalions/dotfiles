@@ -77,9 +77,22 @@ export function installBlockerGuard(pi) {
   installReviewTiming(pi);
   let blocker;
   let awaitingInspection = false;
-  pi.on("agent_start", () => { blocker = undefined; awaitingInspection = false; });
+  let offeredRoute, resuming;
+  pi.on("agent_start", () => { blocker = undefined; awaitingInspection = false; offeredRoute = resuming = undefined; });
   pi.on("tool_call", (event) => {
     if (!["subagent", "agy_worker"].includes(event.toolName)) return;
+    if (resuming) return { block: true, reason: "The inspected writer fallback is already running." };
+    if (!blocker && offeredRoute) {
+      const input = event.input;
+      if (event.toolName === "agy_worker" && input?.resumeWithFallback === true &&
+          !input.flashFirst && !input.resumeAfterTimeout && !input.switchFrom &&
+          ["issue", "actor", "cwd"].every(k => input[k] === offeredRoute[k])) {
+        offeredRoute = undefined;
+        resuming = event.toolCallId;
+        return;
+      }
+      return { block: true, reason: "Inspect the partial candidate and resume only the offered route for the same claim." };
+    }
     if (!blocker && awaitingInspection && !(event.toolName === "agy_worker" && event.input?.resumeAfterTimeout === true)) {
       return { block: true, reason: "Inspect the timed-out worker's partial changes. Only the offered scoped continuation may resume delegation." };
     }
@@ -90,7 +103,14 @@ export function installBlockerGuard(pi) {
     };
   });
   pi.on("tool_execution_end", (event, ctx) => {
+    if (resuming && resuming === event.toolCallId) resuming = undefined;
     if (blocker || !["subagent", "agy_worker"].includes(event.toolName) || ctx.signal?.aborted) return;
+    const details = event.result?.details;
+    if (event.toolName === "agy_worker" && event.isError && details?.recoveryKind === "inspect-worker-route" &&
+        ["issue", "actor", "cwd"].every(k => typeof details.scope?.[k] === "string" && details.scope[k])) {
+      offeredRoute = details.scope;
+      return;
+    }
     if (event.toolName === "agy_worker" && event.isError && event.result?.details?.recoveryKind === "inspect-worker-timeout") {
       awaitingInspection = true;
       warn(ctx, "AGY timed out. Inspect the partial candidate before using the one scoped continuation.");

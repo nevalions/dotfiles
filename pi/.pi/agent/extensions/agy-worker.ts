@@ -272,13 +272,14 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
     parameters: Type.Object({
       flashFirst: Type.Optional(Type.Boolean({ description: "Team only: prefer the restricted DeepSeek Flash writer for a fresh, testable edit; if not configured, start AGY instead. Omit for AGY or recovery." })),
       resumeAfterTimeout: Type.Optional(Type.Boolean({ description: "Unsupported for fenced team writers; fails closed before launch if set." })),
+      switchFrom: Type.Optional(Type.String({ pattern: "^wa-[0-9a-f]{32}$", description: "Team only: operator-confirmed switch from the exact last_writer.attempt_id to restricted Flash on the same active claim after inspection, including after reload." })),
       resumeWithFallback: Type.Optional(Type.Boolean({ description: "Team only: after a routing failure and inspection of partial edits, resume with the offered restricted Pi writer." })),
       task: Type.String({ minLength: 1, maxLength: 16000 }),
       cwd: Type.Optional(Type.String({ description: "Absolute linked task worktree root (required in pi-team; omit in plain Pi)" })),
       issue: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", description: "Existing Beads issue claimed by the coordinator (pi-team only)" })),
       actor: Type.Optional(Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9:._-]{0,159}$", description: "Exact unique Beads claim actor (pi-team only)" })),
     }, { additionalProperties: false }),
-    async execute(_id, { task, cwd: worktree, issue, actor, flashFirst, resumeWithFallback, resumeAfterTimeout }, signal, onUpdate, ctx) {
+    async execute(_id, { task, cwd: worktree, issue, actor, flashFirst, resumeWithFallback, resumeAfterTimeout, switchFrom }, signal, onUpdate, ctx) {
       const team = pi.getFlag("agy-team") === true;
       let model = team ? defaultModel : pi.getFlag("agy-model");
       let effort = team ? defaultEffort : pi.getFlag("agy-effort");
@@ -291,6 +292,9 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
 
       const gitBin = team ? "/usr/bin/git" : "git";
       let cwd = await realpath(ctx.cwd);
+      if (switchFrom && (!team || flashFirst || resumeWithFallback || resumeAfterTimeout || !/^wa-[0-9a-f]{32}$/.test(switchFrom))) {
+        throw new Error("Switch worker requires team mode and one exact attempt, without other routing options.");
+      }
       if (team && (!issue || !actor)) throw new Error("Provide the Beads issue and exact existing claim actor; AGY does not claim issues.");
       if (team) {
         if (!worktree || !isAbsolute(worktree)) throw new Error("Provide the absolute linked task worktree root.");
@@ -319,7 +323,14 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
           warn(ctx, "Flash-first model not configured; starting the standard AGY writer instead.");
         }
       }
-      const restricted = Boolean((flashFirst && model === flashWriterModel) || resumeWithFallback);
+      if (switchFrom) {
+        if (!ctx.hasUI || !ctx.modelRegistry?.getAvailable().some(m => `${m.provider}/${m.id}` === flashWriterModel))
+          throw new Error("Switch worker requires interactive approval and the configured Flash writer.");
+        model = flashWriterModel;
+        if (!await ctx.ui.confirm("Switch worker", `Stop or reuse verified exit of ${switchFrom} for ${issue} in ${cwd}, and start restricted ${model}? Confirm original host and private local ledger; inspect partial edits before continuing.`))
+          throw new Error("Switch declined; no writer was stopped or started.");
+      }
+      const restricted = Boolean(switchFrom || (flashFirst && model === flashWriterModel) || resumeWithFallback);
       const homeFromWorkspace = relative(cwd, await realpath(homedir()));
       if (cwd === "/" || (homeFromWorkspace !== ".." && !homeFromWorkspace.startsWith("../"))) {
         throw new Error("AGY requires a workspace that does not contain your home directory. Start Pi in the project directory.");
@@ -334,7 +345,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
       const lock = await pi.exec(flockBin, ["--version"], { cwd, signal, timeout: 5000, maxBuffer: 4096 });
       signal?.throwIfAborted();
       if (lock.code !== 0) throw new Error("AGY requires util-linux flock; no worker was started.");
-      try {
+      if (!switchFrom) try {
         const probe = await mkdtemp(join(cwd, ".pi-agy-probe-"));
         try {
           await writeFile(join(probe, "write-test"), "", { flag: "wx", mode: 0o600 });
@@ -354,7 +365,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
         for (const provider of recovery.excluded) attempted.add(provider);
         attempted.add(model.split("/")[0]);
       }
-      if (flashFirst && restricted) attempted.add(flashWriterModel.split("/")[0]);
+      if ((flashFirst || switchFrom) && restricted) attempted.add(flashWriterModel.split("/")[0]);
       const details = { model, effort, cwd };
       const launch = `${restricted ? "restricted Pi writer" : "agy"} (${model}, ${effort}) in ${cwd}`;
       onUpdate?.({ content: [{ type: "text", text: `Running ${launch}…` }], details });
@@ -364,6 +375,7 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
         "Do not probe outside the worktree or normally protected data; if required context is missing, stop and ask the coordinator. The coordinator handles discovery and checks.",
         "Do not invoke terminal tools. Report files changed and any blockers. Do not include credentials or raw logs.",
         "",
+        ...(switchFrom ? ["Before editing, read the assigned paths again. Preserve partial edits from the stopped writer; report conflicting changes instead of overwriting them."] : []),
         task.trim(),
       ].join("\n");
 
@@ -418,8 +430,9 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
             recovery = undefined;
           }
           runningSignal.throwIfAborted();
-          const runnerArgs = ["/usr/bin/python3", "-I", "-S", teamRunner, "writer-exec", "--cwd", cwd, "--issue", issue!, "--", "/usr/bin/bwrap", ...sandbox, ...writerArgs];
+          const runnerArgs = ["/usr/bin/python3", "-I", "-S", teamRunner, "writer-exec", "--cwd", cwd, "--issue", issue!, "--claim-actor", actor!, ...(switchFrom ? ["--switch-from", switchFrom] : []), "--", "/usr/bin/bwrap", ...sandbox, ...writerArgs];
           const args = ["--no-fork", "--nonblock", "--conflict-exit-code", "73", cwd, ...(team ? runnerArgs : ["bwrap", ...sandbox, ...writerArgs])];
+          if (switchFrom) return await pi.exec(runnerArgs[0], runnerArgs.slice(1), { cwd, signal: runningSignal, maxBuffer: 256 * 1024 });
           if (restricted) return await pi.exec(flockBin, args, { cwd, signal: runningSignal, maxBuffer: 256 * 1024 });
           return await stream(flockBin, args, {
             cwd, signal: runningSignal, timeout: team ? undefined : timeoutMs,
@@ -465,8 +478,13 @@ export default function (pi: ExtensionAPI, stream = runAgyStream) {
           const message = `${launch}: ${problem}. Inspect partial edits and revalidate the claim. ${next
             ? `Then use resumeWithFallback for ${next.ref} (${nextEffort}); no work has been replayed.` : "No approved fallback remains."}`;
           warn(ctx, message);
+          if (next) return { isError: true, content: [{type: "text", text: message}],
+            details: {...details, recoveryKind: "inspect-worker-route", scope: {cwd, issue, actor}} };
           throw new Error(message);
         }
+      }
+      if (switchFrom && result.code !== 0 && !result.stdout) {
+        throw new Error("Switch refused or replacement failed. Inspect last_writer and the exact attempt before retrying; never infer exit from approval.");
       }
       if (team && result.code !== 0 && !result.stdout && /writer fence/i.test(result.stderr)) {
         throw new Error("AGY blocked by a durable writer fence; inspect active runs and writers before retrying.");

@@ -3,10 +3,11 @@ import { spawn, spawnSync } from 'node:child_process';
 import { constants as fsConstants } from 'node:fs';
 import { access, chmod, mkdir, mkdtemp, readFile, realpath, rm, readdir, stat, symlink, writeFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate, setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
+import { installBlockerGuard } from '../pi/.pi/agent/team/subagent-blockers.mjs';
 import { runAgyStream } from '../pi/.pi/agent/team/agy-stream.mjs';
 
 const cliPath = new URL('../pi/.pi/agent/bin/pi-team-run', import.meta.url).pathname;
@@ -56,6 +57,14 @@ async function fixture(t, { team = true, heartbeat = async () => ok, idle = ok, 
     task: 'Edit the test file', resumeWithFallback, ...(team ? { cwd, issue: 'SBB-demo', actor: 'pi:test' } : {}), ...overrides,
   }, signal, onUpdate, { cwd, modelRegistry });
   return { calls, cwd, execute, hooks };
+}
+
+async function assertOffer(promise, pattern) {
+  const result = await promise;
+  assert.equal(result.isError, true);
+  assert.equal(result.details.recoveryKind, 'inspect-worker-route');
+  assert.match(result.content[0].text, pattern);
+  return result;
 }
 
 const heartbeatCalls = calls => calls.filter(([command]) => command === '/usr/bin/bd');
@@ -238,7 +247,7 @@ test('Flash-first uses the ordinary AGY path when Flash is not configured, befor
 test('Flash-first offers Sol on provider failure only after inspection, and never loops back to Flash', async t => {
   const dir = await withTempAgentDir(t);
   const {calls, execute} = await fixture(t, {launch: () => ({...ok, code:1, stderr:'429 rate limit exceeded'})});
-  await assert.rejects(freshFlash(execute), /resumeWithFallback for openai-codex.*sol .*medium/);
+  await assertOffer(freshFlash(execute), /resumeWithFallback for openai-codex.*sol .*medium/);
   await assert.rejects(freshFlash(execute), /fresh assignments/);
   assert.equal(heartbeatCalls(calls).length, 1);
   await assert.rejects(execute(undefined, true, flashRegistry), /No approved fallback remains/);
@@ -253,7 +262,7 @@ test('team offers a scoped fallback without replaying a writer; resumed writer r
   const {calls, execute} = await fixture(t, {launch: () => ++count === 1
     ? {...ok, code: 1, stderr: "User location is not supported"} : {...ok, stdout: "edited"}});
   await assert.rejects(execute(undefined, true, modelRegistry), /No pending/);
-  await assert.rejects(execute(undefined, false, modelRegistry), /location restriction.*resumeWithFallback for openai-codex\/gpt-6\.1-sol \(medium\)/);
+  await assertOffer(execute(undefined, false, modelRegistry), /location restriction.*resumeWithFallback for openai-codex\/gpt-6\.1-sol \(medium\)/);
   assert.equal(count, 1);
   const resumed = await execute(undefined, true, modelRegistry);
   assert.equal(resumed.details.model, "openai-codex/gpt-6.1-sol");
@@ -280,13 +289,21 @@ test('team falls back AGY -> Flash writer (high) -> Sol writer (medium) without 
     return {...ok, stdout: "edited"};
   }});
 
-  await assert.rejects(execute(undefined, false, modelRegistry), /location restriction.*resumeWithFallback for opencode-go\/deepseek-v4\.1-flash \(high\)/);
+  const hooks = new Map();
+  installBlockerGuard({on:(name, handler) => hooks.set(name, handler)});
+  const offer = await assertOffer(execute(undefined, false, modelRegistry), /location restriction.*resumeWithFallback for opencode-go\/deepseek-v4\.1-flash \(high\)/);
+  const ctx = {hasUI:false};
+  hooks.get("tool_execution_end")({toolName:"agy_worker",isError:true,result:offer},ctx);
+  assert.equal(hooks.get("tool_call")({toolName:"agy_worker",toolCallId:"flash",
+    input:{...offer.details.scope,resumeWithFallback:true}}),undefined);
+  assert.equal(hooks.get("tool_call")({toolName:"agy_worker",toolCallId:"duplicate",
+    input:{...offer.details.scope,resumeWithFallback:true}}).block,true);
   assert.equal(count, 1);
   const agyArgs = calls.find(([, args]) => args.includes('--print'))[1];
   assert.equal(agyArgs[agyArgs.indexOf('--model') + 1], 'gemini-4-hydrogen-high');
   assert.equal(agyArgs[agyArgs.indexOf('--effort') + 1], 'high');
 
-  await assert.rejects(execute(undefined, true, modelRegistry), /rate or quota limit.*resumeWithFallback for openai-codex\/gpt-6\.1-sol \(medium\)/);
+  await assertOffer(execute(undefined, true, modelRegistry), /rate or quota limit.*resumeWithFallback for openai-codex\/gpt-6\.1-sol \(medium\)/);
   assert.equal(count, 2);
   const flashArgs = calls.filter(([, args]) => args.includes('--no-fork')).at(-1)[1];
   assertRestrictedWriterArgs(flashArgs, agentDir, 'opencode-go/deepseek-v4.1-flash', 'high');
@@ -316,8 +333,8 @@ test('team stops without bouncing back to Flash when Sol writer also hits a rout
     return {...ok, code: 1, stderr: "503 Service Unavailable"};
   }});
 
-  await assert.rejects(execute(undefined, false, modelRegistry), /opencode-go\/deepseek-v4\.1-flash \(high\)/);
-  await assert.rejects(execute(undefined, true, modelRegistry), /openai-codex\/gpt-6\.1-sol \(medium\)/);
+  await assertOffer(execute(undefined, false, modelRegistry), /opencode-go\/deepseek-v4\.1-flash \(high\)/);
+  await assertOffer(execute(undefined, true, modelRegistry), /openai-codex\/gpt-6\.1-sol \(medium\)/);
   await assert.rejects(execute(undefined, true, modelRegistry), /No approved fallback remains/);
   assert.equal(count, 3);
   await assert.rejects(execute(undefined, true, modelRegistry), /No pending/);
@@ -526,9 +543,23 @@ function runReal(command, args, { cwd, env, signal, timeout, maxBuffer = 64 * 10
   });
 }
 
-async function setupFenceFixture(t, { extraWorktrees = [], withFlash = false } = {}) {
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'pi-agy-fence-')));
+async function setupFenceFixture(t, { extraWorktrees = [], withFlash = false, durable = false, liveSwitch = false } = {}) {
+  const root = await realpath(await mkdtemp(join(durable ? homedir() : tmpdir(), '.pi-agy-fence-')));
   t.after(() => rm(root, { recursive: true, force: true }));
+  if (durable) {
+    const probe = spawnSync('/usr/bin/python3',['-I','-S','-c',`import os,runpy,sys
+m=runpy.run_path(sys.argv[1]); constants=m['LOCAL_DURABLE_FS_MAGICS']
+p,s=m['_open_pinned_proc_root']()
+try: m['_verify_initial_pid_namespace_and_procfs'](p,s)
+except m['CliError'] as e:
+ if 'requires the initial host PID namespace' in str(e): sys.exit(77)
+ raise
+if m['_fstatfs_magic'](os.open(sys.argv[2],os.O_DIRECTORY)) not in constants.values(): sys.exit(77)
+if sys.argv[3]=='true' and m['_fstatfs_magic'](os.pidfd_open(os.getpid()))!=0x50494446: sys.exit(77)`,
+      cliPath,root,String(liveSwitch)],{encoding:'utf8'});
+    if (probe.status === 77) {t.skip('requires the initial Linux PID namespace, durable test ledger and, for live stop, pidfs'); return null;}
+    assert.equal(probe.status,0,probe.stderr);
+  }
   const repo = join(root, 'repo');
   const wt1 = join(root, 'wt1');
   const wt2 = join(root, 'wt2');
@@ -633,6 +664,10 @@ printf '%s\\n' '{"event":"result","result":{"status":"SUCCESS","response":"edite
     const run = await runReal('/usr/bin/python3', ['-I', '-S', cliPath, ...args], { cwd, env: env(), timeout: 20_000 });
     return { ...run, output: `${run.stdout}${run.stderr}` };
   };
+  if (durable && spawnSync('/usr/bin/bwrap', [...namespaceArgs(wt1, agentDir),'/usr/bin/true'],{cwd:wt1}).status !== 0) {
+    t.skip('restricted writer requires bwrap --tmp-overlay');
+    return null;
+  }
   const createTool = ({ onStreamResult, heartbeat } = {}) => {
     const flags = new Map();
     let tool;
@@ -756,6 +791,113 @@ function launchGatedWriter(t, tool, { cwd, issue, actor = 'pi:fence', task = 'Ho
     },
   };
 }
+
+for (const prior of ['live', 'interrupted', 'exited']) {
+  test(`reload switches exactly once with ${prior} AGY in a real PID namespace`, async t => {
+    const f = await setupFenceFixture(t, {withFlash:true, durable:true, liveSwitch:prior !== 'exited'});
+    if (!f) return;
+    const cwd = f.wt1, issue = 'SBB-switch', actor = 'pi:switch', run = 'switch-run';
+    const okCli = (...args) => {const r = f.cli(cwd, ...args); assert.equal(r.code, 0, r.output); return JSON.parse(r.stdout);};
+    okCli('start', cwd, '--issue', issue, '--run-id', run, '--json');
+    okCli('checkpoint', run, 'admit', '--evidence', 'claim verified', '--json');
+    if (prior === 'live') {
+      okCli('checkpoint', run, 'implement', '--evidence', 'candidate', '--json');
+      okCli('checkpoint', run, 'check', '--evidence', 'focused checks', '--json');
+    }
+    const first = launchGatedWriter(t, f.createTool(), {cwd, issue, actor});
+    await first.assertReady();
+    const source = okCli('status', run, '--writer', '--json').last_writer.attempt_id;
+    await writeFile(join(cwd, 'partial.txt'), 'preserve this');
+    if (prior === 'interrupted') {first.abort(); await first.promise.catch(() => {});}
+    if (prior === 'exited') await first.release();
+    const before = okCli('status', run, '--writer', '--json');
+    assert.equal(before.last_writer.status, prior === 'exited' ? 'closed' : 'open');
+    const next = f.createTool();
+    let approvals = 0;
+    const call = (approve, changes = {}) => next.execute('switch', {cwd, issue, actor, task:'Finish remaining edit',
+      switchFrom:source, ...changes}, undefined, undefined, {cwd, hasUI:true, modelRegistry:flashRegistry,
+      ui:{confirm:async (title, msg) => {assert.match(title,/Switch/); assert.ok(msg.includes(issue)); if (approve) approvals++; return approve;}}});
+    await assert.rejects(call(false), /declined/);
+    if (prior === 'live') {
+      await assert.rejects(call(true,{actor:'pi:wrong'}), /Switch refused/);
+      assert.equal(first.isSettled(), false);
+    }
+    const count = approvals;
+    const result = await call(true);
+    assert.match(result.content[0].text,/edited/);
+    assert.equal(approvals,count+1);
+    await first.promise.catch(() => {});
+    assert.equal(await readFile(join(cwd,'partial.txt'),'utf8'),'preserve this');
+    const rows = f.readLedger().writer_attempts;
+    assert.equal(rows.length,2);
+    assert.deepEqual(rows.map(r => r.exit_code), [prior === 'exited' ? 0 : null, 0]);
+    const after = okCli('status',run,'--writer','--json');
+    assert.deepEqual(after.checkpoints,before.checkpoints);
+    assert.equal(after.current_stage,before.current_stage);
+    assert.equal(after.last_writer.attempt_id, rows[1].attempt_id);
+    const receipt = okCli('writer-recovery','status',source,'--json');
+    assert.equal(receipt.replacement, rows[1].attempt_id);
+    assert.equal(receipt.disposition, prior === 'exited' ? 'verified_exit' : 'interrupted');
+    await assert.rejects(call(true), /Switch refused/);
+    assert.equal(f.readLedger().writer_attempts.length,2);
+  });
+}
+
+test('mqy legacy nonzero exit receipt switches after reload without process identity or replay', async t => {
+  const f = await setupFenceFixture(t,{withFlash:true,durable:true});
+  if (!f) return;
+  const cwd=f.wt1, issue='SBB-mqy', run='mqy-run', actor='pi:mqy';
+  assert.equal(f.cli(cwd,'start',cwd,'--run-id',run,'--issue',issue).code,0);
+  assert.equal(f.cli(cwd,'checkpoint',run,'admit','--evidence','verified claim').code,0);
+  assert.equal(f.cli(cwd,'writer-exec','--cwd',cwd,'--issue',issue,'--','/usr/bin/bwrap',
+    ...namespaceArgs(cwd),'/usr/bin/false').code,1);
+  const [old]=f.readLedger().writer_attempts;
+  assert.equal(old.status,'closed');
+  const result=await f.createTool().execute('switch',{cwd,issue,actor,switchFrom:old.attempt_id,task:'remaining work'},
+    undefined,undefined,{cwd,hasUI:true,modelRegistry:flashRegistry,ui:{confirm:async()=>true}});
+  assert.match(result.content[0].text,/edited/);
+  assert.deepEqual(f.readLedger().writer_attempts.map(r=>r.exit_code),[1,0]);
+});
+
+test('a delayed pre-GO launch stays fenced until identities exist and cannot execute after switch', async t => {
+  const f = await setupFenceFixture(t, {withFlash:true,durable:true,liveSwitch:true});
+  if (!f) return;
+  const cwd = f.wt1, issue = 'SBB-delayed', actor = 'pi:delayed', run = 'delayed-run';
+  assert.equal(f.cli(cwd,'start',cwd,'--run-id',run,'--issue',issue).code,0);
+  assert.equal(f.cli(cwd,'checkpoint',run,'admit','--evidence','test').code,0);
+  const script = `import os,runpy,signal,sys
+m=runpy.run_path(sys.argv[1]); fn=m['_writer_exec']; save=m['_save_switch_witness']
+def delayed(*args):
+ for phase in ('before','after'):
+  if phase=='after': save(*args)
+  print(phase,flush=True); os.kill(os.getpid(),signal.SIGSTOP)
+fn.__globals__['_save_switch_witness']=delayed
+sys.exit(m['main'](sys.argv[2:]))`;
+  const old = spawn('/usr/bin/python3',['-I','-S','-c',script,cliPath,'writer-exec','--issue',issue,'--claim-actor',actor,
+    '--cwd',cwd,'--','/usr/bin/bwrap',...namespaceArgs(cwd),'/usr/bin/touch','old-payload-ran'],{cwd});
+  let output = '';
+  old.stdout.on('data', c => {output += c;});
+  old.stderr.on('data', c => {output += c;});
+  const done = new Promise(resolve => old.once('close',resolve));
+  t.after(async () => {old.kill('SIGKILL'); await done;});
+  async function stopped(phase) {
+    for(let i=0; i<100 && !output.includes(phase); i++) await delay(25);
+    assert.ok(output.includes(phase),output);
+  }
+  await stopped('before');
+  const src = f.readLedger().writer_attempts[0].attempt_id;
+  const switchCall = () => f.createTool().execute('switch', {cwd,issue,actor,switchFrom:src,task:'remaining edit'},
+    undefined,undefined,{cwd,hasUI:true,modelRegistry:flashRegistry,ui:{confirm:async()=>true}});
+  await assert.rejects(switchCall(),/Switch refused/);
+  assert.equal(f.readLedger().writer_attempts[0].status,'open');
+  old.kill('SIGCONT');
+  await stopped('after');
+  assert.match((await switchCall()).content[0].text,/edited/);
+  await done;
+  assert.equal(old.signalCode,'SIGKILL');
+  await assert.rejects(access(join(cwd,'old-payload-ran')),{code:'ENOENT'});
+  assert.deepEqual(f.readLedger().writer_attempts.map(r=>r.exit_code),[null,0]);
+});
 
 test('writer-first unbound writer fences exclusive admission', async t => {
   const f = await setupFenceFixture(t);
@@ -1118,7 +1260,7 @@ test('missing or non-executable fake writer emits bwrap diagnostic without trace
 
   const seenMissing = [];
   const toolMissing = f.createTool({ onStreamResult: res => seenMissing.push(res) });
-  await assert.rejects(
+  await assertOffer(
     toolMissing.execute('missing-agy',
       { task: 'Secret missing writer payload.', cwd: f.wt1, issue: 'SBB-missing-agy', actor: 'pi:missing' },
       undefined, undefined, { cwd: f.wt1, modelRegistry: flashRegistry }),
@@ -1133,7 +1275,7 @@ test('missing or non-executable fake writer emits bwrap diagnostic without trace
   await chmod(join(f.bin, 'agy'), 0o644);
   const seenPerm = [];
   const toolPerm = f.createTool({ onStreamResult: res => seenPerm.push(res) });
-  await assert.rejects(
+  await assertOffer(
     toolPerm.execute('denied-agy',
       { task: 'Secret perm writer payload.', cwd: f.wt1, issue: 'SBB-denied-agy', actor: 'pi:denied' },
       undefined, undefined, { cwd: f.wt1, modelRegistry: flashRegistry }),
@@ -1149,15 +1291,13 @@ test('missing or non-executable fake writer emits bwrap diagnostic without trace
     if (!overlayOk) return st.skip('bwrap --tmp-overlay is required for restricted Flash writer');
     await rm(join(f.agentDir, 'bin', 'pi.managed'));
     const toolFlash = f.createTool();
-    await assert.rejects(
+    const failure = await assertOffer(
       toolFlash.execute('missing-flash',
         { task: 'Secret flash payload.', cwd: f.wt1, issue: 'SBB-missing-flash', actor: 'pi:flash', flashFirst: true },
         undefined, undefined, { cwd: f.wt1, modelRegistry: flashRegistry }),
-      err => (
-        /restricted Pi writer.*CLI unavailable.*resumeWithFallback for openai-codex\/gpt-6\.1-sol \(medium\)/.test(err.message)
-        && !/Traceback|FileNotFoundError|Secret flash payload/.test(err.message)
-      ),
+      /restricted Pi writer.*CLI unavailable.*resumeWithFallback for openai-codex\/gpt-6\.1-sol \(medium\)/,
     );
+    assert.doesNotMatch(failure.content[0].text,/Traceback|FileNotFoundError|Secret flash payload/);
   });
 
   const attempts = new Map(f.readLedger().writer_attempts.map(row => [row.issue, row]));

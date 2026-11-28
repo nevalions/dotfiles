@@ -758,6 +758,25 @@ class PiTeamRunTests(unittest.TestCase):
             conn.execute(insert_sql, ('disp-clear', repo_key, 'active'))
         self.assertEqual(self.run_json('status', 'disp-clear')['status'], 'active')
 
+    def test_switch_never_signals_on_partial_or_mismatched_identity(self):
+        script = runpy.run_path(str(BIN_PATH))
+        stop = script['_stop_switch_source']
+        with closing(sqlite3.connect(':memory:')) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute('CREATE TABLE writer_switch_witness(attempt_id, actor, host, identities)')
+            conn.execute("INSERT INTO writer_switch_witness VALUES ('old','owner','{}','[]')")
+            attempt = {'attempt_id': 'old', 'status': 'open'}
+            with patch.dict(stop.__globals__, {'_verify_pinned_ledger_under_tx': lambda *_: None,
+                                               '_pidfs_inode': lambda _: 7}), \
+                    patch.object(signal, 'pidfd_send_signal') as send:
+                for ids, host, error in [([], {}, 'incomplete'), ([[2,3],[2,4]], {}, 'incomplete'),
+                                         ([], {'boot':'other'}, 'host/ledger evidence mismatch'),
+                                         ([[os.getpid(), 2],[os.getppid(), 3]], {}, 'identity mismatch')]:
+                    conn.execute('UPDATE writer_switch_witness SET identities=?',(json.dumps(ids),))
+                    with self.assertRaisesRegex(script['CliError'], error):
+                        stop(conn, attempt, 'owner', host, Path('/unused'))
+                send.assert_not_called()
+
     def test_writer_exec_rejects_state_ledger_inside_writable_worktree(self) -> None:
         if not os.access('/usr/bin/bwrap', os.X_OK):
             self.skipTest('/usr/bin/bwrap is required')

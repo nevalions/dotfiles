@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import ctypes
 from datetime import datetime, timedelta, timezone
 import errno
+import fcntl
 from hashlib import sha256
 import json
 import os
@@ -15,6 +16,7 @@ import re
 import secrets
 import selectors
 import shutil
+import signal
 import sqlite3
 import stat
 import subprocess
@@ -1082,7 +1084,15 @@ def cmd_status(args: argparse.Namespace, db_path: Path) -> tuple[int, dict | lis
     with open_read_only(db_path) as conn:
         if args.run_id:
             run = fetch_run(conn, args.run_id)
-            return 0, build_run_dict(conn, run)
+            data = build_run_dict(conn, run)
+            if getattr(args, 'writer', False) and conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='writer_attempts'").fetchone():
+                data['last_writer'] = None
+                last = conn.execute("""SELECT attempt_id,status,exit_code FROM writer_attempts
+                                    WHERE run_id=? ORDER BY rowid DESC LIMIT 1""", (args.run_id,)).fetchone()
+                if last:
+                    data['last_writer'] = dict(last)
+            return 0, data
         query = 'SELECT * FROM runs'
         if not args.all:
             query += " WHERE status IN ('active', 'waiting')"
@@ -1785,7 +1795,104 @@ def _validate_writer_state_path(
     return None
 
 
+def _switch_host(db_path: Path, cwd: Path) -> dict:
+    proc_fd, proc_st = _open_pinned_proc_root()
+    try:
+        ns, mounts = _verify_initial_pid_namespace_and_procfs(proc_fd, proc_st)
+        boot = _validate_boot_id(_read_host_boot_id(proc_fd))
+    finally:
+        os.close(proc_fd)
+    ledger = _inspect_ledger_provenance(db_path, cwd, mounts)
+    return dict(ledger, pid_ns_inode=ns, boot=boot, machine=_hash_machine_id(_read_machine_id_raw()))
+
+
+def _pidfs_inode(fd: int) -> int:
+    if _fstatfs_magic(fd) != 0x50494446:
+        raise CliError('switch requires Linux pidfs-backed pidfds')
+    return os.fstat(fd).st_ino
+
+
+def _save_switch_witness(db_path, cwd, attempt, actor, child_pid, child_fd, registered_ledger):
+    # Older kernels and non-durable ledgers retain the original fail-closed fence.
+    try:
+        host = _switch_host(db_path, cwd)
+        supervisor_fd = os.pidfd_open(os.getpid())
+        try:
+            identities = [(os.getpid(), _pidfs_inode(supervisor_fd)), (child_pid, _pidfs_inode(child_fd))]
+        finally:
+            os.close(supervisor_fd)
+    except (OSError, CliError):
+        return
+    if (host['ledger_dev'], host['ledger_ino']) != registered_ledger:
+        raise CliError('writer ledger changed before GO; fence retained')
+    with _open_recovery_write_tx(db_path, host) as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS writer_switch_witness (
+            attempt_id TEXT PRIMARY KEY REFERENCES writer_attempts(attempt_id), actor TEXT NOT NULL,
+            host TEXT NOT NULL, identities TEXT NOT NULL)""")
+        for action in ('UPDATE', 'DELETE'):
+            conn.execute(f"""CREATE TRIGGER IF NOT EXISTS writer_switch_witness_no_{action}
+                             BEFORE {action} ON writer_switch_witness
+                             BEGIN SELECT RAISE(ABORT,'immutable writer identity'); END""")
+        conn.execute('INSERT INTO writer_switch_witness VALUES (?,?,?,?)',
+                     (attempt, actor, json.dumps(host, sort_keys=True), json.dumps(identities)))
+
+
+def _stop_switch_source(conn, attempt, actor, host, db_path):
+    _verify_pinned_ledger_under_tx(db_path, host)
+    has_table = conn.execute("SELECT 1 FROM sqlite_master WHERE name='writer_switch_witness'").fetchone()
+    witness = has_table and conn.execute('SELECT * FROM writer_switch_witness WHERE attempt_id=?',
+                                         (attempt['attempt_id'],)).fetchone()
+    if witness and (witness['actor'] != actor or json.loads(witness['host']) != host):
+        raise CliError('writer switch: actor or host/ledger evidence mismatch')
+    if attempt['status'] == 'closed':
+        if attempt['exit_code'] is None:
+            raise CliError('writer switch requires verified exit, not a retirement')
+        return 'verified_exit'
+    if not witness:
+        raise CliError('writer switch: no pre-GO identity evidence; fence retained')
+    with ExitStack() as stack:
+        identities = json.loads(witness['identities'])
+        if (not isinstance(identities, list) or len(identities) != 2
+            or any(not isinstance(pair, list) or len(pair) != 2
+                   or any(type(n) is not int or n <= 1 for n in pair) for pair in identities)
+            or identities[0][0] == identities[1][0] or identities[0][1] == identities[1][1]):
+            raise CliError('writer switch: incomplete process identity evidence; fence retained')
+        pinned = []
+        for pid, inode in identities:
+            try:
+                fd = os.pidfd_open(pid)
+            except ProcessLookupError:
+                continue
+            stack.callback(os.close, fd)
+            if _pidfs_inode(fd) != inode:
+                raise CliError('writer switch: process identity mismatch; fence retained')
+            pinned.append(fd)
+        # Pin every live identity before signaling either. A dead supervisor
+        # cannot issue GO; a dead namespace init cannot leave a writer behind.
+        for fd in pinned:
+            try:
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        for fd in pinned:
+            with selectors.DefaultSelector() as poll:
+                poll.register(fd, selectors.EVENT_READ)
+                if not poll.select(timeout=2):
+                    raise CliError('writer switch: exit not witnessed; fence retained')
+    cur = conn.execute("""UPDATE writer_attempts SET status='closed',closed_at=?,exit_code=NULL
+                          WHERE attempt_id=? AND status='open'""",
+                       (format_utc(utc_now()), attempt['attempt_id']))
+    if cur.rowcount != 1:
+        raise CliError('writer switch: source fence changed')
+    return 'interrupted'
+
+
 def cmd_writer_exec(args: argparse.Namespace, db_path: Path) -> tuple[int, None]:
+    with ExitStack() as resources:
+        return _writer_exec(args, db_path, resources)
+
+
+def _writer_exec(args, db_path, resources):
     """Register a writer fence attempt, supervise isolated bwrap execution, and close only on verified exit."""
     if not hasattr(os, 'pidfd_open'):
         raise CliError('Linux os.pidfd_open is required for writer-exec')
@@ -1802,6 +1909,15 @@ def cmd_writer_exec(args: argparse.Namespace, db_path: Path) -> tuple[int, None]
     worktree = scoped_worktree(args.cwd, repo_key, args.issue, git_bin=TRUSTED_GIT_BIN)
     attempt_id = f'wa-{secrets.token_hex(16)}'
     now = format_utc(utc_now())
+
+    source = getattr(args, 'switch_from', None)
+    actor = getattr(args, 'claim_actor', None)
+    switch_host = None
+    if source:
+        if not actor or not ATTEMPT_ID_RE.fullmatch(source):
+            raise CliError('writer switch requires an exact attempt ID and claim actor')
+        _verify_linked_worktree_backlink(resolved_cwd, Path(worktree))
+        switch_host = _switch_host(db_path, resolved_cwd)
 
     with _open_short_active_write_tx(db_path, repo_key, git_bin=TRUSTED_GIT_BIN) as (conn, active_rows, resolved_keys):
         same_repo_runs = [row for row in active_rows if resolved_keys[row['repo_key']] == repo_key]
@@ -1832,6 +1948,26 @@ def cmd_writer_exec(args: argparse.Namespace, db_path: Path) -> tuple[int, None]
             raise CliError(
                 f'writer fence: unbound writer cannot start while active run {same_repo_runs[0]["run_id"]} exists for {repo_key}'
             )
+
+        if source:
+            if not bound or fetch_run(conn, run_id)['current_stage'] not in ('implement', 'review'):
+                raise CliError('writer switch requires an active bound implementation or review')
+            old = conn.execute("""SELECT * FROM writer_attempts WHERE run_id=?
+                                ORDER BY rowid DESC LIMIT 1""", (run_id,)).fetchone()
+            if not old or (old['attempt_id'], old['repo_key'], old['issue'], old['worktree']) != (
+                    source, repo_key, args.issue, worktree):
+                raise CliError('writer switch: stale or mismatched source attempt')
+            if external_patch_table(conn) and conn.execute(
+                'SELECT 1 FROM waits JOIN external_patches ON wait_id=waits.id WHERE waits.run_id=?', (run_id,)
+            ).fetchone():
+                raise CliError('writer switch cannot reset an external patch wait')
+            disposition = _stop_switch_source(conn, old, actor, switch_host, db_path)
+            lockfd = os.open(resolved_cwd, os.O_DIRECTORY | os.O_CLOEXEC)
+            resources.callback(os.close, lockfd)
+            try:
+                fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise CliError('writer switch: worktree lock still held; fence retained') from None
 
         open_attempts = conn.execute(
             "SELECT attempt_id, repo_key, worktree, issue, bound FROM writer_attempts WHERE status = 'open'"
@@ -1867,6 +2003,14 @@ def cmd_writer_exec(args: argparse.Namespace, db_path: Path) -> tuple[int, None]
                 """,
                 (attempt_id, repo_key, worktree, args.issue, bound, run_id, now),
             )
+            if source:
+                conn.execute("""CREATE TABLE IF NOT EXISTS writer_switches (
+                    source TEXT PRIMARY KEY REFERENCES writer_attempts(attempt_id),
+                    replacement TEXT UNIQUE NOT NULL REFERENCES writer_attempts(attempt_id),
+                    actor TEXT NOT NULL, disposition TEXT NOT NULL)""")
+                conn.execute('INSERT INTO writer_switches VALUES (?,?,?,?)',
+                             (source, attempt_id, actor, disposition))
+                _verify_pinned_ledger_under_tx(db_path, switch_host)
         except sqlite3.IntegrityError as exc:
             raise CliError(f'writer fence conflict for {repo_key}: {exc}') from exc
 
@@ -1914,6 +2058,8 @@ def cmd_writer_exec(args: argparse.Namespace, db_path: Path) -> tuple[int, None]
         if proc.poll() is not None:
             raise CliError(f'bwrap launcher exited prematurely ({proc.returncode}) before GO')
 
+        if bound and actor:
+            _save_switch_witness(db_path, resolved_cwd, attempt_id, actor, info['child-pid'], pidfd, post_ledger_id)
         view = memoryview(b'GO')
         sent = 0
         while sent < len(view):
@@ -2910,7 +3056,13 @@ def cmd_writer_recovery_status(args: argparse.Namespace, db_path: Path) -> tuple
             if _has_recovery_table(conn)
             else []
         )
-        return 0, _build_recovery_attempt_dict(att, events)
+        result = _build_recovery_attempt_dict(att, events)
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='writer_switches'").fetchone():
+            switched = conn.execute("SELECT replacement,disposition FROM writer_switches WHERE source=?",
+                                    (attempt_id,)).fetchone()
+            if switched:
+                result.update(replacement=switched['replacement'], disposition=switched['disposition'])
+        return 0, result
 
 
 def cmd_writer_recovery(args: argparse.Namespace, db_path: Path) -> tuple[int, dict]:
@@ -3154,6 +3306,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_status = sub.add_parser('status', parents=[common], help='Inspect a run or list runs')
     p_status.add_argument('run_id', nargs='?', help='Optional run identifier')
+    p_status.add_argument('--writer', action='store_true', help='Include latest bound writer when inspecting one run')
     p_status.add_argument('--all', action='store_true', help='Include terminal runs when listing')
 
     p_resume = sub.add_parser('resume', parents=[common], help='Show next step without modifying state')
@@ -3215,6 +3368,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_wexec = sub.add_parser('writer-exec', help=argparse.SUPPRESS)
     p_wexec.add_argument('--cwd', required=True)
     p_wexec.add_argument('--issue', required=True)
+    p_wexec.add_argument('--claim-actor')
+    p_wexec.add_argument('--switch-from', metavar='ATTEMPT_ID')
     p_wexec.add_argument('argv', nargs=argparse.REMAINDER)
 
     p_wrec = sub.add_parser(
